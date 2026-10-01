@@ -137,7 +137,7 @@ export function buildVillage(): string {
   const rng = createRng('map-aldea');
   const doc = new SvgDoc(L.width, L.height, 'Aldea de Brezoscuro');
   const grass = grassTexture(doc, rng, 'grassVillage', '#9cc26a', '#3f6b2a');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#5f8a3c', blotches: ['#4d7330', '#729c48', '#86a656', '#456a2b', '#6b8a3a'], count: 140, texture: grass }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#5f8a3c', blotches: ['#4d7330', '#729c48', '#86a656', '#456a2b', '#6b8a3a'], count: 140, texture: grass }));
 
   // Fields with crop rows and fences.
   for (const f of L.fields) {
@@ -202,7 +202,7 @@ export function buildVillage(): string {
     for (let i = 0; i < 3; i++) {
       const cx = s.x + rng.jitter(40);
       const cy = s.y + rng.jitter(40);
-      doc.add(crate(doc, cx, cy, 22, rng.range(-20, 20)), flowers(rng, cx, cy, 6, 6, ['#d9452f', '#e9c063', '#8fbf4a', '#e07a2a']));
+      doc.add(crate(cx, cy, 22, rng.range(-20, 20)), flowers(rng, cx, cy, 6, 6, ['#d9452f', '#e9c063', '#8fbf4a', '#e07a2a']));
     }
   }
 
@@ -221,7 +221,7 @@ export function buildVillage(): string {
   doc.add(rect(L.tavernDoor.x - 30, L.tavernDoor.y, 60, 22, { fill: '#7a766c', stroke: '#2f2c27', strokeWidth: 2 }));
   // Golden boar sign.
   doc.add(circle(L.tavernDoor.x + 70, L.tavernDoor.y + 18, 20, { fill: '#e9c063', stroke: '#7d5d1d', strokeWidth: 3 }), ellipse(L.tavernDoor.x + 70, L.tavernDoor.y + 20, 11, 7, { fill: '#5a3a1a' }), path(`M${L.tavernDoor.x + 59} ${L.tavernDoor.y + 16}l-6 -6M${L.tavernDoor.x + 81} ${L.tavernDoor.y + 16}l6 -6`, { stroke: '#5a3a1a', strokeWidth: 3 }));
-  doc.add(barrel(doc, 1620, 470, 22), barrel(doc, 1640, 520, 20), crate(doc, 1600, 540, 30, 12), crate(doc, 1285, 520, 26, -8));
+  doc.add(barrel(doc, 1620, 470, 22), barrel(doc, 1640, 520, 20), crate(1600, 540, 30, 12), crate(1285, 520, 26, -8));
 
   // Carts and village life.
   doc.add(cart(doc, 1700, 645, -8, '#c9a94a'), cart(doc, 380, 735, 2, '#7a5a3a'));
@@ -263,7 +263,7 @@ export function buildVillage(): string {
 // Bosque de los Susurros (also "Claro del bosque" template)
 // ---------------------------------------------------------------------------
 
-function tent(doc: SvgDoc, x: number, y: number, rot: number, color: string): string {
+function tent(x: number, y: number, rot: number, color: string): string {
   return g({ transform: `translate(${n(x)} ${n(y)}) rotate(${n(rot)})` }, [
     rect(-55 + 12, -40 + 14, 110, 80, { fill: '#000000', opacity: 0.35 }),
     rect(-55, -40, 110, 40, { fill: shade(color, 0.12) }),
@@ -280,7 +280,7 @@ export function buildForest(): string {
   const rng = createRng('map-bosque');
   const doc = new SvgDoc(L.width, L.height, 'Bosque de los Susurros');
   const grass = grassTexture(doc, rng, 'grassForest', '#6f8f45', '#1f3a1a');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#2f4a24', blotches: ['#3a5a2a', '#26401d', '#4a5f2c', '#5a4a2a', '#203a1c'], count: 170, texture: grass }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#2f4a24', blotches: ['#3a5a2a', '#26401d', '#4a5f2c', '#5a4a2a', '#203a1c'], count: 170, texture: grass }));
   doc.add(rect(0, 0, L.width, L.height, { fill: speckleTexture(doc, rng, 'leafLitter', ['#7a5a2a', '#9a6a2a', '#4a3a1a', '#6a7a2a'], 180, 110) }));
 
   // Clearing.
@@ -298,9 +298,9 @@ export function buildForest(): string {
   doc.add(g({ transform: `translate(${b.x} ${b.y}) rotate(-6)` }, planks));
 
   // Goblin camp.
-  doc.add(tent(doc, L.tents[0]!.x, L.tents[0]!.y, L.tents[0]!.rot, '#6b5a3a'));
-  doc.add(tent(doc, L.tents[1]!.x, L.tents[1]!.y, L.tents[1]!.rot, '#5a4a32'));
-  doc.add(tent(doc, L.tents[2]!.x, L.tents[2]!.y, L.tents[2]!.rot, '#7a5a2a'));
+  doc.add(tent(L.tents[0]!.x, L.tents[0]!.y, L.tents[0]!.rot, '#6b5a3a'));
+  doc.add(tent(L.tents[1]!.x, L.tents[1]!.y, L.tents[1]!.rot, '#5a4a32'));
+  doc.add(tent(L.tents[2]!.x, L.tents[2]!.y, L.tents[2]!.rot, '#7a5a2a'));
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.5;
     const lx = L.campfire.x + Math.cos(a) * 95;
@@ -308,7 +308,7 @@ export function buildForest(): string {
     doc.add(g({ transform: `translate(${n(lx)} ${n(ly)}) rotate(${n((a * 180) / Math.PI + 90)})` }, [rect(-45 + 6, -12 + 8, 90, 24, { fill: '#000', opacity: 0.35, rx: 12 }), rect(-45, -12, 90, 24, { fill: '#6b4426', stroke: '#2a1a0e', strokeWidth: 2, rx: 12 }), ellipse(-45, 0, 6, 12, { fill: '#a07a4a' })]));
   }
   doc.add(campfire(doc, rng, L.campfire.x, L.campfire.y, 30));
-  doc.add(crate(doc, 1300, 620, 34, 18), crate(doc, 1320, 660, 28, -10), barrel(doc, 960, 700, 20), bones(rng, 1180, 760, 6, 30));
+  doc.add(crate(1300, 620, 34, 18), crate(1320, 660, 28, -10), barrel(doc, 960, 700, 20), bones(rng, 1180, 760, 6, 30));
 
   // Fairy ring and the fallen log.
   for (let i = 0; i < 14; i++) {
@@ -380,7 +380,7 @@ export function buildMountains(): string {
   const rng = createRng('map-montanas');
   const doc = new SvgDoc(L.width, L.height, 'Montañas Cenicientas');
   const ash = speckleTexture(doc, rng, 'ashSpeckle', ['#2a2522', '#6a605a', '#8a7a6a', '#1a1614'], 170, 140);
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#4a423c', blotches: ['#3a3430', '#5a504a', '#2e2826', '#6a5a4a', '#3a2a22'], count: 170, texture: ash }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#4a423c', blotches: ['#3a3430', '#5a504a', '#2e2826', '#6a5a4a', '#3a2a22'], count: 170, texture: ash }));
   // Scorched patches.
   for (let i = 0; i < 26; i++) doc.add(ellipse(rng.range(0, L.width), rng.range(0, L.height), rng.range(40, 140), rng.range(30, 90), { fill: '#16110e', opacity: rng.range(0.15, 0.35) }));
   for (const c of L.cracks) doc.add(lavaCrack(c, rng.range(4, 7)));
@@ -435,7 +435,7 @@ export function buildCrossroads(): string {
   const rng = createRng('map-cruce');
   const doc = new SvgDoc(L.width, L.height, 'Cruce de caminos');
   const grass = grassTexture(doc, rng, 'grassCross', '#a8c870', '#4a6b2a');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#6a9142', blotches: ['#5a8238', '#7aa04e', '#8fae5a', '#4f7432'], count: 90, texture: grass }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#6a9142', blotches: ['#5a8238', '#7aa04e', '#8fae5a', '#4f7432'], count: 90, texture: grass }));
   doc.add(road(rng, L.roadA, 70, DIRT_ROAD, 90));
   doc.add(road(rng, L.roadB, 66, DIRT_ROAD, 90));
   // Signpost.
@@ -463,7 +463,7 @@ export function buildCrossroads(): string {
 // Cementerio de Valdris
 // ---------------------------------------------------------------------------
 
-function mausoleum(doc: SvgDoc, r: RectSpec, stone: string, doorSide: 'bottom' | 'top' = 'bottom'): string {
+function mausoleum(r: RectSpec, stone: string, doorSide: 'bottom' | 'top' = 'bottom'): string {
   const parts: string[] = [
     rect(r.x + 16, r.y + 20, r.w, r.h, { fill: '#000000', opacity: 0.45 }),
     rect(r.x - 8, r.y - 8, r.w + 16, r.h + 16, { fill: shade(stone, -0.45), rx: 4 }),
@@ -483,7 +483,7 @@ export function buildCemetery(): string {
   const rng = createRng('map-cementerio');
   const doc = new SvgDoc(L.width, L.height, 'Cementerio de Valdris');
   const grass = grassTexture(doc, rng, 'grassNight', '#5a7a5a', '#141f16');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#2c3a2c', blotches: ['#243024', '#38463a', '#1f2a22', '#4a4a3a', '#2a2a22'], count: 150, texture: grass }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#2c3a2c', blotches: ['#243024', '#38463a', '#1f2a22', '#4a4a3a', '#2a2a22'], count: 150, texture: grass }));
   const gravel: RoadStyle = { edge: '#1f1c18', fill: '#5f5a50', light: '#7d776a', pebble: '#3a3630' };
   doc.add(road(rng, L.mainPath, 66, gravel, 120));
   doc.add(road(rng, L.branchPath, 52, gravel, 60));
@@ -518,7 +518,7 @@ export function buildCemetery(): string {
 
   // Crypt entrance (large mausoleum with stairs down).
   const k = L.crypt;
-  doc.add(mausoleum(doc, k, '#7a766e'));
+  doc.add(mausoleum(k, '#7a766e'));
   for (let i = 0; i < 4; i++) doc.add(circle(k.x + 30 + i * ((k.w - 60) / 3), k.y + k.h + 14, 14, { fill: '#8b877e', stroke: '#2f2c27', strokeWidth: 2 }));
   const stairsGrad = doc.def('cryptStairs', linearGradient('cryptStairs', [[0, '#050404'], [1, '#5f5a50']]));
   doc.add(rect(L.cryptTransition.x - 70, k.y + k.h + 2, 140, 70, { fill: stairsGrad, stroke: '#141210', strokeWidth: 3 }));
@@ -526,7 +526,7 @@ export function buildCemetery(): string {
   doc.add(path(`M${k.x + k.w / 2 - 40} ${k.y + k.h / 2 - 30}h80M${k.x + k.w / 2} ${k.y + k.h / 2 - 60}v60`, { stroke: '#3a3630', strokeWidth: 8 }));
   for (const lx of [k.x + 60, k.x + k.w - 60]) doc.add(circle(lx, k.y + k.h + 50, 18, { fill: '#3a3630', stroke: '#141210', strokeWidth: 3 }), glow(doc, 'ghostFire', '#6fffd2', lx, k.y + k.h + 50, 50, 0.85), circle(lx, k.y + k.h + 48, 7, { fill: '#d8fff2' }));
 
-  for (const mz of L.mausoleums) doc.add(mausoleum(doc, mz, '#6d6a63'));
+  for (const mz of L.mausoleums) doc.add(mausoleum(mz, '#6d6a63'));
 
   // Graves in rows.
   const mainS = sampleSpline(L.mainPath, 10);
@@ -544,7 +544,7 @@ export function buildCemetery(): string {
       const p = { x: x + rng.jitter(12), y: y + rng.jitter(14) };
       if (graveBlocked(p) || rng.chance(0.12)) continue;
       const roll = rng.next();
-      doc.add(gravestone(doc, rng, p.x, p.y, rng.jitter(6), roll < 0.06 ? 'open' : roll < 0.3 ? 'cross' : 'stone'));
+      doc.add(gravestone(rng, p.x, p.y, rng.jitter(6), roll < 0.06 ? 'open' : roll < 0.3 ? 'cross' : 'stone'));
     }
   }
   for (const t of L.deadTrees) doc.add(deadTree(doc, rng, t.x, t.y, rng.range(70, 100)));

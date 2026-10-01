@@ -22,6 +22,7 @@ import {
   pluck,
   reverb,
   scale,
+  softClip,
   sweep,
   swell,
   timpani,
@@ -83,14 +84,15 @@ export function tabernaAlegre(): Buf {
       mixAt(loop, pluck(midiToFreq(m), Math.max(0.7, len * eighth + 0.5), rng, { decay: 0.997, brightness: 0.78 }), t0 + pos * eighth, 0.34, true);
       if (b >= 8) mixAt(loop, flute(midiToFreq(m), len * eighth * 0.92, rng), t0 + pos * eighth, 0.12, true);
     }
-    mixAt(loop, drumHit(rng, { f0: 135, f1: 72, sweep: 0.03, decay: 0.16, noise: 0.25, noiseDecay: 0.03, noiseFreq: 900, length: 0.4 }), t0, 0.5, true);
-    mixAt(loop, drumHit(rng, { f0: 170, f1: 95, sweep: 0.02, decay: 0.1, noise: 0.3, noiseDecay: 0.02, noiseFreq: 1200, length: 0.3 }), t0 + 3 * eighth, 0.22, true);
+    mixAt(loop, drumHit(rng, { f0: 135, f1: 72, sweep: 0.03, decay: 0.16, noise: 0.25, noiseDecay: 0.03, noiseFreq: 900, length: 0.4 }), t0, 0.3, true);
+    mixAt(loop, drumHit(rng, { f0: 170, f1: 95, sweep: 0.02, decay: 0.1, noise: 0.3, noiseDecay: 0.02, noiseFreq: 1200, length: 0.3 }), t0 + 3 * eighth, 0.14, true);
     for (let e = 0; e < 6; e++) mixAt(loop, noiseHit(rng, 0.09, 'highpass', 6500, 0.7, 0.025), t0 + e * eighth, e % 2 === 0 ? 0.05 : 0.09, true);
     for (const e of [2, 4]) {
       const jingle = noiseHit(rng, 0.25, 'bandpass', 7200, 2, 0.07);
       mixAt(loop, jingle, t0 + e * eighth, 0.12, true);
     }
   }
+  softClip(normalize(loop, 1), 1.4);
   const wet = circular(loop, (x) => reverb(x, { room: 0.55, damp: 0.5, wet: 0.22, dry: 0.9 }));
   return normalize(wet, 0.85);
 }

@@ -5,7 +5,6 @@ import {
   ellipse,
   g,
   line,
-  linearGradient,
   n,
   path,
   pattern,
@@ -143,7 +142,7 @@ export function shingleTexture(doc: SvgDoc, id: string, color: string): string {
 }
 
 /** Base terrain: solid color + large soft blotches + fine texture. */
-export function terrain(doc: SvgDoc, rng: Prng, w: number, h: number, opts: { base: string; blotches: string[]; count: number; texture?: string; rMin?: number; rMax?: number }): string {
+export function terrain(rng: Prng, w: number, h: number, opts: { base: string; blotches: string[]; count: number; texture?: string; rMin?: number; rMax?: number }): string {
   const parts: string[] = [rect(0, 0, w, h, { fill: opts.base })];
   for (let i = 0; i < opts.count; i++) {
     const r = rng.range(opts.rMin ?? 60, opts.rMax ?? 220);
@@ -364,7 +363,7 @@ export function barrel(doc: SvgDoc, x: number, y: number, r: number): string {
   ].join('');
 }
 
-export function crate(doc: SvgDoc, x: number, y: number, s: number, rot = 0): string {
+export function crate(x: number, y: number, s: number, rot = 0): string {
   return g({ transform: `translate(${n(x)} ${n(y)}) rotate(${n(rot)})` }, [
     rect(-s / 2 + 6, -s / 2 + 8, s, s, { fill: '#000000', opacity: 0.35 }),
     rect(-s / 2, -s / 2, s, s, { fill: '#8a6236', stroke: '#3d2a14', strokeWidth: 2.5 }),
@@ -397,7 +396,7 @@ export function roundTable(doc: SvgDoc, rng: Prng, x: number, y: number, r: numb
   return parts.join('');
 }
 
-export function bed(doc: SvgDoc, x: number, y: number, w: number, h: number, blanket: string): string {
+export function bed(x: number, y: number, w: number, h: number, blanket: string): string {
   return [
     rect(x + 8, y + 10, w, h, { fill: '#000000', opacity: 0.35 }),
     rect(x, y, w, h, { fill: '#5a3618', stroke: '#2a1a0e', strokeWidth: 2, rx: 4 }),
@@ -421,7 +420,7 @@ export function bookshelf(rng: Prng, x: number, y: number, w: number, h: number,
   return g({ transform: `translate(${n(x)} ${n(y)}) rotate(${n(rot)})` }, parts);
 }
 
-export function chest(doc: SvgDoc, x: number, y: number, w: number, h: number, rot = 0): string {
+export function chest(x: number, y: number, w: number, h: number, rot = 0): string {
   return g({ transform: `translate(${n(x)} ${n(y)}) rotate(${n(rot)})` }, [
     rect(-w / 2 + 6, -h / 2 + 8, w, h, { fill: '#000000', opacity: 0.4 }),
     rect(-w / 2, -h / 2, w, h, { fill: '#7a4a22', stroke: '#2a1a0e', strokeWidth: 2.5, rx: 3 }),
@@ -431,7 +430,7 @@ export function chest(doc: SvgDoc, x: number, y: number, w: number, h: number, r
   ]);
 }
 
-export function rug(doc: SvgDoc, r: { x: number; y: number; w: number; h: number }, base: string, border: string): string {
+export function rug(r: { x: number; y: number; w: number; h: number }, base: string, border: string): string {
   return [
     rect(r.x, r.y, r.w, r.h, { fill: base, rx: 4 }),
     rect(r.x + 12, r.y + 12, r.w - 24, r.h - 24, { fill: 'none', stroke: border, strokeWidth: 8, rx: 3 }),
@@ -500,7 +499,7 @@ export function gemstone(x: number, y: number, r: number, color: string): string
   return [path(polyPath(pts), { fill: color, stroke: shade(color, -0.5), strokeWidth: 1 }), circle(x - r * 0.25, y - r * 0.25, r * 0.25, { fill: '#ffffff', opacity: 0.7 })].join('');
 }
 
-export function gravestone(doc: SvgDoc, rng: Prng, x: number, y: number, rot: number, kind: 'stone' | 'cross' | 'open'): string {
+export function gravestone(rng: Prng, x: number, y: number, rot: number, kind: 'stone' | 'cross' | 'open'): string {
   const parts: string[] = [];
   if (kind === 'open') {
     parts.push(rect(-24, -40, 48, 84, { fill: '#1a1612', stroke: '#3a2e22', strokeWidth: 3, rx: 3 }), rect(-30, 46, 60, 18, { fill: '#5a4632', rx: 8 }));
@@ -583,6 +582,3 @@ export function arcaneCircle(doc: SvgDoc, x: number, y: number, r: number, color
   return parts.join('');
 }
 
-export function linearShade(doc: SvgDoc, id: string, top: string, bottom: string): string {
-  return doc.def(id, linearGradient(id, [[0, top], [1, bottom]]));
-}

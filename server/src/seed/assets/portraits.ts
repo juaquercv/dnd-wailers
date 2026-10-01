@@ -1,4 +1,23 @@
-import { SvgDoc, circle, g, path, radialGradient, tag, type Stop } from './svg';
+import { rivetRing } from './steamKit';
+import { SvgDoc, circle, g, path, radialGradient, rect, tag, type Stop } from './svg';
+import {
+  adaVolta,
+  aeronautElf,
+  automatonGuard,
+  brassDragon,
+  captainNiebla,
+  clockworkRat,
+  crowCaptain,
+  engineerGear,
+  gunslingerOrc,
+  inventorFlask,
+  merchantCobre,
+  rustAutomaton,
+  scoutDrone,
+  scrapGargoyle,
+  skyPirate,
+  steamGolem,
+} from './symbolsSteam';
 import {
   anvil,
   bandit,
@@ -34,12 +53,17 @@ export interface PortraitSpec {
   symbol: SymbolFn;
   bg: [inner: string, outer: string];
   ring: [light: string, dark: string];
+  /** Steampunk frame: gear teeth and rivets around the ring. */
+  gearRing?: boolean;
 }
 
 const GOLD: [string, string] = ['#ffe9a8', '#8a6420'];
 const SILVER: [string, string] = ['#f4f6fa', '#5a606a'];
 const BRONZE: [string, string] = ['#f0b878', '#6a3a14'];
 const JADE: [string, string] = ['#c8fff0', '#1a6a5a'];
+const BRASS_RING: [string, string] = ['#ffe6a0', '#7a5414'];
+const COPPER_RING: [string, string] = ['#ffc8a0', '#7a3414'];
+const IRON_RING: [string, string] = ['#dfe4ea', '#3e444c'];
 
 export const PORTRAIT_SPECS = {
   'dragon-rojo': { symbol: dragonHead, bg: ['#9a2a14', '#1a0604'], ring: GOLD },
@@ -67,6 +91,23 @@ export const PORTRAIT_SPECS = {
   kael: { symbol: rogueDaggers, bg: ['#1a4a2a', '#040e08'], ring: SILVER },
   isolde: { symbol: clericSun, bg: ['#7a6a2a', '#1a1406'], ring: GOLD },
   grak: { symbol: barbarianAxe, bg: ['#6a2a1a', '#140806'], ring: BRONZE },
+  // Los Cielos de Latón (steampunk).
+  'automata-guardian': { symbol: automatonGuard, bg: ['#2a5a66', '#06121a'], ring: BRASS_RING, gearRing: true },
+  'pirata-del-cielo': { symbol: skyPirate, bg: ['#4a6a8a', '#0a121e'], ring: COPPER_RING, gearRing: true },
+  'cuervo-rojo': { symbol: crowCaptain, bg: ['#6a1a1a', '#140404'], ring: BRASS_RING, gearRing: true },
+  'golem-de-vapor': { symbol: steamGolem, bg: ['#6a3a1a', '#140804'], ring: IRON_RING, gearRing: true },
+  'dragon-de-laton': { symbol: brassDragon, bg: ['#7a2a0a', '#160602'], ring: BRASS_RING, gearRing: true },
+  'rata-mecanica': { symbol: clockworkRat, bg: ['#4a4a3a', '#0e0e0a'], ring: COPPER_RING, gearRing: true },
+  'dron-vigia': { symbol: scoutDrone, bg: ['#3a5a7a', '#081018'], ring: IRON_RING, gearRing: true },
+  'gargola-de-chatarra': { symbol: scrapGargoyle, bg: ['#4a4038', '#0c0a08'], ring: IRON_RING, gearRing: true },
+  'ada-volta': { symbol: adaVolta, bg: ['#2a5a4a', '#06120e'], ring: BRASS_RING, gearRing: true },
+  'bartolome-cobre': { symbol: merchantCobre, bg: ['#7a4a1a', '#160c04'], ring: COPPER_RING, gearRing: true },
+  'horacio-niebla': { symbol: captainNiebla, bg: ['#3a4a6a', '#080c16'], ring: BRASS_RING, gearRing: true },
+  'ignacio-tuercas': { symbol: engineerGear, bg: ['#5a4a2a', '#120e06'], ring: BRASS_RING, gearRing: true },
+  'vera-nimbus': { symbol: aeronautElf, bg: ['#3a6a9a', '#08121e'], ring: BRASS_RING, gearRing: true },
+  oxido: { symbol: rustAutomaton, bg: ['#5a3a2a', '#120a06'], ring: COPPER_RING, gearRing: true },
+  'clementina-fuelle': { symbol: inventorFlask, bg: ['#3a5a2a', '#081206'], ring: BRASS_RING, gearRing: true },
+  'bruno-calderas': { symbol: gunslingerOrc, bg: ['#6a4a2a', '#140c06'], ring: COPPER_RING, gearRing: true },
 } satisfies Record<string, PortraitSpec>;
 
 export type PortraitKey = keyof typeof PORTRAIT_SPECS;
@@ -94,5 +135,10 @@ export function buildPortrait(spec: PortraitSpec, title: string): string {
   doc.add(circle(128, 128, 120, { fill: 'none', stroke: ring, strokeWidth: 9 }));
   doc.add(circle(128, 128, 115, { fill: 'none', stroke: '#000000', strokeWidth: 2, opacity: 0.45 }));
   doc.add(circle(128, 128, 124.5, { fill: 'none', stroke: '#000000', strokeWidth: 1.5, opacity: 0.6 }));
+  if (spec.gearRing) {
+    const teeth: string[] = [];
+    for (let i = 0; i < 40; i++) teeth.push(rect(121, -3.5, 7, 7, { rx: 1, fill: ring, stroke: '#000000', strokeWidth: 1, transform: `rotate(${(i / 40) * 360} 0 0)` }));
+    doc.add(g({ transform: 'translate(128 128)' }, teeth), rivetRing(128, 128, 120, 12, 2.6, spec.ring[0], Math.PI / 12));
+  }
   return doc.render();
 }

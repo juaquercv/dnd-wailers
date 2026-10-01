@@ -1,5 +1,23 @@
-import type { Campaign, UpdateCampaignRequest, Zone } from '@wailers/shared';
-import { UnderConstruction } from '../../components/ui/UnderConstruction';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { CalendarClock, Copy, Crosshair, Eye, Flag, Info, MapPin, Settings2, Skull, Trash2, TriangleAlert, X } from 'lucide-react';
+import type { Campaign, UpdateCampaignRequest, VisibilitySettings, Zone } from '@wailers/shared';
+import { api } from '../../api/http';
+import { Avatar } from '../../components/ui/Avatar';
+import { Button } from '../../components/ui/Button';
+import { useConfirm } from '../../components/ui/ConfirmDialog';
+import { ImageUpload } from '../../components/ui/ImageUpload';
+import { TagInput } from '../../components/ui/TagInput';
+import { TextArea } from '../../components/ui/TextArea';
+import { TextInput } from '../../components/ui/TextInput';
+import { toast } from '../../components/ui/toast';
+import { formatDateTime, formatRelative, plural } from '../../lib/format';
+import { useAuthStore } from '../../stores/auth';
+import { useUsers } from '../../stores/users';
+import { MagicModeBadge } from '../campaigns/magicModes';
+import { VisibilityForm } from '../visibility/VisibilityForm';
+import { useEditorStore } from './editorStore';
+import { InfoNote, SettingsSection } from './extras/SettingsSection';
 
 export interface CampaignSettingsPanelProps {
   campaign: Campaign;
@@ -7,11 +25,278 @@ export interface CampaignSettingsPanelProps {
   onChange: (patch: UpdateCampaignRequest) => void;
 }
 
-/** Placeholder — replaced by the editor-extras agent. */
-export function CampaignSettingsPanel(props: CampaignSettingsPanelProps) {
+const NAME_MAX = 80;
+const DESCRIPTION_MAX = 1000;
+
+/** General campaign settings: identity, cover, tags, spawn summary, default visibility and the danger zone. */
+export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSettingsPanelProps) {
+  const navigate = useNavigate();
+  const confirm = useConfirm();
+  const me = useAuthStore((s) => s.user);
+  const { users } = useUsers();
+  const owner = users.find((u) => u.id === campaign.ownerId) ?? null;
+  const isOwner = me?.id === campaign.ownerId;
+  const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+
+  // The name is edited locally so the campaign never ends up nameless.
+  const [name, setName] = useState(campaign.name);
+  const nameFocused = useRef(false);
+  useEffect(() => {
+    if (!nameFocused.current) setName(campaign.name);
+  }, [campaign.id, campaign.name]);
+  const nameError = !name.trim() ? 'La campaña necesita un nombre' : undefined;
+
+  const visibilityRef = useRef(campaign.defaultVisibility);
+  visibilityRef.current = campaign.defaultVisibility;
+
+  const subZones = zones.filter((z) => z.parentZoneId !== null).length;
+
+  const remove = async () => {
+    const ok = await confirm({
+      title: 'Eliminar campaña',
+      message: (
+        <>
+          Se eliminará <strong className="text-parchment-100">«{campaign.name}»</strong> con sus {plural(zones.length, 'zona', 'zonas')},
+          ruletas y partidas guardadas. Los elementos de la biblioteca compartida se conservan.
+          <span className="mt-2 block font-medium text-blood-300">Esta acción no se puede deshacer.</span>
+        </>
+      ),
+      confirmLabel: 'Eliminar para siempre',
+      danger: true,
+    });
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await api.campaigns.remove(campaign.id);
+      // Nothing left to autosave for a deleted campaign.
+      useEditorStore.setState({ dirtyZoneIds: [], saveState: 'saved', saveError: null });
+      toast.success(`«${campaign.name}» eliminada`);
+      navigate('/campanas', { replace: true });
+    } catch (err) {
+      toast.fromError(err, 'No se pudo eliminar la campaña');
+      setDeleting(false);
+    }
+  };
+
+  const duplicate = async () => {
+    setDuplicating(true);
+    try {
+      const copy = await api.campaigns.duplicate(campaign.id);
+      toast.success('Campaña duplicada', {
+        description: copy.name,
+        action: { label: 'Abrir', onClick: () => navigate(`/campanas/${copy.id}/editor`) },
+      });
+    } catch (err) {
+      toast.fromError(err, 'No se pudo duplicar la campaña');
+    } finally {
+      setDuplicating(false);
+    }
+  };
+
   return (
-    <div className="p-6">
-      <UnderConstruction title="Ajustes de la campaña" detail={`${props.campaign.name} · ${props.zones.length} zonas`} />
+    <div className="scroll-thin h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-4xl space-y-6 px-4 pb-16 pt-6 sm:px-6">
+        <header>
+          <h2 className="title-epic text-2xl">Ajustes de la campaña</h2>
+          <p className="mt-1 text-sm text-parchment-300">Nombre, portada, punto de inicio y lo que verán los jugadores al empezar.</p>
+        </header>
+
+        <SettingsSection icon={<Settings2 />} title="General" description="Así aparece la campaña en la lista y al hostear una partida.">
+          <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_16rem]">
+            <div className="space-y-4">
+              <TextInput
+                label="Nombre"
+                required
+                value={name}
+                maxLength={NAME_MAX}
+                error={nameError}
+                onFocus={() => {
+                  nameFocused.current = true;
+                }}
+                onBlur={() => {
+                  nameFocused.current = false;
+                  if (!name.trim()) setName(campaign.name);
+                  else if (name !== name.trim()) {
+                    setName(name.trim());
+                    onChange({ name: name.trim() });
+                  }
+                }}
+                onValueChange={(v) => {
+                  setName(v);
+                  if (v.trim()) onChange({ name: v });
+                }}
+              />
+              <TextArea
+                label="Descripción"
+                value={campaign.description}
+                maxLength={DESCRIPTION_MAX}
+                rows={4}
+                autoResize
+                maxRows={12}
+                placeholder="El tono, el conflicto y dónde empieza la aventura…"
+                onValueChange={(v) => onChange({ description: v })}
+                hint={`${campaign.description.length}/${DESCRIPTION_MAX}`}
+              />
+              <TagInput
+                label="Etiquetas"
+                value={campaign.tags}
+                onChange={(tags) => onChange({ tags })}
+                placeholder="terror, mazmorra, nivel 3-5…"
+                hint="Ayudan a encontrar la campaña y a describir su estilo."
+                maxTags={12}
+              />
+            </div>
+            <div>
+              <ImageUpload
+                label="Portada"
+                value={campaign.coverUrl}
+                onChange={(url) => onChange({ coverUrl: url })}
+                aspect="video"
+                hint="Se muestra en la lista de campañas"
+              />
+              {!campaign.coverUrl && campaign.overview.imageUrl && (
+                <button
+                  type="button"
+                  className="mt-1 text-xs text-parchment-400 transition hover:text-gold-300"
+                  onClick={() => onChange({ coverUrl: campaign.overview.imageUrl })}
+                >
+                  Usar la imagen del mapa general
+                </button>
+              )}
+            </div>
+          </div>
+        </SettingsSection>
+
+        <SpawnSection campaign={campaign} zones={zones} onClear={() => onChange({ spawn: null })} />
+
+        <SettingsSection
+          icon={<Eye />}
+          title="Visibilidad por defecto"
+          description="Lo que podrán ver los jugadores al crear una partida nueva de esta campaña. Durante la partida el DM puede cambiarla en cualquier momento, también por jugador."
+        >
+          <VisibilityForm
+            value={campaign.defaultVisibility}
+            onChange={(patch: Partial<VisibilitySettings>) =>
+              onChange({ defaultVisibility: { ...visibilityRef.current, ...patch } })
+            }
+          />
+        </SettingsSection>
+
+        <SettingsSection icon={<Info />} title="Información">
+          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+            <div className="flex items-center gap-2.5">
+              <dt className="sr-only">Creador</dt>
+              <Avatar name={campaign.ownerName} color={owner?.color ?? null} size="sm" />
+              <dd>
+                <span className="block text-parchment-100">{campaign.ownerName}</span>
+                <span className="block text-[11px] text-parchment-400">{isOwner ? 'Eres el creador' : 'Creador de la campaña'}</span>
+              </dd>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <dt className="sr-only">Sistema de magia</dt>
+              <dd>
+                <MagicModeBadge mode={campaign.rules.magic.mode} manaName={campaign.rules.magic.manaName} size="md" />
+              </dd>
+            </div>
+            <div className="flex items-center gap-2.5 text-parchment-300">
+              <MapPin className="h-4 w-4 text-gold-400" />
+              <dt className="sr-only">Zonas</dt>
+              <dd>
+                {plural(zones.length - subZones, 'zona', 'zonas')}
+                {subZones > 0 && <span className="text-parchment-400"> · {plural(subZones, 'sub-zona', 'sub-zonas')}</span>}
+              </dd>
+            </div>
+            <div className="flex items-center gap-2.5 text-parchment-300">
+              <CalendarClock className="h-4 w-4 text-gold-400" />
+              <dt className="sr-only">Fechas</dt>
+              <dd>
+                <span title={formatDateTime(campaign.updatedAt)}>Actualizada {formatRelative(campaign.updatedAt)}</span>
+                <span className="block text-[11px] text-parchment-400">Creada el {formatDateTime(campaign.createdAt)}</span>
+              </dd>
+            </div>
+          </dl>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" icon={<Copy />} loading={duplicating} onClick={() => void duplicate()}>
+              Duplicar campaña
+            </Button>
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          tone="danger"
+          icon={<Skull />}
+          title="Zona de peligro"
+          description="Acciones irreversibles. Piénsalo dos veces."
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-parchment-100">Eliminar esta campaña</div>
+              <div className="text-xs text-parchment-400">
+                {isOwner
+                  ? 'Borra sus zonas, ruletas y partidas guardadas. Los elementos de la biblioteca se conservan.'
+                  : 'Solo el creador de la campaña puede eliminarla.'}
+              </div>
+            </div>
+            <Button variant="danger" icon={<Trash2 />} disabled={!isOwner} loading={deleting} onClick={() => void remove()}>
+              Eliminar campaña
+            </Button>
+          </div>
+        </SettingsSection>
+      </div>
     </div>
+  );
+}
+
+function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones: Zone[]; onClear: () => void }) {
+  const selectZone = useEditorStore((s) => s.selectZone);
+  const spawn = campaign.spawn;
+  const zone = spawn ? zones.find((z) => z.id === spawn.zoneId) : undefined;
+  const level = zone && spawn ? zone.levels.find((l) => l.id === spawn.levelId) : undefined;
+  const broken = !!spawn && (!zone || !level);
+
+  return (
+    <SettingsSection
+      icon={<Flag />}
+      title="Punto de inicio"
+      description="Donde aparecen las fichas de los héroes al empezar una partida nueva."
+    >
+      {!spawn ? (
+        <InfoNote icon={<TriangleAlert />} tone="warning">
+          No hay punto de inicio. Coloca el punto de spawn con la herramienta Spawn (S).
+        </InfoNote>
+      ) : broken ? (
+        <div className="space-y-3">
+          <InfoNote icon={<TriangleAlert />} tone="warning">
+            El punto de inicio apunta a {zone ? 'un piso' : 'una zona'} que ya no existe. Coloca el punto de spawn con la herramienta Spawn (S).
+          </InfoNote>
+          <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
+            Quitar punto de inicio
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/10 text-emerald-300">
+              <Flag className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-parchment-50">{zone!.name}</div>
+              <div className="truncate text-xs text-parchment-400">
+                {zone!.levels.length > 1 ? `${level!.name} · ` : ''}x {Math.round(spawn.x)}, y {Math.round(spawn.y)} px
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" icon={<Crosshair />} onClick={() => selectZone(spawn.zoneId, spawn.levelId)}>
+              Ir a la zona
+            </Button>
+            <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
+              Quitar
+            </Button>
+          </div>
+        </div>
+      )}
+    </SettingsSection>
   );
 }

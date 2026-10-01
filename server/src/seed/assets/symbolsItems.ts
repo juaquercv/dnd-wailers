@@ -527,15 +527,6 @@ export const acidSplash: SymbolFn = (doc) =>
 // Sounds
 // ---------------------------------------------------------------------------
 
-export const musicNotes: SymbolFn = (doc) =>
-  [
-    path('M34 24L80 14V66', { fill: 'none', stroke: '#fbf6ea', strokeWidth: 5, strokeLinejoin: 'round' }),
-    path('M34 24L80 14V26L34 36Z', { fill: '#fbf6ea' }),
-    line(34, 24, 34, 76, { stroke: '#fbf6ea', strokeWidth: 5 }),
-    ellipse(26, 78, 11, 8, { fill: lin(doc, 'noteFill', '#ffe68a', '#c8901a'), ...stroke(2.2), transform: 'rotate(-20 26 78)' }),
-    ellipse(72, 68, 11, 8, { fill: 'url(#noteFill)', ...stroke(2.2), transform: 'rotate(-20 72 68)' }),
-  ].join('');
-
 export const drum: SymbolFn = (doc) =>
   [
     line(20, 8, 56, 44, { stroke: '#c88a4a', strokeWidth: 5, strokeLinecap: 'round' }),

@@ -317,7 +317,6 @@ export function blotches(rng: Prng, x: number, y: number, w: number, h: number, 
       ellipse(x + rng.next() * w, y + rng.next() * h, rx, rx * rng.range(0.5, 1), {
         fill: rng.pick(colors),
         opacity: rng.range(opacity[0], opacity[1]),
-        transform: undefined,
       }),
     );
   }

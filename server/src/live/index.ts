@@ -1,60 +1,72 @@
-import { newId, type AckResult, type LogEntry } from '@wailers/shared';
-import { HandlerError, type AppSocket, type IO, type LiveSession, type LogInput, type SessionManagerApi } from './types';
+import { registerChatHandlers } from './handlers/chat';
+import { registerHeroHandlers } from './handlers/heroes';
+import { registerLobbyHandlers } from './handlers/lobby';
+import { registerMediaHandlers } from './handlers/media';
+import { registerRollHandlers } from './handlers/rolls';
+import { registerSessionHandlers } from './handlers/session';
+import { registerTokenHandlers } from './handlers/tokens';
+import { registerTradeHandlers } from './handlers/trades';
+import { registerTurnHandlers } from './handlers/turns';
+import { registerVisibilityHandlers } from './handlers/visibility';
+import { SessionManager } from './SessionManager';
+import type { AppSocket, HandlerModule, IO, SessionManagerApi } from './types';
 
 /*
- * Placeholder for the live session engine (replaced by the live-core module).
- * It lets the server boot and serve REST/presence before the engine exists:
- * no sessions are listed and every live event is answered with an error.
+ * Entry point of the live session engine: one SessionManager per process, wired to Socket.IO
+ * and to the domain bus. realtime/socket.ts calls registerLiveSocket for every authenticated socket.
  */
 
-const UNAVAILABLE = 'El motor de partidas todavía no está disponible';
+export { SessionManager, RunningSession, canSeeLog } from './SessionManager';
 
-type LooseSocket = {
-  on(event: string, listener: (payload: unknown, ack?: (res: AckResult<null>) => void) => void): void;
-};
+let manager: SessionManager | null = null;
 
+type CoreModule = (socket: AppSocket, manager: SessionManager) => void;
+
+const CORE_MODULES: ReadonlyArray<[string, CoreModule]> = [
+  ['sesión', registerSessionHandlers],
+  ['sala de espera', registerLobbyHandlers],
+  ['chat', registerChatHandlers],
+  ['turnos', registerTurnHandlers],
+];
+
+const GAMEPLAY_MODULES: ReadonlyArray<[string, HandlerModule]> = [
+  ['fichas', registerTokenHandlers],
+  ['héroes', registerHeroHandlers],
+  ['trueques', registerTradeHandlers],
+  ['visibilidad', registerVisibilityHandlers],
+  ['tiradas', registerRollHandlers],
+  ['audio y efectos', registerMediaHandlers],
+];
+
+/** Creates the engine (once) and subscribes it to the domain bus. */
 export function initLive(io: IO): SessionManagerApi {
-  const manager: SessionManagerApi = {
-    io,
-    get: () => undefined,
-    load: async () => {
-      throw new HandlerError(UNAVAILABLE);
-    },
-    mutate: () => undefined,
-    emitEvent: () => undefined,
-    log: async (session: LiveSession, input: LogInput): Promise<LogEntry> => ({
-      id: newId('log'),
-      sessionId: session.id,
-      at: new Date().toISOString(),
-      type: input.type,
-      actorUserId: input.actorUserId ?? null,
-      actorName: null,
-      text: input.text,
-      visibility: input.visibility ?? 'all',
-      targetUserId: input.targetUserId ?? null,
-      data: input.data ?? null,
-    }),
-    broadcast: () => undefined,
-    persist: async () => undefined,
-    persistAll: async () => undefined,
-    listActive: async () => [],
-    broadcastSessionsList: () => {
-      io.emit('sessions:list', []);
-    },
-    isUserConnected: () => false,
-    scheduleHeroWriteBack: () => undefined,
-    ensureZoneInstantiated: () => undefined,
-    zone: (session, zoneId) => session.campaign.zones.find((z) => z.id === zoneId),
-    register: (socket, event) => {
-      (socket as unknown as LooseSocket).on(event, (_payload, ack) => {
-        if (typeof ack === 'function') ack({ ok: false, error: UNAVAILABLE });
-      });
-    },
-  };
+  if (manager && manager.io === io) return manager;
+  manager?.dispose();
+  manager = new SessionManager(io);
+  manager.start();
+  return manager;
+}
+
+/** The running engine (throws before initLive). */
+export function getManager(): SessionManager {
+  if (!manager) throw new Error('El motor de partidas todavía no está iniciado');
   return manager;
 }
 
 /** Called by realtime/socket.ts for every authenticated socket. */
 export function registerLiveSocket(socket: AppSocket): void {
-  void socket;
+  const engine = manager;
+  if (!engine) {
+    console.error('[live] Socket conectado antes de iniciar el motor de partidas');
+    return;
+  }
+  for (const [name, register] of [...CORE_MODULES, ...GAMEPLAY_MODULES]) {
+    try {
+      register(socket, engine);
+    } catch (err) {
+      console.error(`[live] No se pudo registrar el módulo de ${name}:`, err);
+    }
+  }
+  engine.answerUnhandled(socket);
+  socket.on('disconnect', () => engine.handleDisconnect(socket));
 }

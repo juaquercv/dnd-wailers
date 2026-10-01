@@ -54,12 +54,12 @@ function metalClang(rng: Prng, base: number, length: number): Buf {
 export function choqueDeEspadas(): Buf {
   const rng = createRng('sfx-espadas');
   const out = buffer(1.4);
-  mixAt(out, metalClang(rng, 1250, 1.1), 0.0, 0.7);
-  mixAt(out, metalClang(rng, 1490, 1.0), 0.32, 0.55);
+  mixAt(out, normalize(metalClang(rng, 1250, 1.1), 1), 0.0, 0.85);
+  mixAt(out, normalize(metalClang(rng, 1490, 1.0), 1), 0.32, 0.65);
   const scrape = whiteNoise(samplesFor(0.28), rng);
   sweep(scrape, 'bandpass', (t) => 3200 - t * 5000, 3);
   for (let i = 0; i < scrape.length; i++) scrape[i] = (scrape[i] ?? 0) * Math.sin((Math.PI * i) / scrape.length);
-  mixAt(out, scrape, 0.06, 0.6);
+  mixAt(out, normalize(scrape, 1), 0.06, 0.3);
   const wet = reverb(out, { room: 0.4, damp: 0.5, wet: 0.16, dry: 1 });
   return normalize(fade(wet, 0, 0.12), 0.92);
 }
@@ -74,16 +74,16 @@ export function bolaDeFuego(): Buf {
     const x = i / whoosh.length;
     whoosh[i] = (whoosh[i] ?? 0) * x * x * (x > 0.94 ? (1 - x) / 0.06 : 1);
   }
-  mixAt(out, whoosh, 0, 1.4);
+  mixAt(out, normalize(whoosh, 1), 0, 0.55);
   const boom = drumHit(rng, { f0: 95, f1: 32, sweep: 0.25, decay: 0.8, noise: 0, noiseDecay: 0.01, noiseFreq: 100, length: 1.9 });
-  mixAt(out, boom, 0.7, 0.9);
+  mixAt(out, normalize(boom, 1), 0.7, 0.55);
   const blast = whiteNoise(samplesFor(1.9), rng);
   sweep(blast, 'lowpass', (t) => 150 + 4200 * Math.exp(-t / 0.35), 0.8);
   expDecay(blast, 0.55, 0.003);
-  mixAt(out, blast, 0.7, 1.3);
+  mixAt(out, normalize(blast, 1), 0.7, 0.9);
   for (let k = 0; k < 60; k++) {
     const t = 0.8 + rng.range(0, 1.6);
-    mixAt(out, noiseHit(rng, 0.02, 'highpass', 2500, 0.7, 0.003), t, 0.25 * Math.exp(-(t - 0.8) / 0.7));
+    mixAt(out, normalize(noiseHit(rng, 0.02, 'highpass', 2500, 0.7, 0.003), 1), t, 0.3 * Math.exp(-(t - 0.8) / 0.7));
   }
   softClip(out, 1.8);
   const wet = reverb(out, { room: 0.6, damp: 0.4, wet: 0.24, dry: 1 });
@@ -113,9 +113,9 @@ export function puertaQueCruje(): Buf {
     const band = filter(impulses.slice(), 'bandpass', f, q);
     mixInto(creak, band, 0, gain);
   }
-  mixAt(out, creak, 0.05, 1);
-  mixAt(out, drumHit(rng, { f0: 115, f1: 58, sweep: 0.03, decay: 0.15, noise: 0.45, noiseDecay: 0.03, noiseFreq: 450, length: 0.45 }), 2.1, 0.9);
-  mixAt(out, noiseHit(rng, 0.03, 'highpass', 3000, 0.7, 0.006), 2.18, 0.3);
+  mixAt(out, normalize(creak, 1), 0.05, 0.85);
+  mixAt(out, normalize(drumHit(rng, { f0: 115, f1: 58, sweep: 0.03, decay: 0.15, noise: 0.45, noiseDecay: 0.03, noiseFreq: 450, length: 0.45 }), 1), 2.1, 0.7);
+  mixAt(out, normalize(noiseHit(rng, 0.03, 'highpass', 3000, 0.7, 0.006), 1), 2.18, 0.25);
   const wet = reverb(out, { room: 0.5, damp: 0.5, wet: 0.2, dry: 1 });
   return normalize(fade(wet, 0.01, 0.15), 0.9);
 }
@@ -156,26 +156,26 @@ export function rugidoDeDragon(): Buf {
 
 export function trueno(): Buf {
   const rng = createRng('sfx-trueno');
-  const len = 3.2;
+  const len = 3.0;
   const out = buffer(len);
   const crack = whiteNoise(samplesFor(0.25), rng);
   filter(crack, 'highpass', 1200, 0.7);
   expDecay(crack, 0.06, 0.0005);
-  mixAt(out, crack, 0, 0.9);
-  for (const t of [0.03, 0.07, 0.12]) mixAt(out, noiseHit(rng, 0.1, 'highpass', 900, 0.7, 0.025), t, 0.5);
+  mixAt(out, normalize(crack, 1), 0, 0.75);
+  for (const t of [0.03, 0.07, 0.12]) mixAt(out, normalize(noiseHit(rng, 0.1, 'highpass', 900, 0.7, 0.025), 1), t, 0.35);
   const n = out.length;
   const bumps: [number, number, number][] = [
     [0.15, 0.35, 1],
     [0.6, 0.5, 0.8],
     [1.2, 0.6, 0.65],
-    [1.9, 0.8, 0.45],
+    [1.75, 0.7, 0.45],
   ];
   const env = (t: number): number => bumps.reduce((s, [c, w, gn]) => s + gn * Math.exp(-(((t - c) / w) ** 2)), 0);
-  const rumble = filter(filter(brownNoise(n, rng), 'lowpass', 180, 0.7), 'lowpass', 220, 0.7);
-  const mid = filter(pinkNoise(n, rng), 'lowpass', 600, 0.7);
+  const rumble = normalize(filter(filter(brownNoise(n, rng), 'lowpass', 180, 0.7), 'lowpass', 220, 0.7), 1);
+  const mid = normalize(filter(pinkNoise(n, rng), 'lowpass', 600, 0.7), 1);
   for (let i = 0; i < n; i++) {
     const e = env(i / SAMPLE_RATE);
-    out[i] = (out[i] ?? 0) + (rumble[i] ?? 0) * e * 2.2 + (mid[i] ?? 0) * e * 0.35;
+    out[i] = (out[i] ?? 0) + (rumble[i] ?? 0) * e * 0.9 + (mid[i] ?? 0) * e * 0.3;
   }
   const wet = reverb(out, { room: 0.8, damp: 0.4, wet: 0.3, dry: 1 });
   return normalize(fade(wet, 0.002, 0.35), 0.95);
@@ -235,7 +235,7 @@ export function golpe(): Buf {
   const rng = createRng('sfx-golpe');
   const out = buffer(0.5);
   mixAt(out, drumHit(rng, { f0: 165, f1: 45, sweep: 0.03, decay: 0.12, noise: 0.5, noiseDecay: 0.015, noiseFreq: 700, length: 0.45 }), 0, 1);
-  mixAt(out, noiseHit(rng, 0.05, 'bandpass', 1500, 1, 0.012), 0, 0.5);
+  mixAt(out, normalize(noiseHit(rng, 0.05, 'bandpass', 1500, 1, 0.012), 1), 0, 0.6);
   softClip(normalize(out, 1), 2.5);
   return normalize(fade(out, 0, 0.05), 0.95);
 }

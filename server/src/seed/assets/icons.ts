@@ -1,6 +1,40 @@
 import { RARITY_INFO, type Rarity, type SoundType } from '@wailers/shared';
 import { DROP_SHADOW_FILTER } from './portraits';
+import { BRASS, gearD, metalLinear, rivetRing } from './steamKit';
 import { SvgDoc, circle, g, linearGradient, path, radialGradient, rect, shade } from './svg';
+import {
+  airRifle,
+  airshipChase,
+  armoredVest,
+  aviatorGoggles,
+  blueprints,
+  brassCoins,
+  cableNet,
+  cartridges,
+  coalLumps,
+  deckWind,
+  enginePiston,
+  fieldKit,
+  flare,
+  gearHeart,
+  gearKit,
+  gearsPair,
+  harpoon,
+  heavyWrench,
+  jetpack,
+  magnetPulse,
+  mechArm,
+  musicBox,
+  pistolShot,
+  pressureShield,
+  propeller,
+  sootCloud,
+  steamGrenade,
+  steamPistol,
+  steamWhistle,
+  stormCompass,
+  teslaCoil,
+} from './symbolsSteamItems';
 import { dragonHead, bardLute, type SymbolFn } from './symbolsCreatures';
 import {
   acidSplash,
@@ -38,7 +72,6 @@ import {
   mace,
   magicMissile,
   mockery,
-  musicNotes,
   plateArmor,
   poisonCloud,
   potion,
@@ -95,6 +128,22 @@ export const ITEM_SYMBOLS = {
   dragonScale,
   archmageStaff,
   dragonOrb,
+  // Los Cielos de Latón (steampunk).
+  steamPistol,
+  airRifle,
+  heavyWrench,
+  aviatorGoggles,
+  fieldKit,
+  steamGrenade,
+  jetpack,
+  mechArm,
+  gearHeart,
+  blueprints,
+  coalLumps,
+  brassCoins,
+  cartridges,
+  armoredVest,
+  stormCompass,
 } satisfies Record<string, SymbolFn>;
 
 export type ItemSymbolKey = keyof typeof ITEM_SYMBOLS;
@@ -169,6 +218,37 @@ export function buildSpellIcon(spec: SpellIconSpec, title: string): string {
   return doc.render();
 }
 
+/** Gadgets ("artilugios") are spell entries in the steampunk campaign: brass gear badge instead of runes. */
+export const GADGET_ICON_SPECS = {
+  'granada-de-vapor': { symbol: steamGrenade, color: '#d86a2a' },
+  'bobina-tesla': { symbol: teslaCoil, color: '#3a9ad8' },
+  'botiquin-de-engranajes': { symbol: gearKit, color: '#3fae5a' },
+  'red-de-cables': { symbol: cableNet, color: '#6a7a8a' },
+  'nube-de-hollin': { symbol: sootCloud, color: '#5a8a3a' },
+  'pulso-magnetico': { symbol: magnetPulse, color: '#c84a3a' },
+  'arpon-neumatico': { symbol: harpoon, color: '#8a6a3a' },
+  'bengala-de-magnesio': { symbol: flare, color: '#e6b81a' },
+  'escudo-de-presion': { symbol: pressureShield, color: '#b88a2a' },
+} satisfies Record<string, SpellIconSpec>;
+
+export type GadgetIconKey = keyof typeof GADGET_ICON_SPECS;
+
+export function buildGadgetIcon(spec: SpellIconSpec, title: string): string {
+  const doc = new SvgDoc(256, 256, title);
+  const bg = doc.def('gadgetBg', radialGradient('gadgetBg', [[0, shade(spec.color, -0.3)], [1, '#070605']], { cx: 0.5, cy: 0.45, r: 0.6 }));
+  const brass = metalLinear(doc, 'gadgetBrass', BRASS);
+  doc.def('symbolShadow', DROP_SHADOW_FILTER);
+  doc.add(path(gearD(128, 128, 127, 10, 28), { fill: '#050403' }));
+  doc.add(path(gearD(128, 128, 122, 9, 28), { fill: brass, stroke: '#3a2a0a', strokeWidth: 2 }));
+  doc.add(circle(128, 128, 106, { fill: '#2a1e0a', stroke: '#1a1206', strokeWidth: 2 }));
+  doc.add(circle(128, 128, 100, { fill: bg }));
+  doc.add(rivetRing(128, 128, 112, 14, 3.2, '#f6dc8e'));
+  doc.add(circle(128, 128, 92, { fill: 'none', stroke: spec.color, strokeWidth: 1.5, opacity: 0.55 }));
+  doc.add(g({ transform: 'translate(44 44) scale(1.68)', filter: 'url(#symbolShadow)' }, spec.symbol(doc)));
+  doc.add(circle(128, 128, 100, { fill: 'none', stroke: shade(spec.color, 0.25), strokeWidth: 4, opacity: 0.8 }));
+  return doc.render();
+}
+
 export interface SoundIconSpec {
   symbol: SymbolFn;
   color: string;
@@ -193,6 +273,15 @@ export const SOUND_ICON_SPECS = {
   monedas: { symbol: coinStack, color: '#c8a02a', type: 'effect' },
   golpe: { symbol: impact, color: '#c85a2a', type: 'effect' },
   'paso-de-pagina': { symbol: book, color: '#8a6a4a', type: 'effect' },
+  // Los Cielos de Latón (steampunk).
+  'vals-de-vapor': { symbol: musicBox, color: '#b8843a', type: 'music' },
+  'persecucion-en-las-nubes': { symbol: airshipChase, color: '#3a7ab8', type: 'music' },
+  'sala-de-maquinas': { symbol: enginePiston, color: '#8a5a2a', type: 'ambience' },
+  'viento-en-cubierta': { symbol: deckWind, color: '#4a8aaa', type: 'ambience' },
+  'silbato-de-vapor': { symbol: steamWhistle, color: '#a8843a', type: 'effect' },
+  engranajes: { symbol: gearsPair, color: '#8a6a2a', type: 'effect' },
+  'disparo-de-pistola': { symbol: pistolShot, color: '#a8542a', type: 'effect' },
+  helices: { symbol: propeller, color: '#4a7a9a', type: 'effect' },
 } satisfies Record<string, SoundIconSpec>;
 
 export type SoundIconKey = keyof typeof SOUND_ICON_SPECS;

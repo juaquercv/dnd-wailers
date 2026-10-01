@@ -156,13 +156,6 @@ function annularSector(cx: number, cy: number, r1: number, r2: number, a1: numbe
   return `M${p(r2, a1)}A${n(r2)} ${n(r2)} 0 ${large} 1 ${p(r2, a2)}L${p(r1, a2)}A${n(r1)} ${n(r1)} 0 ${large} 0 ${p(r1, a1)}Z`;
 }
 
-function randomInPolygon(rng: Prng, poly: Pt[], box: RectSpec): Pt {
-  for (let i = 0; i < 200; i++) {
-    const p = { x: box.x + rng.next() * box.w, y: box.y + rng.next() * box.h };
-    if (pointInPolygon(p, poly)) return p;
-  }
-  return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
-}
 
 // ---------------------------------------------------------------------------
 // Taberna El Jabalí Dorado
@@ -172,7 +165,7 @@ export function buildTavern(): string {
   const L = TAVERN;
   const rng = createRng('map-taberna');
   const doc = new SvgDoc(L.width, L.height, 'Taberna El Jabalí Dorado');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#3d3a33', blotches: ['#2e2b26', '#4a463e'], count: 30, texture: cobbleTexture(doc, rng, 'cobbleStreet', '#6d6a63', '#2e2b26') }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#3d3a33', blotches: ['#2e2b26', '#4a463e'], count: 30, texture: cobbleTexture(doc, rng, 'cobbleStreet', '#6d6a63', '#2e2b26') }));
   doc.add(rect(L.shell.x - 14, L.shell.y - 14, L.shell.w + 28, L.shell.h + 28, { fill: '#000000', opacity: 0.5 }));
 
   // Floors.
@@ -181,8 +174,8 @@ export function buildTavern(): string {
   doc.add(rect(L.room1.x, L.room1.y, L.room1.w, L.room1.h, { fill: plankTexture(doc, rng, 'planksRoom', '#6b4a2c') }));
   doc.add(rect(L.room2.x, L.room2.y, L.room2.w, L.room2.h, { fill: 'url(#planksRoom)' }));
   for (let i = 0; i < 40; i++) doc.add(ellipse(L.hall.x + rng.range(0, L.hall.w), L.hall.y + rng.range(0, L.hall.h), rng.range(8, 30), rng.range(5, 18), { fill: '#2a1a0e', opacity: rng.range(0.08, 0.2) }));
-  doc.add(rug(doc, L.rug, '#7a1f1f', '#d4a63f'));
-  doc.add(rug(doc, { x: 1250, y: 860, w: 150, h: 150 }, '#1f3f7a', '#cdb98f'));
+  doc.add(rug(L.rug, '#7a1f1f', '#d4a63f'));
+  doc.add(rug({ x: 1250, y: 860, w: 150, h: 150 }, '#1f3f7a', '#cdb98f'));
 
   // Fireplace on the west wall.
   const fp = L.fireplace;
@@ -210,7 +203,7 @@ export function buildTavern(): string {
     [990, 150],
   ] as [number, number][])
     doc.add(barrel(doc, x, y, 24));
-  doc.add(barrel(doc, 1075, 280, 22), barrel(doc, 1075, 330, 22), crate(doc, 1070, 390, 34, 6));
+  doc.add(barrel(doc, 1075, 280, 22), barrel(doc, 1075, 330, 22), crate(1070, 390, 34, 6));
 
   for (const t of L.tables) doc.add(roundTable(doc, rng, t.x, t.y, 52));
   // Long table near the bar.
@@ -230,8 +223,8 @@ export function buildTavern(): string {
 
   // Bedrooms.
   const blankets = ['#7a1f1f', '#2f5f3a', '#3a3a7a'];
-  L.beds.forEach((b, i) => doc.add(bed(doc, b.x, b.y, b.w, b.h, blankets[i % blankets.length]!)));
-  doc.add(chest(doc, 1190, 720, 60, 38), chest(doc, 1190, 1000, 60, 38, 4));
+  L.beds.forEach((b, i) => doc.add(bed(b.x, b.y, b.w, b.h, blankets[i % blankets.length]!)));
+  doc.add(chest(1190, 720, 60, 38), chest(1190, 1000, 60, 38, 4));
   doc.add(rect(1350, 540, 50, 40, { fill: '#6b4426', stroke: '#2a1a0e', strokeWidth: 2 }), candle(doc, 1375, 560));
   doc.add(rect(1300, 990, 120, 44, { fill: '#4a2e18', stroke: '#1e120a', strokeWidth: 2 }));
 
@@ -252,7 +245,7 @@ export function buildTavern(): string {
 
 function caveBase(doc: SvgDoc, rng: Prng, w: number, h: number, outline: Pt[], floorBase: string): string {
   const parts: string[] = [];
-  parts.push(terrain(doc, rng, w, h, { base: '#110e0c', blotches: ['#1c1714', '#0a0807', '#241d18'], count: 80, texture: speckleTexture(doc, rng, 'rockSpeckle', ['#2a231e', '#050404'], 150, 70) }));
+  parts.push(terrain(rng, w, h, { base: '#110e0c', blotches: ['#1c1714', '#0a0807', '#241d18'], count: 80, texture: speckleTexture(doc, rng, 'rockSpeckle', ['#2a231e', '#050404'], 150, 70) }));
   const clipId = 'caveFloorClip';
   doc.def(clipId, tag('clipPath', { id: clipId }, path(polyPath(outline))));
   const floor: string[] = [];
@@ -319,7 +312,7 @@ export function buildDragonCave(): string {
   doc.add(ellipse(h.x, h.y, h.rx * 1.4, h.ry * 1.4, { fill: doc.def('hoardGlow', radialGradient('hoardGlow', [[0, '#ffd27a', 0.45], [1, '#ffd27a', 0]])) }));
   doc.add(ellipse(h.x, h.y, h.rx, h.ry, { fill: '#8a6a1a', opacity: 0.6 }));
   doc.add(coins(doc, rng, h.x, h.y, h.rx, h.ry, 520));
-  doc.add(chest(doc, h.x - 150, h.y - 40, 70, 44, -12), chest(doc, h.x + 140, h.y + 30, 64, 40, 18), chest(doc, h.x + 20, h.y - 110, 60, 38, 4));
+  doc.add(chest(h.x - 150, h.y - 40, 70, 44, -12), chest(h.x + 140, h.y + 30, 64, 40, 18), chest(h.x + 20, h.y - 110, 60, 38, 4));
   for (let i = 0; i < 14; i++) doc.add(gemstone(h.x + rng.jitter(h.rx * 0.8), h.y + rng.jitter(h.ry * 0.8), rng.range(5, 9), rng.pick(['#e8473f', '#3d8bff', '#4fc24f', '#a35cff', '#ffffff'])));
   for (let i = 0; i < 5; i++) {
     const gx = h.x + rng.jitter(h.rx * 0.7);
@@ -408,7 +401,7 @@ export function buildTowerGround(): string {
   const rng = createRng('map-torre-baja');
   const doc = new SvgDoc(L.width, L.height, 'Torre del Hechicero — Planta baja');
   const grass = grassTexture(doc, rng, 'grassTower', '#6f8f45', '#1f3a1a');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#3a5228', blotches: ['#2f4a24', '#4a5f2c', '#26401d'], count: 60, texture: grass }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#3a5228', blotches: ['#2f4a24', '#4a5f2c', '#26401d'], count: 60, texture: grass }));
   doc.add(path(`M${L.cx} ${L.cy + L.outerR - 10}L${L.cx + 10} ${L.height + 20}`, { stroke: '#7a6040', strokeWidth: 80, strokeLinecap: 'round' }));
   for (let i = 0; i < 24; i++) {
     const a = rng.range(0, Math.PI * 2);
@@ -455,7 +448,7 @@ export function buildTowerGround(): string {
   }
   // Desk with books and candles.
   const dk = L.desk;
-  doc.add(rug(doc, { x: dk.x - 50, y: dk.y - 50, w: dk.w + 100, h: dk.h + 120 }, '#3a1f5a', '#d4a63f'));
+  doc.add(rug({ x: dk.x - 50, y: dk.y - 50, w: dk.w + 100, h: dk.h + 120 }, '#3a1f5a', '#d4a63f'));
   doc.add(rect(dk.x + 8, dk.y + 10, dk.w, dk.h, { fill: '#000', opacity: 0.4 }), rect(dk.x, dk.y, dk.w, dk.h, { fill: '#5a3618', stroke: '#1e120a', strokeWidth: 3, rx: 4 }));
   doc.add(rect(dk.x + 30, dk.y + 18, 40, 50, { fill: '#efe6cf', stroke: '#8a7a5a', strokeWidth: 1 }), rect(dk.x + 70, dk.y + 18, 40, 50, { fill: '#e6d8b8', stroke: '#8a7a5a', strokeWidth: 1 }), candle(doc, dk.x + 140, dk.y + 22), circle(dk.x + 140, dk.y + 60, 10, { fill: '#2a4a7a', stroke: '#111', strokeWidth: 1 }));
   doc.add(circle(dk.x + dk.w / 2, dk.y + dk.h + 36, 22, { fill: '#4a2e18', stroke: '#1e120a', strokeWidth: 2 }));
@@ -522,7 +515,7 @@ export function buildTowerTop(): string {
 
 function dungeonBase(doc: SvgDoc, rng: Prng, d: GridDungeon & { width: number; height: number; pillars: [number, number][] }, stone: string, mortar: string, clipId: string): string {
   const parts: string[] = [];
-  parts.push(terrain(doc, rng, d.width, d.height, { base: '#0d0b0a', blotches: ['#16130f', '#050404', '#1d1915'], count: 60, texture: speckleTexture(doc, rng, 'dungeonRock', ['#221d18', '#000000'], 150, 70) }));
+  parts.push(terrain(rng, d.width, d.height, { base: '#0d0b0a', blotches: ['#16130f', '#050404', '#1d1915'], count: 60, texture: speckleTexture(doc, rng, 'dungeonRock', ['#221d18', '#000000'], 150, 70) }));
   const rects = Object.values(d.rooms).map((r) => cellRectPx(r));
   doc.def(clipId, tag('clipPath', { id: clipId }, rects.map((r) => rect(r.x, r.y, r.w, r.h)).join('')));
   const floorFill = flagstoneTexture(doc, rng, `${clipId}Stone`, stone, mortar);
@@ -543,7 +536,7 @@ function pillarsArt(doc: SvgDoc, pillars: [number, number][]): string {
     .join('');
 }
 
-function sarcophagus(doc: SvgDoc, x: number, y: number, w: number, h: number, rot = 0, effigy = false): string {
+function sarcophagus(x: number, y: number, w: number, h: number, rot = 0, effigy = false): string {
   const parts: string[] = [
     rect(-w / 2 + 8, -h / 2 + 10, w, h, { fill: '#000', opacity: 0.45 }),
     rect(-w / 2, -h / 2, w, h, { fill: '#6d6a63', stroke: '#1a1816', strokeWidth: 3, rx: 6 }),
@@ -567,10 +560,10 @@ export function buildCryptUpper(): string {
   for (const sx of [900, 1200]) doc.add(softShadow(doc, sx + 8, 230, 40, 34, 0.5), circle(sx, 220, 30, { fill: '#5d5850', stroke: '#141210', strokeWidth: 3 }), circle(sx, 212, 13, { fill: '#8f8a80' }), rect(sx - 4, 180, 8, 60, { fill: '#9a958a', stroke: '#3a3630', strokeWidth: 1.5 }));
   // Hall: carpet runner, honoured tomb, braziers.
   doc.add(rect(1015, 700, 70, 420, { fill: '#5a1414', opacity: 0.85 }), rect(1023, 700, 54, 420, { fill: 'none', stroke: '#c9a94a', strokeWidth: 2, opacity: 0.7 }));
-  doc.add(sarcophagus(doc, 1050, 930, 100, 180, 0, true));
+  doc.add(sarcophagus(1050, 930, 100, 180, 0, true));
   doc.add(brazier(doc, 700, 770, '#ff9a3c', '#fff0b0'), brazier(doc, 1400, 770, '#ff9a3c', '#fff0b0'));
   // West: sarcophagi.
-  for (const s of L.sarcophagi) doc.add(sarcophagus(doc, s.x, s.y, 90, 140, rng.jitter(3)));
+  for (const s of L.sarcophagi) doc.add(sarcophagus(s.x, s.y, 90, 140, rng.jitter(3)));
   // North-west: library of the dead.
   doc.add(bookshelf(rng, 80, 78, 270, 30), g({ transform: 'translate(78 120) rotate(90)' }, bookshelf(rng, 0, -30, 200, 30)));
   doc.add(rect(170, 230, 100, 60, { fill: '#4a2e18', stroke: '#1e120a', strokeWidth: 2 }), candle(doc, 190, 250), rect(215, 245, 30, 36, { fill: '#e6d8b8', opacity: 0.9 }));
@@ -618,7 +611,7 @@ export function buildOssuary(): string {
   // Landing with stairs up; vault with treasure.
   doc.add(stairs(doc, { x: 1820, y: 980, w: 140, h: 140 }, 'up'));
   const v = cellRectPx(L.rooms.vault!);
-  doc.add(coins(doc, rng, v.x + v.w / 2, v.y + v.h / 2, v.w * 0.35, v.h * 0.3, 160), chest(doc, v.x + 60, v.y + 60, 60, 38, -8), chest(doc, v.x + v.w - 60, v.y + 70, 56, 36, 10));
+  doc.add(coins(doc, rng, v.x + v.w / 2, v.y + v.h / 2, v.w * 0.35, v.h * 0.3, 160), chest(v.x + 60, v.y + 60, 60, 38, -8), chest(v.x + v.w - 60, v.y + 70, 56, 36, 10));
   for (let i = 0; i < 6; i++) doc.add(gemstone(v.x + rng.range(40, v.w - 40), v.y + rng.range(40, v.h - 40), rng.range(5, 8), rng.pick(['#e8473f', '#a35cff', '#3d8bff'])));
   for (const r of Object.values(L.rooms)) {
     const px = cellRectPx(r);
@@ -641,14 +634,14 @@ export function buildChapel(): string {
   const rng = createRng('map-capilla');
   const doc = new SvgDoc(L.width, L.height, 'Capilla en ruinas');
   const grass = grassTexture(doc, rng, 'grassChapel', '#5a7a5a', '#141f16');
-  doc.add(terrain(doc, rng, L.width, L.height, { base: '#2c3a2c', blotches: ['#243024', '#38463a', '#1f2a22'], count: 60, texture: grass }));
+  doc.add(terrain(rng, L.width, L.height, { base: '#2c3a2c', blotches: ['#243024', '#38463a', '#1f2a22'], count: 60, texture: grass }));
   for (const [x, y] of [
     [150, 200],
     [1500, 260],
     [1520, 900],
     [180, 950],
   ] as [number, number][])
-    doc.add(gravestone(doc, rng, x, y, rng.jitter(8), 'stone'));
+    doc.add(gravestone(rng, x, y, rng.jitter(8), 'stone'));
   // Floor (nave + apse).
   const nave = L.nave;
   const apseD = `M${nave.x} ${nave.y}H${L.apse.x - L.apse.r}A${L.apse.r} ${L.apse.r} 0 0 1 ${L.apse.x + L.apse.r} ${nave.y}H${nave.x + nave.w}V${nave.y + nave.h}H${nave.x}Z`;
@@ -706,4 +699,3 @@ export function buildChapel(): string {
   return doc.render();
 }
 
-export { randomInPolygon };

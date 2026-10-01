@@ -30,8 +30,9 @@ const dbUrl =
   process.env.DEV_DATABASE_URL ||
   fileEnv.DEV_DATABASE_URL ||
   `postgresql://${fileEnv.POSTGRES_USER || 'wailers'}:${fileEnv.POSTGRES_PASSWORD || 'wailers'}@localhost:${fileEnv.DEV_DB_PORT || 5433}/${fileEnv.POSTGRES_DB || 'wailers'}`;
-const apiPort = arg('api-port', process.env.PORT || '3000');
-const webPort = arg('web-port', '5173');
+// PORT may be injected by preview tools for the web client, so the API uses its own variable.
+const apiPort = arg('api-port', process.env.DEV_API_PORT || '3000');
+const webPort = arg('web-port', process.env.PORT || '5173');
 
 const env = {
   ...process.env,
