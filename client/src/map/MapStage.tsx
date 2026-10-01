@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -185,6 +186,8 @@ export const MapStage = forwardRef<MapStageHandle, MapStageProps>(function MapSt
       if (!pan) return;
       if (pan.button === 2 && pan.active) lastRightPanEndRef.current = performance.now();
       panRef.current = null;
+      // Pan gestures disable node dragging for their mousedown; restore the default for any Konva stage.
+      Konva.dragButtons = [0];
       window.removeEventListener('mousemove', onWindowMove);
       window.removeEventListener('mouseup', onWindowUp);
       refreshCursor();
@@ -215,6 +218,22 @@ export const MapStage = forwardRef<MapStageHandle, MapStageProps>(function MapSt
     return { refreshCursor, startPan, endPan };
   }, [camera]);
 
+  // Callback ref: react-konva may replace the Konva.Stage instance (e.g. StrictMode remounts).
+  const mutedStages = useRef(new WeakSet<Konva.Stage>());
+  const setStageRef = useCallback(
+    (stage: Konva.Stage | null) => {
+      if (stage === stageRef.current) return;
+      stageRef.current = stage;
+      if (stage && !mutedStages.current.has(stage)) {
+        muteLayerCountWarning(stage);
+        mutedStages.current.add(stage);
+      }
+      camera.attach(stage);
+      if (stage) controller.refreshCursor();
+    },
+    [camera, controller],
+  );
+
   // --- sizing -----------------------------------------------------------------
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -241,19 +260,16 @@ export const MapStage = forwardRef<MapStageHandle, MapStageProps>(function MapSt
       setStageMounted(true);
       return;
     }
-    const stage = stageRef.current;
-    camera.attach(stage);
     camera.setSize(size.width, size.height);
     if (!initializedRef.current) {
       initializedRef.current = true;
-      if (initialFit) camera.fit(false);
-      else camera.centerOn(worldWidth / 2, worldHeight / 2, 1, false);
+      if (!camera.flushPendingMove()) {
+        if (initialFit) camera.fit(false);
+        else camera.centerOn(worldWidth / 2, worldHeight / 2, 1, false);
+      }
       controller.refreshCursor();
     }
-    if (stage && !childrenReady) {
-      muteLayerCountWarning(stage);
-      setChildrenReady(true);
-    }
+    if (stageRef.current && !childrenReady) setChildrenReady(true);
     // Only the viewport size drives this effect; the world size is already in the camera.
   }, [camera, controller, stageMounted, childrenReady, size.width, size.height]);
 
@@ -527,7 +543,7 @@ export const MapStage = forwardRef<MapStageHandle, MapStageProps>(function MapSt
     >
       {stageMounted && (
         <Stage
-          ref={stageRef}
+          ref={setStageRef}
           width={Math.max(1, size.width)}
           height={Math.max(1, size.height)}
           style={{ position: 'absolute', inset: 0 }}

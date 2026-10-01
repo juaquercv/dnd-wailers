@@ -43,6 +43,8 @@ export class MapCamera implements MapViewSource {
   private notifyRafId: number | null = null;
   private tween: ViewTween | null = null;
   private zoomTarget: ZoomTarget | null = null;
+  /** Move requested before the viewport was measured; applied by flushPendingMove(). */
+  private pendingMove: { cx: number; cy: number; scale: number | null } | null = null;
 
   /** Throttled (one call per animation frame) change callback for React consumers. */
   onViewChange: ((view: MapViewState) => void) | null = null;
@@ -125,12 +127,32 @@ export class MapCamera implements MapViewSource {
 
   fit(animated: boolean): void {
     const target = this.fitTarget();
-    if (!target) return;
+    if (!target) {
+      // Remember the intent (scale computed once the viewport is known).
+      if (!this.hasSize()) this.pendingMove = { cx: this.world.width / 2, cy: this.world.height / 2, scale: null };
+      return;
+    }
+    this.pendingMove = null;
     this.moveTo(target.cx, target.cy, target.scale, animated);
   }
 
   centerOn(x: number, y: number, scale: number | undefined, animated: boolean): void {
+    if (!this.hasSize()) {
+      this.pendingMove = { cx: x, cy: y, scale: scale === undefined ? this.snapshot.scale : clampScale(scale) };
+      return;
+    }
+    this.pendingMove = null;
     this.moveTo(x, y, clampScale(scale ?? this.snapshot.scale), animated);
+  }
+
+  /** Applies a fit/centerOn requested before the first measurement. Returns true if one was applied. */
+  flushPendingMove(): boolean {
+    const pending = this.pendingMove;
+    if (!pending || !this.hasSize()) return false;
+    this.pendingMove = null;
+    if (pending.scale === null) this.fit(false);
+    else this.moveTo(pending.cx, pending.cy, pending.scale, false);
+    return true;
   }
 
   cancelAnimations(): void {
