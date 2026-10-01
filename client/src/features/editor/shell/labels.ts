@@ -87,7 +87,8 @@ export function elementTitle(el: SceneElement): string {
     el.name ||
     (el.type === 'marker' || el.type === 'token' || el.type === 'transition' ? el.label : '') ||
     (el.type === 'text' ? el.text.split('\n')[0]?.slice(0, 24) ?? '' : '');
-  return named ? `${base} «${named}»` : base;
+  if (!named || named.trim().toLocaleLowerCase('es') === base.toLocaleLowerCase('es')) return base;
+  return `${base} «${named}»`;
 }
 
 /** Drawing palette for map annotations (parchment, inks, terrain and magic tones). */

@@ -124,7 +124,7 @@ export function TransitionTargetEditor({ el, zone, level }: TransitionTargetEdit
       const l = d.levels.find((x) => x.id === targetLevelId);
       if (l) l.elements.push(back);
     });
-    toast.success(`Transición de vuelta creada en «${targetLevel.name}»`, {
+    toast.success(sameZone ? `Transición de vuelta creada en «${targetLevel.name}»` : `Transición de vuelta creada en «${targetZone.name}» (${targetLevel.name})`, {
       action: {
         label: 'Ver',
         onClick: () => {

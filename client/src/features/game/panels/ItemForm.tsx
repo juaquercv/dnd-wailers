@@ -50,9 +50,9 @@ export interface ItemFieldsProps {
 export function ItemFields({ value, onChange, allowEquip = false, currencyShort, nameError }: ItemFieldsProps) {
   const set = <K extends keyof ItemDraft>(key: K, v: ItemDraft[K]) => onChange({ ...value, [key]: v });
   return (
-    <div className="grid grid-cols-[96px_1fr] gap-x-4 gap-y-3">
+    <div className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-3">
       <div className="row-span-2">
-        <ImageUpload value={value.imageUrl} onChange={(url) => set('imageUrl', url)} aspect="square" allowUrl={false} label="Imagen" />
+        <ImageUpload value={value.imageUrl} onChange={(url) => set('imageUrl', url)} aspect="square" allowUrl={false} label="Imagen" hint="PNG, JPG o WEBP" />
       </div>
       <TextInput
         label="Nombre"

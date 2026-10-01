@@ -136,22 +136,30 @@ export function VisibilityPanel() {
 
   const setPlayer = async (patch: Partial<VisibilitySettings>) => {
     if (!playerId) return;
-    const next: Partial<VisibilitySettings> = { ...overrides };
-    let removed = false;
+    // The server merges per-player patches; a null value removes that override. sceneImageUrl is the
+    // exception (null is a real value: black screen), so clearing it rebuilds the whole override set.
+    const wire: Record<string, unknown> = {};
+    let rebuild = false;
     for (const [k, v] of Object.entries(patch) as [keyof VisibilitySettings, VisibilitySettings[keyof VisibilitySettings] | undefined][]) {
-      if (v === undefined) {
-        if (k in next) removed = true;
-        delete next[k];
-      } else {
-        (next as Record<string, unknown>)[k] = v;
+      if (v !== undefined) wire[k] = v;
+      else if (k === 'sceneImageUrl') rebuild = k in overrides;
+      else if (k in overrides) wire[k] = null;
+    }
+    if (rebuild) {
+      const rest: Partial<VisibilitySettings> = { ...overrides };
+      delete rest.sceneImageUrl;
+      for (const [k, v] of Object.entries(wire)) {
+        if (v === null) delete (rest as Record<string, unknown>)[k];
+        else (rest as Record<string, unknown>)[k] = v;
       }
-    }
-    if (removed) {
-      // Overrides are replaced as a whole: clear, then send what remains.
       const ok = await send('vis:setPlayer', { userId: playerId, patch: null }, 'No se pudo cambiar la visibilidad del jugador');
-      if (!ok || Object.keys(next).length === 0) return;
+      if (!ok || Object.keys(rest).length === 0) return;
+      await send('vis:setPlayer', { userId: playerId, patch: rest }, 'No se pudo cambiar la visibilidad del jugador');
+      return;
     }
-    await send('vis:setPlayer', { userId: playerId, patch: next }, 'No se pudo cambiar la visibilidad del jugador');
+    if (Object.keys(wire).length === 0) return;
+    // Null values are part of the wire protocol (remove override) even though the TS type has no null.
+    await send('vis:setPlayer', { userId: playerId, patch: wire as Partial<VisibilitySettings> }, 'No se pudo cambiar la visibilidad del jugador');
   };
 
   const clearPlayer = () => {

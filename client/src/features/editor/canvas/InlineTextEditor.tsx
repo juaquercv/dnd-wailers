@@ -9,11 +9,28 @@ import { findElementNode } from './useCanvasController';
 const TEXT_LINE_HEIGHT = 1.15;
 const NOTE_TEXT = { x: 12, y: 30, width: NOTE_SIZE.width - 24, height: NOTE_SIZE.height - 30 - 14, fontSize: 14, lineHeight: 1.25 };
 const MARKER_FONT = 13;
+/** On-screen font size (px) the editor never goes below: when the map is zoomed out it pops out bigger. */
+const MIN_READABLE_FONT_PX = 13;
+/** Gap kept between an enlarged editor and the edges of the canvas. */
+const EDGE_GAP_PX = 6;
 
 type EditableElement = TextElement | NoteElement | MarkerElement;
 
 function isEditable(el: SceneElement | undefined): el is EditableElement {
   return !!el && (el.type === 'text' || el.type === 'note' || el.type === 'marker');
+}
+
+function initialValue(el: EditableElement): string {
+  return el.type === 'marker' ? el.label : el.text;
+}
+
+function baseFontPx(el: EditableElement): number {
+  if (el.type === 'text') return Math.max(4, el.fontSize);
+  return el.type === 'note' ? NOTE_TEXT.fontSize : MARKER_FONT;
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return max < min ? min : Math.min(max, Math.max(min, v));
 }
 
 interface EditorBoxProps {
@@ -22,10 +39,6 @@ interface EditorBoxProps {
   view: CanvasView;
   mapRef: RefObject<MapStageHandle>;
   onCommit(id: string, value: string, isNew: boolean): void;
-}
-
-function initialValue(el: EditableElement): string {
-  return el.type === 'marker' ? el.label : el.text;
 }
 
 function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
@@ -43,7 +56,7 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
   const finishRef = useRef(finish);
   finishRef.current = finish;
 
-  // Focus once; new elements start with their placeholder text selected.
+  // Focus once; new elements and texts start with their content selected.
   useLayoutEffect(() => {
     const field = fieldRef.current;
     if (!field) return;
@@ -79,15 +92,30 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
     }
   };
 
-  const s = view.scale;
-  const origin = { x: el.x * s + view.x, y: el.y * s + view.y };
-  const wrapper: CSSProperties = {
-    position: 'absolute',
-    left: origin.x,
-    top: origin.y,
-    transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
-    transformOrigin: '0 0',
-    zIndex: 20,
+  // Overlay scale: the stage zoom, raised to a readable minimum when the map is zoomed far out.
+  const s = Math.max(view.scale, MIN_READABLE_FONT_PX / baseFontPx(el));
+  const enlarged = s > view.scale + 1e-6;
+  const viewport = mapRef.current?.getView();
+  const anchor = { x: el.x * view.scale + view.x, y: el.y * view.scale + view.y };
+
+  /** Absolute wrapper at the element origin; an enlarged editor is kept inside the canvas. */
+  const place = (box: { dx: number; dy: number; width: number; height: number }): CSSProperties => {
+    let left = anchor.x + box.dx;
+    let top = anchor.y + box.dy;
+    if (enlarged && viewport && viewport.width > 0 && viewport.height > 0) {
+      left = clamp(left, EDGE_GAP_PX, viewport.width - box.width - EDGE_GAP_PX);
+      top = clamp(top, EDGE_GAP_PX, viewport.height - box.height - EDGE_GAP_PX);
+    }
+    return {
+      position: 'absolute',
+      left,
+      top,
+      width: box.width,
+      height: box.height,
+      transform: el.rotation && !enlarged ? `rotate(${el.rotation}deg)` : undefined,
+      transformOrigin: `${-box.dx}px ${-box.dy}px`,
+      zIndex: 20,
+    };
   };
 
   if (el.type === 'text') {
@@ -96,7 +124,7 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
     const width = Math.max(m.width + fontSize * 0.8, fontSize * 2) * s;
     const height = Math.max(1, value.split('\n').length) * fontSize * TEXT_LINE_HEIGHT * s;
     return (
-      <div style={wrapper}>
+      <div style={place({ dx: 0, dy: 0, width, height })}>
         <textarea
           ref={fieldRef}
           value={value}
@@ -105,10 +133,8 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
           onChange={(e) => setValue(e.target.value)}
           onBlur={finish}
           onKeyDown={onKeyDown}
-          className="scroll-thin block resize-none overflow-hidden whitespace-pre rounded-sm border-0 bg-ink-950/25 p-0 outline-none ring-1 ring-gold-400/80 ring-offset-2 ring-offset-transparent"
+          className="scroll-thin block h-full w-full resize-none overflow-hidden whitespace-pre rounded-sm border-0 bg-ink-950/40 p-0 outline-none ring-1 ring-gold-400/80 ring-offset-2 ring-offset-transparent"
           style={{
-            width,
-            height,
             fontFamily: FONT_DISPLAY,
             fontSize: fontSize * s,
             lineHeight: TEXT_LINE_HEIGHT,
@@ -122,8 +148,20 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
   }
 
   if (el.type === 'note') {
+    const width = NOTE_SIZE.width * s;
+    const height = NOTE_SIZE.height * s;
     return (
-      <div style={wrapper}>
+      <div
+        style={{ ...place({ dx: 0, dy: 0, width, height }), background: el.color || NOTE_COLOR }}
+        className="rounded-sm shadow-modal ring-2 ring-gold-500/70"
+      >
+        <span
+          aria-hidden
+          className="pointer-events-none absolute select-none font-bold uppercase"
+          style={{ left: NOTE_TEXT.x * s, top: 12 * s, fontSize: 10 * s, letterSpacing: 1.2 * s, color: 'rgba(59, 47, 18, 0.7)', fontFamily: FONT_SANS }}
+        >
+          {el.name && el.name !== 'Nota' ? el.name : 'Nota del DM'}
+        </span>
         <textarea
           ref={fieldRef}
           value={value}
@@ -132,7 +170,7 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
           onChange={(e) => setValue(e.target.value)}
           onBlur={finish}
           onKeyDown={onKeyDown}
-          className="scroll-thin absolute block resize-none rounded-sm border-0 p-0 outline-none ring-2 ring-gold-500/70 placeholder:text-[#3b2f12]/50"
+          className="scroll-thin absolute block resize-none border-0 bg-transparent p-0 outline-none placeholder:text-[#3b2f12]/50"
           style={{
             left: NOTE_TEXT.x * s,
             top: NOTE_TEXT.y * s,
@@ -142,18 +180,17 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
             fontSize: NOTE_TEXT.fontSize * s,
             lineHeight: NOTE_TEXT.lineHeight,
             color: '#3b2f12',
-            background: el.color || NOTE_COLOR,
           }}
         />
       </div>
     );
   }
 
-  // marker label: pill input centered under the pin tip
-  const fontSize = MARKER_FONT * s;
-  const width = Math.max(140, measureTextBlock(value || 'Etiqueta', MARKER_FONT, FONT_SANS, 1.2, 'bold').width + 40) * s;
+  // Marker label: pill input centered under the pin tip.
+  const width = Math.max(180, measureTextBlock(value || 'Etiqueta', MARKER_FONT, FONT_SANS, 1.2, 'bold').width + 40) * s;
+  const height = Math.max(14, (MARKER_FONT * 1.2 + 8) * s);
   return (
-    <div style={wrapper}>
+    <div style={place({ dx: -width / 2, dy: 4 * s, width, height })}>
       <input
         ref={fieldRef}
         value={value}
@@ -163,16 +200,8 @@ function EditorBox({ el, isNew, view, mapRef, onCommit }: EditorBoxProps) {
         onBlur={finish}
         onKeyDown={onKeyDown}
         maxLength={80}
-        className="absolute block rounded-full border border-gold-500/80 bg-ink-950/95 text-center font-bold text-parchment-100 shadow-modal outline-none placeholder:font-normal placeholder:text-parchment-400 focus:ring-2 focus:ring-gold-400/40"
-        style={{
-          left: -width / 2,
-          top: 4 * s,
-          width,
-          height: Math.max(14, (MARKER_FONT * 1.2 + 8) * s),
-          fontFamily: FONT_SANS,
-          fontSize,
-          padding: `0 ${8 * s}px`,
-        }}
+        className="block h-full w-full rounded-full border border-gold-500/80 bg-ink-950/95 text-center font-bold text-parchment-100 shadow-modal outline-none placeholder:font-normal placeholder:text-parchment-400 focus:ring-2 focus:ring-gold-400/40"
+        style={{ fontFamily: FONT_SANS, fontSize: MARKER_FONT * s, padding: `0 ${8 * s}px` }}
       />
     </div>
   );

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import { CircleX, Crown, DoorOpen, RefreshCw, UserX, WifiOff } from 'lucide-react';
+import { CircleX, Crown, DoorOpen, Flag, Hourglass, Pause, Play, RefreshCw, Swords, UserX, WifiOff } from 'lucide-react';
 import { APP_NAME } from '@wailers/shared';
+import { api } from '../../api/http';
 import { FullScreenLoader } from '../../components/layout/FullScreenLoader';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -29,11 +30,11 @@ function enqueue(task: () => Promise<void>): Promise<void> {
   return lifecycle;
 }
 
-async function enterSession(sessionId: string): Promise<void> {
+async function enterSession(sessionId: string, force = false): Promise<void> {
   const current = useSessionStore.getState();
   if (current.sessionId && current.sessionId !== sessionId) await current.leave();
   const s = useSessionStore.getState();
-  if (s.sessionId === sessionId && s.status === 'joined') return;
+  if (!force && s.sessionId === sessionId && s.status === 'joined') return;
   // join() stores the Spanish error message in the store (status 'error').
   await s.join(sessionId).catch(() => undefined);
 }
@@ -54,9 +55,121 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/** How long a DM keeps seeing the table after the session closes (the initiator usually navigates away first). */
+const CLOSED_PANEL_DELAY_MS = 1500;
+
+type ExitKind = 'kicked' | 'paused' | 'ended';
+
 interface ExitNotice {
-  kind: 'kicked' | 'ended';
+  kind: ExitKind;
   reason: string;
+}
+
+const EXIT_COPY: Record<ExitKind, { title: string; fallback: string }> = {
+  kicked: { title: 'Has sido expulsado', fallback: 'El DM te ha sacado de la partida.' },
+  paused: { title: 'Partida en pausa', fallback: 'El DM ha pausado la partida. Podrás volver cuando la reanude.' },
+  ended: { title: 'La partida ha terminado', fallback: 'El DM ha cerrado la partida.' },
+};
+
+/** 'sessionEnded' covers pause, end and deletion; the server reason tells a pause apart. */
+function endedKind(reason: string): ExitKind {
+  return /paus/i.test(reason) ? 'paused' : 'ended';
+}
+
+/**
+ * Stop the store from silently rejoining (socket reconnection) once the server has thrown us out,
+ * while keeping the last view on screen behind the notice.
+ */
+function freezeSession(sessionId: string): void {
+  const s = useSessionStore.getState();
+  if (s.sessionId === sessionId && s.status === 'joined') useSessionStore.setState({ status: 'idle' });
+}
+
+function ExitIcon({ kind }: { kind: ExitKind }) {
+  if (kind === 'kicked') return <UserX />;
+  if (kind === 'paused') return <Pause />;
+  return <Crown />;
+}
+
+/** Shown to the DM when the session is paused / ended while the page is still open (or was entered that way). */
+function ClosedSessionPanel({
+  status,
+  sessionId,
+  sessionName,
+  isDm,
+  onMenu,
+  onHost,
+}: {
+  status: 'paused' | 'ended';
+  sessionId: string;
+  sessionName: string;
+  isDm: boolean;
+  onMenu: () => void;
+  onHost: () => void;
+}) {
+  const [resuming, setResuming] = useState(false);
+  const paused = status === 'paused';
+
+  const resume = async () => {
+    if (resuming) return;
+    setResuming(true);
+    try {
+      await api.sessions.resume(sessionId);
+      toast.success('Partida reanudada', { description: 'La sala de espera vuelve a estar abierta para los jugadores.' });
+      // The session may have been unloaded from memory: join again to receive the fresh lobby state.
+      await enqueue(() => enterSession(sessionId, true));
+    } catch (err) {
+      toast.fromError(err, 'No se pudo reanudar la partida');
+      setResuming(false);
+    }
+  };
+
+  return (
+    <div className="relative flex h-full items-center justify-center overflow-hidden p-6">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: paused
+            ? 'radial-gradient(ellipse 60% 50% at 50% 35%, rgba(212,166,63,0.14), transparent 70%)'
+            : 'radial-gradient(ellipse 60% 50% at 50% 35%, rgba(196,61,51,0.12), transparent 70%)',
+        }}
+      />
+      <div className="panel relative w-full max-w-lg animate-scale-in">
+        <EmptyState
+          icon={paused ? <Hourglass /> : <Flag />}
+          title={paused ? 'Partida en pausa' : 'Partida terminada'}
+          description={
+            <>
+              <span className="block font-display text-base text-gold-200">«{sessionName}»</span>
+              <span className="mt-2 block">
+                {isDm
+                  ? 'La partida está guardada. Si la reanudas volverá a la sala de espera y se conservarán héroes, posiciones e inventarios.'
+                  : 'El DM ha cerrado la partida. Podrás volver a entrar cuando la reanude.'}
+              </span>
+            </>
+          }
+          action={
+            <>
+              {isDm && (
+                <Button variant="primary" epic icon={<Play />} loading={resuming} onClick={() => void resume()}>
+                  Reanudar partida
+                </Button>
+              )}
+              {isDm && (
+                <Button variant="secondary" icon={<Swords />} disabled={resuming} onClick={onHost}>
+                  Hostear partida
+                </Button>
+              )}
+              <Button variant="ghost" icon={<DoorOpen />} disabled={resuming} onClick={onMenu}>
+                Volver al menú
+              </Button>
+            </>
+          }
+        />
+      </div>
+    </div>
+  );
 }
 
 /** Route /sesion/:sessionId — joins the live session and shows the lobby or the game table. */
@@ -74,10 +187,14 @@ export default function SessionPage() {
 
   const [notice, setNotice] = useState<ExitNotice | null>(null);
   const [showReconnect, setShowReconnect] = useState(false);
+  /** Session id whose lobby/game was seen active on this page (a later pause is shown with a delay). */
+  const [activeSeen, setActiveSeen] = useState<string | null>(null);
+  const [closedShown, setClosedShown] = useState(false);
 
   useEffect(() => {
     if (!sessionId) return;
     setNotice(null);
+    setClosedShown(false);
     void enqueue(() => enterSession(sessionId));
     return () => {
       if (!unloading) void enqueue(exitSession);
@@ -88,26 +205,46 @@ export default function SessionPage() {
     toast.show(e.level, e.text);
   });
   useSessionEvent('kicked', (e) => {
+    freezeSession(sessionId);
     uiSounds.notify();
     setNotice({ kind: 'kicked', reason: e.reason });
   });
   useSessionEvent('sessionEnded', (e) => {
     if (isSelfExit()) return;
+    freezeSession(sessionId);
     uiSounds.notify();
-    setNotice({ kind: 'ended', reason: e.reason });
+    setNotice({ kind: endedKind(e.reason), reason: e.reason });
   });
 
-  const joined = storeSessionId === sessionId && status === 'joined' && hasView;
+  const frozen = notice !== null;
+  const joined = storeSessionId === sessionId && hasView && (status === 'joined' || frozen);
+  const live = joined && !frozen;
 
   // Short grace period so brief network hiccups do not flash the banner.
   useEffect(() => {
-    if (connected || !joined) {
+    if (connected || !live) {
       setShowReconnect(false);
       return;
     }
     const timer = setTimeout(() => setShowReconnect(true), 700);
     return () => clearTimeout(timer);
-  }, [connected, joined]);
+  }, [connected, live]);
+
+  const closedStatus = joined && (gameStatus === 'paused' || gameStatus === 'ended') ? gameStatus : null;
+  const sawActive = activeSeen === sessionId;
+
+  useEffect(() => {
+    if (joined && (gameStatus === 'lobby' || gameStatus === 'playing')) setActiveSeen(sessionId);
+  }, [joined, gameStatus, sessionId]);
+
+  useEffect(() => {
+    if (!closedStatus || frozen) {
+      setClosedShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setClosedShown(true), sawActive ? CLOSED_PANEL_DELAY_MS : 0);
+    return () => clearTimeout(timer);
+  }, [closedStatus, frozen, sawActive]);
 
   useEffect(() => {
     if (!sessionName) return;
@@ -120,12 +257,13 @@ export default function SessionPage() {
 
   if (!sessionId) return <Navigate to="/menu" replace />;
 
-  const goMenu = () => {
+  const goTo = (path: string) => {
     void enqueue(exitSession);
-    navigate('/menu');
+    navigate(path);
   };
+  const goMenu = () => goTo('/menu');
 
-  if (storeSessionId === sessionId && status === 'error') {
+  if (!frozen && storeSessionId === sessionId && status === 'error') {
     return (
       <div className="flex h-full items-center justify-center p-6">
         <div className="panel w-full max-w-md animate-scale-in">
@@ -138,8 +276,11 @@ export default function SessionPage() {
                 <Button variant="primary" icon={<DoorOpen />} onClick={goMenu}>
                   Volver al menú
                 </Button>
-                <Button variant="ghost" icon={<RefreshCw />} onClick={() => void enqueue(() => enterSession(sessionId))}>
+                <Button variant="ghost" icon={<RefreshCw />} onClick={() => void enqueue(() => enterSession(sessionId, true))}>
                   Reintentar
+                </Button>
+                <Button variant="ghost" icon={<Swords />} onClick={() => goTo('/unirse')}>
+                  Ver partidas activas
                 </Button>
               </>
             }
@@ -151,7 +292,11 @@ export default function SessionPage() {
 
   if (!joined) return <FullScreenLoader label="Entrando en la partida…" />;
 
+  // A session entered while closed shows the panel at once; one closed in front of us waits a moment.
+  const showClosed = closedStatus !== null && !frozen && (closedShown || !sawActive);
   const inLobby = gameStatus === 'lobby';
+  const screenKey = showClosed ? 'closed' : inLobby ? 'lobby' : 'game';
+  const exitCopy = notice ? EXIT_COPY[notice.kind] : null;
 
   return (
     <div className="relative h-full min-h-0">
@@ -167,8 +312,21 @@ export default function SessionPage() {
         </div>
       )}
 
-      <div key={inLobby ? 'lobby' : 'game'} className="h-full min-h-0 animate-fade-in">
-        {inLobby ? <LobbyScreen /> : <GameScreen />}
+      <div key={screenKey} className="h-full min-h-0 animate-fade-in">
+        {showClosed && closedStatus ? (
+          <ClosedSessionPanel
+            status={closedStatus}
+            sessionId={sessionId}
+            sessionName={sessionName ?? 'Partida'}
+            isDm={role === 'dm'}
+            onMenu={goMenu}
+            onHost={() => goTo('/hostear')}
+          />
+        ) : inLobby ? (
+          <LobbyScreen />
+        ) : (
+          <GameScreen />
+        )}
       </div>
 
       <AudioController />
@@ -184,19 +342,18 @@ export default function SessionPage() {
         hideClose
         size="sm"
         layer="dialog"
-        icon={notice?.kind === 'kicked' ? <UserX /> : <Crown />}
-        title={notice?.kind === 'kicked' ? 'Has sido expulsado' : 'La partida ha terminado'}
+        icon={notice ? <ExitIcon kind={notice.kind} /> : undefined}
+        title={exitCopy?.title}
         footer={
           <>
-            {role === 'dm' && notice?.kind === 'ended' && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  void enqueue(exitSession);
-                  navigate('/hostear');
-                }}
-              >
+            {role === 'dm' && notice?.kind !== 'kicked' && (
+              <Button variant="ghost" onClick={() => goTo('/hostear')}>
                 Ir a «Hostear partida»
+              </Button>
+            )}
+            {role !== 'dm' && (
+              <Button variant="ghost" onClick={() => goTo('/unirse')}>
+                Ver partidas activas
               </Button>
             )}
             <Button variant="primary" icon={<DoorOpen />} onClick={goMenu} data-autofocus>
@@ -205,11 +362,8 @@ export default function SessionPage() {
           </>
         }
       >
-        <p className="text-sm leading-relaxed text-parchment-200">
-          {notice?.reason?.trim() ||
-            (notice?.kind === 'kicked' ? 'El DM te ha sacado de la partida.' : 'El DM ha cerrado la partida.')}
-        </p>
-        {notice?.kind === 'ended' && role !== 'dm' && (
+        <p className="text-sm leading-relaxed text-parchment-200">{notice?.reason.trim() || exitCopy?.fallback}</p>
+        {notice && notice.kind !== 'kicked' && role !== 'dm' && (
           <p className="mt-2 text-xs text-parchment-400">Tu héroe conserva su progreso: inventario, oro y experiencia quedan guardados.</p>
         )}
       </Modal>

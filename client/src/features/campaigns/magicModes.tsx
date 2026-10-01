@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Ban, Hourglass, Layers, Sparkles } from 'lucide-react';
-import type { MagicMode } from '@wailers/shared';
+import { createRuleSystem, type MagicMode } from '@wailers/shared';
 import { Badge, type BadgeProps, type BadgeTone } from '../../components/ui/Badge';
 import { RadioCards } from './RadioCards';
 
@@ -16,7 +16,7 @@ export interface MagicModeInfo {
 }
 
 /** Default resource name created by createRuleSystem(); campaigns may rename it (rules.magic.manaName). */
-const DEFAULT_RESOURCE_NAME = 'Maná';
+const DEFAULT_RESOURCE_NAME = createRuleSystem('mana').magic.manaName;
 
 export const MAGIC_MODE_INFO: Record<MagicMode, MagicModeInfo> = {
   mana: {

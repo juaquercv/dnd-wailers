@@ -37,7 +37,7 @@ import { Toggle } from '../../components/ui/Toggle';
 import { formatDate, formatRelative, plural } from '../../lib/format';
 import { useHotkeys } from '../../lib/hotkeys';
 import { useAuthStore } from '../../stores/auth';
-import { MAGIC_MODE_INFO, SectionTitle, SessionStatusBadge, useUserDirectory, type UserLookup } from '../lobby/lobbyUi';
+import { MAGIC_MODE_INFO, magicModeLabel, SectionTitle, SessionStatusBadge, useUserDirectory, type UserLookup } from '../lobby/lobbyUi';
 
 const SHOW_OTHERS_KEY = 'wailers.host.showOthers';
 
@@ -55,6 +55,41 @@ function writeShowOthers(v: boolean): void {
   } catch {
     /* ignore */
   }
+}
+
+/** Campaign resource names keyed by `id@updatedAt` (summaries only carry the magic mode). */
+const manaNameCache = new Map<string, Promise<string | null>>();
+
+/** The campaign's own name for its mana-like resource, loaded lazily for mana campaigns. */
+function useManaName(campaign: CampaignSummary): string | null {
+  const enabled = campaign.magicMode === 'mana';
+  const key = `${campaign.id}@${campaign.updatedAt}`;
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled) {
+      setName(null);
+      return;
+    }
+    let cancelled = false;
+    let pending = manaNameCache.get(key);
+    if (!pending) {
+      pending = api.campaigns
+        .get(campaign.id)
+        .then((c) => (c.rules.magic.mode === 'mana' ? c.rules.magic.manaName.trim() || null : null))
+        .catch(() => {
+          manaNameCache.delete(key);
+          return null;
+        });
+      manaNameCache.set(key, pending);
+    }
+    void pending.then((value) => {
+      if (!cancelled) setName(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, key, campaign.id]);
+  return enabled ? name : null;
 }
 
 function byUpdated<T extends { updatedAt: string }>(a: T, b: T): number {
@@ -300,6 +335,7 @@ function CampaignRow({
   const [busy, setBusy] = useState<{ id: string; kind: 'continue' | 'delete' } | null>(null);
   const [coverOk, setCoverOk] = useState(true);
   const magic = MAGIC_MODE_INFO[campaign.magicMode];
+  const manaName = useManaName(campaign);
 
   const loadSaved = useCallback(async () => {
     setLoading(true);
@@ -407,8 +443,8 @@ function CampaignRow({
           </div>
           {campaign.description && <p className="line-clamp-2 text-sm leading-relaxed text-parchment-300">{campaign.description}</p>}
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge tone={magic.tone} size="sm" icon={magic.icon}>
-              {magic.label}
+            <Badge tone={magic.tone} size="sm" icon={magic.icon} title="Sistema de recursos de la campaña">
+              {magicModeLabel(campaign.magicMode, manaName)}
             </Badge>
             <Badge size="sm" icon={<Layers />}>
               {plural(campaign.zoneCount, 'zona', 'zonas')}

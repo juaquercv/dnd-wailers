@@ -8,6 +8,9 @@ import { SearchInput } from '../../components/ui/SearchInput';
 import { formatDateTime, formatTime } from '../../lib/format';
 import { useSessionStore } from '../../stores/session';
 import { useUsers } from '../../stores/users';
+import { DieGlyph } from '../dice/DieShapes';
+import { useRollPending } from '../dice/rollReveal';
+import { MiniWheel } from '../dice/RouletteWheel';
 import { usePanelContext } from './panels/context';
 import { asRollResult, LOG_FILTERS, LOG_TYPE_META, rollBreakdown, type LogFilterId } from './panels/logMeta';
 
@@ -63,6 +66,18 @@ export function LogPanel() {
       setUnseen((n) => n + added);
     }
   }, [visible]);
+
+  // The panel may stay mounted while hidden (sidebar tabs): when it becomes visible again or its
+  // size changes, keep it pinned to the newest lines.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Filter / search change: jump to the newest lines.
   useEffect(() => {
@@ -202,12 +217,40 @@ const LogLine = memo(function LogLine({ entry, people, hostUserId }: LogLineProp
             {formatTime(entry.at)}
           </time>
         </div>
-        <p className={clsx('whitespace-pre-line break-words text-xs leading-snug', isChat ? 'text-parchment-50' : 'text-parchment-200')}>{entry.text}</p>
-        {roll && <RollDetails roll={roll} />}
+        {roll ? (
+          <RollBody roll={roll} text={entry.text} />
+        ) : (
+          <p className={clsx('whitespace-pre-line break-words text-xs leading-snug', isChat ? 'text-parchment-50' : 'text-parchment-200')}>{entry.text}</p>
+        )}
       </div>
     </li>
   );
 });
+
+/** Roll line: keeps the suspense while the big dice animation has not revealed the result yet. */
+function RollBody({ roll, text }: { roll: RollResult; text: string }) {
+  const pending = useRollPending(roll.id);
+  if (pending) {
+    const firstSides = roll.dice[0]?.sides ?? 20;
+    return (
+      <p className="mt-0.5 flex items-center gap-1.5 text-xs italic text-parchment-300" aria-busy="true">
+        <span className="shrink-0 animate-spin-slow" aria-hidden>
+          {roll.kind === 'roulette' ? <MiniWheel segments={roll.segments ?? []} size={16} /> : <DieGlyph sides={roll.kind === 'custom_die' ? 6 : firstSides} size={16} />}
+        </span>
+        <span className="truncate">
+          {roll.label ? `${roll.label}: ` : ''}
+          {roll.kind === 'roulette' ? 'girando la ruleta…' : 'lanzando…'}
+        </span>
+      </p>
+    );
+  }
+  return (
+    <>
+      <p className="whitespace-pre-line break-words text-xs leading-snug text-parchment-200">{text}</p>
+      <RollDetails roll={roll} />
+    </>
+  );
+}
 
 function RollDetails({ roll }: { roll: RollResult }) {
   const breakdown = rollBreakdown(roll);

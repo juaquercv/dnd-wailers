@@ -7,6 +7,12 @@ import { retrySave, useCampaignSaveStore } from './campaignSave';
 
 export type SaveStatus = 'saved' | 'saving' | 'dirty' | 'error';
 
+const STATUS_LABELS: Record<Exclude<SaveStatus, 'error'>, string> = {
+  saved: 'Guardado',
+  saving: 'Guardando…',
+  dirty: 'Cambios sin guardar',
+};
+
 /** Combined zone + campaign save status. */
 export function useSaveStatus(): { status: SaveStatus; error: string | null } {
   const saveState = useEditorStore((s) => s.saveState);
@@ -46,7 +52,7 @@ export function SaveIndicator({ className }: { className?: string }) {
         title={error ?? undefined}
       >
         <CircleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="hidden whitespace-nowrap sm:inline">Error al guardar</span>
+        <span className="hidden whitespace-nowrap lg:inline">Error al guardar</span>
         <button
           type="button"
           onClick={() => void retry()}
@@ -71,13 +77,13 @@ export function SaveIndicator({ className }: { className?: string }) {
         status === 'dirty' && 'border-ink-500 bg-ink-800 text-parchment-200',
         className,
       )}
+      title={STATUS_LABELS[status]}
+      aria-label={STATUS_LABELS[status]}
     >
       {status === 'saved' && <Check className="h-3.5 w-3.5" aria-hidden />}
       {status === 'saving' && <Spinner size="xs" label="Guardando…" />}
       {status === 'dirty' && <CloudUpload className="h-3.5 w-3.5 text-gold-400" aria-hidden />}
-      <span className="hidden sm:inline">
-        {status === 'saved' ? 'Guardado' : status === 'saving' ? 'Guardando…' : 'Cambios sin guardar'}
-      </span>
+      <span className="hidden xl:inline">{STATUS_LABELS[status]}</span>
     </div>
   );
 }

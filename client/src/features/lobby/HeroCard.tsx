@@ -1,7 +1,8 @@
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { Check, TriangleAlert } from 'lucide-react';
 import { normalizeText, type CategoryDTO, type RuleSystem } from '@wailers/shared';
+import { api } from '../../api/http';
 import { Badge } from '../../components/ui/Badge';
 import { useCategories } from '../../stores/categories';
 import { Portrait } from './lobbyUi';
@@ -89,6 +90,45 @@ export function heroRuleWarnings(hero: HeroLike, rules: RuleSystem | null | unde
   return out;
 }
 
+const EMPTY_IDS: string[] = [];
+/** Library categories of heroes whose live sheet arrived without them (heroId -> category ids). */
+const libraryCategoryCache = new Map<string, Promise<string[]>>();
+
+/**
+ * Category ids of a hero. Live sheets may come without categories: then the library entry is
+ * asked once (cached per hero) so race/class chips still show.
+ */
+export function useResolvedCategoryIds(heroId: string | null | undefined, categoryIds: string[] | null | undefined): string[] {
+  const own = categoryIds ?? EMPTY_IDS;
+  const needsLookup = !!heroId && own.length === 0;
+  const [fetched, setFetched] = useState<{ heroId: string; ids: string[] } | null>(null);
+
+  useEffect(() => {
+    if (!needsLookup || !heroId) return;
+    let cancelled = false;
+    let pending = libraryCategoryCache.get(heroId);
+    if (!pending) {
+      pending = api.library
+        .get<'hero'>(heroId)
+        .then((entry) => entry.categoryIds)
+        .catch(() => {
+          libraryCategoryCache.delete(heroId);
+          return EMPTY_IDS;
+        });
+      libraryCategoryCache.set(heroId, pending);
+    }
+    void pending.then((ids) => {
+      if (!cancelled) setFetched({ heroId, ids });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsLookup, heroId]);
+
+  if (!needsLookup) return own;
+  return fetched && fetched.heroId === heroId ? fetched.ids : own;
+}
+
 export function useHeroChips(categoryIds: string[]): HeroChip[] {
   const { byId } = useCategories('hero');
   return useMemo(() => heroChips(categoryIds, byId), [categoryIds, byId]);
@@ -132,7 +172,8 @@ export interface HeroCardProps {
 
 /** Hero portrait + name + level + race/class chips. */
 export function HeroCard({ hero, variant = 'picker', selected = false, busy = false, disabled = false, onClick, warnings = [], footer, className, color }: HeroCardProps) {
-  const chips = useHeroChips(hero.categoryIds);
+  const categoryIds = useResolvedCategoryIds(hero.id, hero.categoryIds);
+  const chips = useHeroChips(categoryIds);
 
   if (variant === 'compact') {
     return (

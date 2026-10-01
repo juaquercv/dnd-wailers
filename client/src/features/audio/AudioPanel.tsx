@@ -112,11 +112,9 @@ function TrackSection() {
     if (busyId) return;
     setBusyId(entry.id);
     try {
-      if (!manual) {
-        await emitAck('audio:mode', { mode: 'manual' });
-        toast.info('Modo manual activado', { description: 'Todos oirán las pistas que elijas.' });
-      }
+      // The server switches to manual mode by itself (keeping the other channel of the DM's zone).
       await emitAck('audio:play', { channel, soundId: entry.id });
+      if (!manual) toast.info('Modo manual activado', { description: 'Todos oirán las pistas que elijas.' });
     } catch (err) {
       toast.fromError(err, 'No se pudo reproducir la pista');
     } finally {

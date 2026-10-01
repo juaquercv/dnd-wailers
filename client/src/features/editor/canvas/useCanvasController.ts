@@ -56,8 +56,10 @@ const DUPLICATE_POINT_PX = 5;
 const CLOSE_POLYGON_PX = 10;
 /** Screen px a press must travel before a marquee / shape drag starts. */
 const DRAG_THRESHOLD_PX = 4;
-/** Readable on-screen font size (px) required to edit a text in place. */
-const MIN_EDIT_FONT_PX = 11;
+/** Max screen px between the two clicks of a double click (Konva fires stage dblclicks regardless of distance). */
+const DOUBLE_CLICK_SLOP_PX = 6;
+/** Max length of an element name derived from its text or label. */
+const DERIVED_NAME_MAX = 48;
 
 const TOOL_CURSORS: Partial<Record<EditorTool, string>> = {
   draw: 'crosshair',
@@ -181,6 +183,23 @@ function commitElementPatches(patches: Map<string, ElementPatch>, coalesceKey: s
   );
 }
 
+/** First non-empty line of a text, collapsed and shortened, to name an element after its content. */
+function nameFromContent(value: string): string {
+  const line = value.split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  return line.length > DERIVED_NAME_MAX ? `${line.slice(0, DERIVED_NAME_MAX - 1).trimEnd()}…` : line;
+}
+
+/**
+ * New name when the element still uses its default name or a name derived from the previous content;
+ * a name the DM typed by hand is kept (empty object).
+ */
+function syncedName(current: string, defaultName: string, previous: string, next: string): { name?: string } {
+  const name = current.trim();
+  if (name && name !== defaultName && name !== nameFromContent(previous)) return {};
+  const derived = nameFromContent(next) || defaultName;
+  return derived === current ? {} : { name: derived };
+}
+
 function roundPatch(patch: ElementPatch): ElementPatch {
   const out: ElementPatch = { ...patch };
   if (typeof out.x === 'number') out.x = round1(out.x);
@@ -208,6 +227,8 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
   const pendingTransformsRef = useRef<Map<string, ElementPatch> | null>(null);
   const rightDownRef = useRef<{ x: number; y: number } | null>(null);
   const lastPlacementRef = useRef<{ t: number; x: number; y: number } | null>(null);
+  /** Client positions of the last two stage clicks (to tell real double clicks from quick separate clicks). */
+  const clicksRef = useRef<{ x: number; y: number }[]>([]);
   /** The press that closed an inline editor must not also place/select something. */
   const skipClickRef = useRef(false);
 
@@ -253,6 +274,16 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
     const isRightPan = (evt: MouseEvent): boolean => {
       const down = rightDownRef.current;
       return !!down && Math.hypot(evt.clientX - down.x, evt.clientY - down.y) > DRAG_THRESHOLD_PX;
+    };
+
+    const rememberClick = (evt: MouseEvent) => {
+      clicksRef.current = [...clicksRef.current.slice(-1), { x: evt.clientX, y: evt.clientY }];
+    };
+
+    /** The last two clicks landed on the same spot (a genuine double click). */
+    const isInPlaceDoubleClick = (): boolean => {
+      const [a, b] = clicksRef.current;
+      return !!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) <= DOUBLE_CLICK_SLOP_PX;
     };
 
     const isRepeatedPlacement = (p: Point): boolean => {
@@ -395,11 +426,13 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
       const handle = mapRef.current;
       const scene = getCurrentScene();
       if (handle && scene) {
-        const fontPx = el.type === 'text' ? el.fontSize : el.type === 'note' ? 14 : 13;
-        const scale = handle.getScale();
-        if (fontPx * scale < MIN_EDIT_FONT_PX) {
-          const r = elementWorldRect(el, scene.level.grid.size);
-          handle.centerOn(r.x + r.width / 2, r.y + r.height / 2, Math.min(3, (MIN_EDIT_FONT_PX + 5) / Math.max(1, fontPx)));
+        // The editor overlay follows the element: bring it into view if it is off-screen (zoom unchanged).
+        const v = handle.getView();
+        const r = elementWorldRect(el, scene.level.grid.size);
+        const a = handle.worldToScreen({ x: r.x, y: r.y });
+        const b = handle.worldToScreen({ x: r.x + r.width, y: r.y + r.height });
+        if (v.width > 0 && v.height > 0 && (b.x < 0 || b.y < 0 || a.x > v.width || a.y > v.height)) {
+          handle.centerOn(r.x + r.width / 2, r.y + r.height / 2);
         }
       }
       useCanvasUi.setState({ editing: { id: el.id, isNew } });
@@ -440,12 +473,12 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
           if (!isNew) toast.info('Texto vacío eliminado');
           return;
         }
-        if (value !== el.text) patch({ text: value });
+        if (value !== el.text) patch({ text: value, ...syncedName(el.name, 'Texto', el.text, value) });
       } else if (el.type === 'note') {
         if (value !== el.text) patch({ text: value });
       } else if (el.type === 'marker') {
         const label = value.replace(/\s+/g, ' ').trim();
-        if (label !== el.label) patch({ label });
+        if (label !== el.label) patch({ label, ...syncedName(el.name, 'Marcador', el.label, label) });
       }
     };
 
@@ -600,29 +633,24 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
       const startX = evt.clientX;
       const startY = evt.clientY;
       let moved = false;
-      let current = start;
-      const update = (ev: MouseEvent) => {
-        let p = place(clientToWorld(ev.clientX, ev.clientY), 'point', ev.altKey);
-        if (ev.shiftKey) {
-          const dx = p.x - start.x;
-          const dy = p.y - start.y;
-          const side = Math.max(Math.abs(dx), Math.abs(dy));
-          p = { x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side) };
-        }
-        current = p;
-        setCanvasDraft({ kind: 'box', shape, ...rectFromPoints(start, current) });
+      /** Opposite corner under the pointer (snapped; Shift keeps a 1:1 ratio). */
+      const cornerAt = (ev: MouseEvent): Point => {
+        const p = place(clientToWorld(ev.clientX, ev.clientY), 'point', ev.altKey);
+        if (!ev.shiftKey) return p;
+        const dx = p.x - start.x;
+        const dy = p.y - start.y;
+        const side = Math.max(Math.abs(dx), Math.abs(dy));
+        return { x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side) };
       };
       beginGesture(
         (ev) => {
           if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_THRESHOLD_PX) return;
           moved = true;
-          update(ev);
+          setCanvasDraft({ kind: 'box', shape, ...rectFromPoints(start, cornerAt(ev)) });
         },
         (ev) => {
           setCanvasDraft(null);
-          if (moved) update(ev);
-          setCanvasDraft(null);
-          let r = rectFromPoints(start, current);
+          let r = rectFromPoints(start, moved ? cornerAt(ev) : start);
           if (!moved || r.width < 4 || r.height < 4) {
             const scene = getCurrentScene();
             const size = scene && hasUsableGrid(scene.level.grid) ? scene.level.grid.size * 2 : 140;
@@ -861,6 +889,7 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
       },
 
       onStageClick(e, world) {
+        rememberClick(e.evt);
         if (skipClickRef.current) {
           skipClickRef.current = false;
           return;
@@ -875,7 +904,7 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
       },
 
       onStageDblClick(e) {
-        if (isHandled(e.evt)) return;
+        if (isHandled(e.evt) || !isInPlaceDoubleClick()) return;
         const d = useCanvasUi.getState().draft;
         if (d?.kind === 'poly') finishPoly(false);
       },
@@ -968,6 +997,8 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
         const session = sessionRef.current;
         if (!session || el.id !== session.primaryId) return;
         pendingSingleRef.current = null;
+        const pointer = stageOf()?.getPointerPosition();
+        if (pointer && mapRef.current) setCanvasPointer(mapRef.current.screenToWorld(pointer), null);
         const start = session.start.get(el.id);
         if (!start) return;
         const dx = x - start.x;
@@ -1009,7 +1040,8 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
           commitElementPatches(patches, ids.length === 1 ? `drag-${ids[0]}` : `drag-${ids.join(',')}`);
           return;
         }
-        if (endedDragIdsRef.current?.has(el.id)) return;
+        // Secondary nodes of a group drag: the primary element commits the whole group.
+        if (endedDragIdsRef.current?.has(el.id) || session?.start.has(el.id)) return;
         if (Math.abs(x - el.x) < 0.01 && Math.abs(y - el.y) < 0.01) return;
         store().updateElement(el.id, { x: round1(x), y: round1(y) }, { coalesceKey: `drag-${el.id}` });
       },

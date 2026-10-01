@@ -6,6 +6,7 @@ import {
   Coins,
   EyeOff,
   Gift,
+  HandCoins,
   Handshake,
   Minus,
   Ellipsis,
@@ -104,13 +105,21 @@ export function InventoryList({ heroId, tokenId, readOnly = false }: InventoryLi
     else await send('loot:remove', { tokenId: source.tokenId, itemId: item.id });
   };
 
-  /** Loot has no update event: replace the entry (remove + register again with the new values). */
+  /**
+   * Loot has no update event: replace the entry (remove + register again with the new values).
+   * A library item whose library data is unchanged is registered again from its entry so it keeps
+   * the link to the library; otherwise it becomes a custom item with the edited values.
+   */
   const replaceLoot = (item: InventoryItem, draft: ItemDraft) => {
     if (source.kind !== 'loot') return Promise.resolve(false);
     const tokenIdValue = source.tokenId;
+    const keepsEntry = item.entryId !== null && sameLibraryData(item, draft);
     return sendAll([
       () => send('loot:remove', { tokenId: tokenIdValue, itemId: item.id }),
-      () => send('loot:add', { tokenId: tokenIdValue, item: { ...draft, entryId: item.entryId }, quantity: draft.quantity }),
+      () =>
+        keepsEntry && item.entryId
+          ? send('loot:add', { tokenId: tokenIdValue, entryId: item.entryId, item: { notes: draft.notes }, quantity: draft.quantity })
+          : send('loot:add', { tokenId: tokenIdValue, item: draft, quantity: draft.quantity }),
     ]);
   };
 
@@ -329,6 +338,11 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
     menu.openAt(r.right - 192, r.bottom + 4, menuItems());
   };
 
+  const openGiveMenu = (e: MouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    menu.openAt(r.right - 192, r.bottom + 4, [{ heading: true, label: `Entregar ${item.name} a…` }, ...giveItems()]);
+  };
+
   const onDragStart = (e: DragEvent<HTMLLIElement>) => {
     setItemDrag(e, { itemId: item.id, from });
   };
@@ -404,6 +418,9 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
             >
               <Plus className="h-3 w-3" />
             </button>
+            {source.kind === 'loot' && giveTargets.length > 0 && (
+              <IconButton icon={<HandCoins />} title="Entregar a un héroe…" size="xs" className="text-gold-300" onClick={openGiveMenu} />
+            )}
             <IconButton icon={<Ellipsis />} title="Acciones" size="xs" onClick={openMenuAtButton} />
           </div>
         ) : (
@@ -439,6 +456,19 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
         </div>
       )}
     </li>
+  );
+}
+
+/** The draft keeps every field that comes from the library entry (only quantity / notes changed). */
+function sameLibraryData(item: InventoryItem, draft: ItemDraft): boolean {
+  return (
+    item.name === draft.name &&
+    item.imageUrl === draft.imageUrl &&
+    item.weight === draft.weight &&
+    item.value === draft.value &&
+    item.slots === draft.slots &&
+    item.rarity === draft.rarity &&
+    item.description === draft.description
   );
 }
 

@@ -72,9 +72,10 @@ export function PartyPanel() {
   const toggle = (heroId: string, on: boolean) => setSelected((cur) => (on ? [...new Set([...cur, heroId])] : cur.filter((id) => id !== heroId)));
 
   return (
-    <div className="space-y-3">
+    // Bulk bar on top and its own scroll area below (when the parent gives a height; otherwise it just grows).
+    <div className="flex h-full min-h-0 flex-col gap-3">
       {manage && (
-        <div className="sticky top-0 z-10 -mx-1 rounded-lg border border-ink-600/80 bg-ink-900/95 px-2 py-2 shadow-panel backdrop-blur">
+        <div className="shrink-0 rounded-lg border border-ink-600/80 bg-ink-900/95 px-2 py-2 shadow-panel">
           <div className="flex items-center gap-2">
             <Checkbox
               size="sm"
@@ -112,18 +113,20 @@ export function PartyPanel() {
         </div>
       )}
 
-      {members.map(({ player, hero }) => (
-        <PartyCard
-          key={hero.id}
-          ctx={ctx}
-          player={player}
-          hero={hero}
-          selected={selected.includes(hero.id)}
-          onSelect={(on) => toggle(hero.id, on)}
-          expanded={expanded === hero.id}
-          onToggleExpand={() => setExpanded((cur) => (cur === hero.id ? null : hero.id))}
-        />
-      ))}
+      <div className="scroll-thin -mx-1 min-h-0 flex-1 space-y-3 overflow-y-auto px-1 pb-1">
+        {members.map(({ player, hero }) => (
+          <PartyCard
+            key={hero.id}
+            ctx={ctx}
+            player={player}
+            hero={hero}
+            selected={selected.includes(hero.id)}
+            onSelect={(on) => toggle(hero.id, on)}
+            expanded={expanded === hero.id}
+            onToggleExpand={() => setExpanded((cur) => (cur === hero.id ? null : hero.id))}
+          />
+        ))}
+      </div>
 
       {manage && <RollRequestDialog open={rollTargets !== null} targets={rollTargets ?? []} onClose={() => setRollTargets(null)} />}
     </div>
@@ -222,7 +225,7 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
                 </span>
               )}
             </div>
-            <HeroChips categoryIds={hero.categoryIds} maxFacets={2} size="xs" className="mt-1" />
+            <HeroChips heroId={hero.id} categoryIds={hero.categoryIds} maxFacets={2} size="xs" className="mt-1" />
           </div>
           <button
             type="button"
@@ -236,20 +239,32 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
         </div>
 
         <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <HpBar
-              size="sm"
-              className="flex-1"
-              showText={!manage}
-              info={{ hp: d.hp.current, maxHp: d.hp.max, temp: d.hp.temp || 0, ratio: d.hp.max > 0 ? Math.min(1, Math.max(0, d.hp.current / d.hp.max)) : null }}
-            />
-            {manage && (
-              <>
-                <Stepper size="sm" tone="hp" value={d.hp.current} min={0} max={d.hp.max} suffix={`/${d.hp.max}`} onChange={(_n, delta) => adjust('hp', delta)} title="PV (Mayús: ±5; clic en el valor para escribirlo)" />
+          <HpBar
+            size="sm"
+            showText={!manage}
+            info={{ hp: d.hp.current, maxHp: d.hp.max, temp: d.hp.temp || 0, ratio: d.hp.max > 0 ? Math.min(1, Math.max(0, d.hp.current / d.hp.max)) : null }}
+          />
+          {manage && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-blood-300">PV</span>
+                <Stepper
+                  size="sm"
+                  tone="hp"
+                  value={d.hp.current}
+                  min={0}
+                  max={d.hp.max}
+                  suffix={`/${d.hp.max}`}
+                  onChange={(_n, delta) => adjust('hp', delta)}
+                  title="PV (Mayús: ±5; clic en el valor para escribirlo)"
+                />
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-sky-300">Temp.</span>
                 <Stepper size="sm" value={d.hp.temp || 0} min={0} onChange={(_n, delta) => adjust('tempHp', delta)} format={(v) => `+${v}`} title="PV temporales" />
-              </>
-            )}
-          </div>
+              </span>
+            </div>
+          )}
 
           {(d.statuses.length > 0 || manage) && (
             <div className="flex flex-wrap items-center gap-1">

@@ -1,5 +1,6 @@
 import {
   CREATURE_SIZES,
+  ENTRY_KINDS,
   RARITIES,
   type CreatureSize,
   type EntryKind,
@@ -181,4 +182,59 @@ export function filtersFromQuery(query: LibraryQuery | null | undefined): Filter
   if (query.sort && SORTS.includes(query.sort)) f.sort = query.sort;
   if (query.order === 'asc' || query.order === 'desc') f.order = query.order;
   return f;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence (per browser tab): filters per kind and the last opened kind
+// ---------------------------------------------------------------------------
+
+const FILTERS_KEY = 'wailers.library.filters';
+const KIND_KEY = 'wailers.library.kind';
+
+export type FiltersByKind = Partial<Record<EntryKind, FilterState>>;
+
+function isEntryKind(v: unknown): v is EntryKind {
+  return typeof v === 'string' && (ENTRY_KINDS as readonly string[]).includes(v);
+}
+
+/** Filters of every kind saved in this tab (invalid data is ignored). */
+export function loadStoredFilters(): FiltersByKind {
+  try {
+    const raw = sessionStorage.getItem(FILTERS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: FiltersByKind = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (isEntryKind(k) && v && typeof v === 'object') out[k] = filtersFromQuery(v as LibraryQuery);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function storeFilters(all: FiltersByKind): void {
+  try {
+    sessionStorage.setItem(FILTERS_KEY, JSON.stringify(all));
+  } catch {
+    /* storage unavailable: filters stay in memory */
+  }
+}
+
+export function rememberedKind(): EntryKind {
+  try {
+    const v = localStorage.getItem(KIND_KEY);
+    return isEntryKind(v) ? v : 'creature';
+  } catch {
+    return 'creature';
+  }
+}
+
+export function rememberKind(kind: EntryKind): void {
+  try {
+    localStorage.setItem(KIND_KEY, kind);
+  } catch {
+    /* ignore */
+  }
 }

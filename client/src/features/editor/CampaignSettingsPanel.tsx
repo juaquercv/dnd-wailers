@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CalendarClock, Copy, Crosshair, Eye, Flag, Info, MapPin, Settings2, Skull, Trash2, TriangleAlert, X } from 'lucide-react';
 import type { Campaign, UpdateCampaignRequest, VisibilitySettings, Zone } from '@wailers/shared';
@@ -18,6 +18,7 @@ import { MagicModeBadge } from '../campaigns/magicModes';
 import { VisibilityForm } from '../visibility/VisibilityForm';
 import { useEditorStore } from './editorStore';
 import { InfoNote, SettingsSection } from './extras/SettingsSection';
+import { useSyncedValue } from './extras/useSyncedValue';
 
 export interface CampaignSettingsPanelProps {
   campaign: Campaign;
@@ -27,6 +28,16 @@ export interface CampaignSettingsPanelProps {
 
 const NAME_MAX = 80;
 const DESCRIPTION_MAX = 1000;
+
+/** Complete settings with the defined fields of `patch` applied. */
+function mergeVisibility(base: VisibilitySettings, patch: Partial<VisibilitySettings>): VisibilitySettings {
+  const next: VisibilitySettings = { ...base };
+  for (const key of Object.keys(patch) as (keyof VisibilitySettings)[]) {
+    const value = patch[key];
+    if (value !== undefined) (next as Record<keyof VisibilitySettings, unknown>)[key] = value;
+  }
+  return next;
+}
 
 /** General campaign settings: identity, cover, tags, spawn summary, default visibility and the danger zone. */
 export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSettingsPanelProps) {
@@ -39,16 +50,17 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
   const [deleting, setDeleting] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
 
-  // The name is edited locally so the campaign never ends up nameless.
-  const [name, setName] = useState(campaign.name);
-  const nameFocused = useRef(false);
-  useEffect(() => {
-    if (!nameFocused.current) setName(campaign.name);
-  }, [campaign.id, campaign.name]);
-  const nameError = !name.trim() ? 'La campaña necesita un nombre' : undefined;
+  // Local mirrors: late autosave responses never overwrite newer edits.
+  const nameSync = useSyncedValue(campaign.name, (v) => onChange({ name: v }));
+  const description = useSyncedValue(campaign.description, (v) => onChange({ description: v }));
+  const tags = useSyncedValue(campaign.tags, (v) => onChange({ tags: v }));
+  const cover = useSyncedValue(campaign.coverUrl, (v) => onChange({ coverUrl: v }));
+  const visibility = useSyncedValue(campaign.defaultVisibility, (v) => onChange({ defaultVisibility: v }));
 
-  const visibilityRef = useRef(campaign.defaultVisibility);
-  visibilityRef.current = campaign.defaultVisibility;
+  // The text being typed stays local while focused: the server trims names and an empty name is never sent.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const name = nameDraft ?? nameSync.value;
+  const nameError = !name.trim() ? 'La campaña necesita un nombre' : undefined;
 
   const subZones = zones.filter((z) => z.parentZoneId !== null).length;
 
@@ -111,37 +123,29 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
                 value={name}
                 maxLength={NAME_MAX}
                 error={nameError}
-                onFocus={() => {
-                  nameFocused.current = true;
-                }}
-                onBlur={() => {
-                  nameFocused.current = false;
-                  if (!name.trim()) setName(campaign.name);
-                  else if (name !== name.trim()) {
-                    setName(name.trim());
-                    onChange({ name: name.trim() });
-                  }
-                }}
+                onFocus={() => setNameDraft(nameSync.latest())}
+                onBlur={() => setNameDraft(null)}
                 onValueChange={(v) => {
-                  setName(v);
-                  if (v.trim()) onChange({ name: v });
+                  setNameDraft(v);
+                  const trimmed = v.trim();
+                  if (trimmed && trimmed !== nameSync.latest()) nameSync.commit(trimmed);
                 }}
               />
               <TextArea
                 label="Descripción"
-                value={campaign.description}
+                value={description.value}
                 maxLength={DESCRIPTION_MAX}
                 rows={4}
                 autoResize
                 maxRows={12}
                 placeholder="El tono, el conflicto y dónde empieza la aventura…"
-                onValueChange={(v) => onChange({ description: v })}
-                hint={`${campaign.description.length}/${DESCRIPTION_MAX}`}
+                onValueChange={description.commit}
+                hint={`${description.value.length}/${DESCRIPTION_MAX}`}
               />
               <TagInput
                 label="Etiquetas"
-                value={campaign.tags}
-                onChange={(tags) => onChange({ tags })}
+                value={tags.value}
+                onChange={tags.commit}
                 placeholder="terror, mazmorra, nivel 3-5…"
                 hint="Ayudan a encontrar la campaña y a describir su estilo."
                 maxTags={12}
@@ -150,16 +154,16 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
             <div>
               <ImageUpload
                 label="Portada"
-                value={campaign.coverUrl}
-                onChange={(url) => onChange({ coverUrl: url })}
+                value={cover.value}
+                onChange={(url) => cover.commit(url)}
                 aspect="video"
                 hint="Se muestra en la lista de campañas"
               />
-              {!campaign.coverUrl && campaign.overview.imageUrl && (
+              {!cover.value && campaign.overview.imageUrl && (
                 <button
                   type="button"
                   className="mt-1 text-xs text-parchment-400 transition hover:text-gold-300"
-                  onClick={() => onChange({ coverUrl: campaign.overview.imageUrl })}
+                  onClick={() => cover.commit(campaign.overview.imageUrl)}
                 >
                   Usar la imagen del mapa general
                 </button>
@@ -176,10 +180,8 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
           description="Lo que podrán ver los jugadores al crear una partida nueva de esta campaña. Durante la partida el DM puede cambiarla en cualquier momento, también por jugador."
         >
           <VisibilityForm
-            value={campaign.defaultVisibility}
-            onChange={(patch: Partial<VisibilitySettings>) =>
-              onChange({ defaultVisibility: { ...visibilityRef.current, ...patch } })
-            }
+            value={visibility.value}
+            onChange={(patch: Partial<VisibilitySettings>) => visibility.commit(mergeVisibility(visibility.latest(), patch))}
           />
         </SettingsSection>
 
@@ -250,10 +252,76 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
 
 function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones: Zone[]; onClear: () => void }) {
   const selectZone = useEditorStore((s) => s.selectZone);
+  const setTool = useEditorStore((s) => s.setTool);
+  const currentZoneId = useEditorStore((s) => s.currentZoneId);
   const spawn = campaign.spawn;
   const zone = spawn ? zones.find((z) => z.id === spawn.zoneId) : undefined;
   const level = zone && spawn ? zone.levels.find((l) => l.id === spawn.levelId) : undefined;
-  const broken = !!spawn && (!zone || !level);
+
+  /** Opens a zone in the canvas with the Spawn tool ready. */
+  const placeSpawn = () => {
+    const target = zone ?? zones.find((z) => z.id === currentZoneId) ?? zones[0];
+    if (!target) return;
+    selectZone(target.id, level?.id);
+    setTool('spawn');
+  };
+
+  const placeButton = zones.length > 0 && (
+    <Button size="sm" icon={<Flag />} onClick={placeSpawn}>
+      Colocar con la herramienta Spawn
+    </Button>
+  );
+
+  let body: ReactNode;
+  if (!spawn) {
+    body = (
+      <div className="space-y-3">
+        <InfoNote icon={<TriangleAlert />} tone="warning">
+          No hay punto de inicio. Coloca el punto de spawn con la herramienta Spawn (S).
+        </InfoNote>
+        {placeButton}
+      </div>
+    );
+  } else if (!zone || !level) {
+    body = (
+      <div className="space-y-3">
+        <InfoNote icon={<TriangleAlert />} tone="warning">
+          El punto de inicio apunta a {zone ? 'un piso' : 'una zona'} que ya no existe. Coloca el punto de spawn con la herramienta Spawn
+          (S).
+        </InfoNote>
+        <div className="flex flex-wrap gap-2">
+          {placeButton}
+          <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
+            Quitar punto de inicio
+          </Button>
+        </div>
+      </div>
+    );
+  } else {
+    body = (
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/10 text-emerald-300">
+            <Flag className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-parchment-50">{zone.name}</div>
+            <div className="truncate text-xs text-parchment-400">
+              {level.name} · x {Math.round(spawn.x)}, y {Math.round(spawn.y)} px
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" icon={<Crosshair />} onClick={() => selectZone(spawn.zoneId, spawn.levelId)}>
+            Ir a la zona
+          </Button>
+          <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
+            Quitar
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <SettingsSection
@@ -261,42 +329,7 @@ function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones:
       title="Punto de inicio"
       description="Donde aparecen las fichas de los héroes al empezar una partida nueva."
     >
-      {!spawn ? (
-        <InfoNote icon={<TriangleAlert />} tone="warning">
-          No hay punto de inicio. Coloca el punto de spawn con la herramienta Spawn (S).
-        </InfoNote>
-      ) : broken ? (
-        <div className="space-y-3">
-          <InfoNote icon={<TriangleAlert />} tone="warning">
-            El punto de inicio apunta a {zone ? 'un piso' : 'una zona'} que ya no existe. Coloca el punto de spawn con la herramienta Spawn (S).
-          </InfoNote>
-          <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
-            Quitar punto de inicio
-          </Button>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/10 text-emerald-300">
-              <Flag className="h-5 w-5" />
-            </span>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-parchment-50">{zone!.name}</div>
-              <div className="truncate text-xs text-parchment-400">
-                {zone!.levels.length > 1 ? `${level!.name} · ` : ''}x {Math.round(spawn.x)}, y {Math.round(spawn.y)} px
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" icon={<Crosshair />} onClick={() => selectZone(spawn.zoneId, spawn.levelId)}>
-              Ir a la zona
-            </Button>
-            <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
-              Quitar
-            </Button>
-          </div>
-        </div>
-      )}
+      {body}
     </SettingsSection>
   );
 }

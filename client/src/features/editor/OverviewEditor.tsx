@@ -40,6 +40,7 @@ import {
   type LinkStyle,
 } from './extras/overview/overviewStyles';
 import { createPointerStore, createValueStore, useValueStore, type ValueStore } from './extras/overview/valueStore';
+import { useSyncedValue } from './extras/useSyncedValue';
 
 export interface OverviewEditorProps {
   campaign: Campaign;
@@ -66,12 +67,10 @@ function clampSize(n: number): number {
  * Every change is reported with onChange(nextOverview); the parent persists it.
  */
 export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: OverviewEditorProps) {
-  const overview = campaign.overview;
+  const synced = useSyncedValue(campaign.overview, onChange);
+  const overview = synced.value;
+  const { latest: latestOverview, commit: commitOverview } = synced;
   const stageRef = useRef<MapStageHandle>(null);
-  const overviewRef = useRef(overview);
-  overviewRef.current = overview;
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
 
   const [tool, setTool] = useState<OverviewTool>('select');
   const [linkStyle, setLinkStyle] = useState<LinkStyle>('road');
@@ -106,12 +105,10 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
 
   /** Immutable update: recipe mutates a deep copy which is then emitted. */
   const commit = useCallback((recipe: (draft: OverviewMap) => void) => {
-    const draft = cloneOverview(overviewRef.current);
+    const draft = cloneOverview(latestOverview());
     recipe(draft);
-    const next = normalize(draft);
-    overviewRef.current = next;
-    onChangeRef.current(next);
-  }, []);
+    commitOverview(normalize(draft));
+  }, [latestOverview, commitOverview]);
 
   // ---------------------------------------------------------------------------
   // Pins & links
@@ -121,7 +118,7 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
     (zoneId: string, at: MapPoint) => {
       const zone = zonesById.get(zoneId);
       if (!zone) return;
-      const pos = clampToWorld(overviewRef.current, at.x, at.y);
+      const pos = clampToWorld(latestOverview(), at.x, at.y);
       let pinId = '';
       commit((o) => {
         const existing = o.pins.find((p) => p.zoneId === zoneId);
@@ -143,9 +140,9 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
   const removePins = useCallback(
     (pinIds: string[], announce = true) => {
       const ids = new Set(pinIds);
-      const removedPins = overviewRef.current.pins.filter((p) => ids.has(p.id));
+      const removedPins = latestOverview().pins.filter((p) => ids.has(p.id));
       if (removedPins.length === 0) return;
-      const removedLinks = overviewRef.current.links.filter((l) => ids.has(l.fromPinId) || ids.has(l.toPinId));
+      const removedLinks = latestOverview().links.filter((l) => ids.has(l.fromPinId) || ids.has(l.toPinId));
       commit((o) => {
         o.pins = o.pins.filter((p) => !ids.has(p.id));
       });
@@ -174,7 +171,7 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
 
   const removeLink = useCallback(
     (linkId: string) => {
-      const removed = overviewRef.current.links.find((l) => l.id === linkId);
+      const removed = latestOverview().links.find((l) => l.id === linkId);
       if (!removed) return;
       commit((o) => {
         o.links = o.links.filter((l) => l.id !== linkId);
@@ -196,7 +193,7 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
   const connectPins = useCallback(
     (fromId: string, toId: string) => {
       if (fromId === toId) return;
-      const existing = overviewRef.current.links.find(
+      const existing = latestOverview().links.find(
         (l) => (l.fromPinId === fromId && l.toPinId === toId) || (l.fromPinId === toId && l.toPinId === fromId),
       );
       if (existing) {
@@ -268,17 +265,24 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
     (width: number, height: number) => {
       const w = clampSize(width);
       const h = clampSize(height);
+      // Pins keep their position (values are emitted while typing, clamping here would be destructive).
       commit((o) => {
         o.width = w;
         o.height = h;
-        for (const p of o.pins) {
-          p.x = Math.min(p.x, w);
-          p.y = Math.min(p.y, h);
-        }
       });
     },
     [commit],
   );
+
+  const bringPinsInside = useCallback(() => {
+    commit((o) => {
+      for (const p of o.pins) {
+        const pos = clampToWorld(o, p.x, p.y);
+        p.x = pos.x;
+        p.y = pos.y;
+      }
+    });
+  }, [commit]);
 
   const uploadDroppedImage = async (file: File) => {
     setImageBusy(true);
@@ -458,20 +462,26 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
                 value={linkStyle}
                 onChange={setLinkStyle}
                 options={LINK_STYLE_ORDER.map((s) => ({ value: s, label: LINK_STYLES[s].label }))}
-                className="w-36"
+                className="w-32"
               />
             </div>
           )}
           <span className="divider-vertical" aria-hidden />
-          <OverviewImageMenu overview={overview} busy={imageBusy} onImage={(url) => void setImage(url)} onResize={resizeCanvas} />
+          <OverviewImageMenu
+            overview={overview}
+            busy={imageBusy}
+            onImage={(url) => void setImage(url)}
+            onResize={resizeCanvas}
+            onBringPinsInside={bringPinsInside}
+          />
           <span className="flex-1" />
-          <span className="hidden text-xs text-parchment-400 lg:inline">
+          <span className="hidden whitespace-nowrap text-xs text-parchment-400 2xl:inline">
             {overview.pins.length} {overview.pins.length === 1 ? 'pin' : 'pines'} · {overview.links.length}{' '}
             {overview.links.length === 1 ? 'ruta' : 'rutas'}
           </span>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => stageRef.current?.fitToView()} title="Ajustar vista al mapa">
             <Maximize className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Ajustar vista</span>
+            <span className="hidden xl:inline">Ajustar vista</span>
           </button>
           <IconButton
             icon={panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
@@ -526,7 +536,7 @@ export function OverviewEditor({ campaign, zones, onChange, onOpenZone }: Overvi
                 if (zonesById.has(pin.zoneId)) onOpenZone(pin.zoneId);
               }}
               onPinDragEnd={(pin, x, y) => {
-                const pos = clampToWorld(overviewRef.current, x, y);
+                const pos = clampToWorld(latestOverview(), x, y);
                 commit((o) => {
                   const p = o.pins.find((q) => q.id === pin.id);
                   if (p) {

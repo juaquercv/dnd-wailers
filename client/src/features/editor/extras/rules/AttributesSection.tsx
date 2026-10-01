@@ -1,22 +1,33 @@
 import { useState, type FormEvent } from 'react';
 import clsx from 'clsx';
 import { Dumbbell, Lock, Plus, Trash2, TriangleAlert } from 'lucide-react';
+import type { AttributeDef } from '@wailers/shared';
 import { Button } from '../../../../components/ui/Button';
 import { IconButton } from '../../../../components/ui/IconButton';
 import { Toggle } from '../../../../components/ui/Toggle';
 import { InfoNote, SettingsSection, SubHeading } from '../SettingsSection';
 import { attributeKeyFrom, isBuiltInAttribute, shortFrom, type RuleSectionProps } from './ruleUtils';
 
+/** Server-side limit of the rule system. */
+const MAX_ATTRIBUTES = 30;
+
 /** Ability scores used by the campaign: toggle, rename, add and remove custom ones. */
 export function AttributesSection({ rules, update, id }: RuleSectionProps & { id: string }) {
   const [newLabel, setNewLabel] = useState('');
   const [newShort, setNewShort] = useState('');
   const enabledCount = rules.attributes.filter((a) => a.enabled).length;
+  const full = rules.attributes.length >= MAX_ATTRIBUTES;
+
+  const patchAttr = (key: string, patch: Partial<Omit<AttributeDef, 'key'>>) =>
+    update((d) => {
+      const target = d.attributes.find((a) => a.key === key);
+      if (target) Object.assign(target, patch);
+    });
 
   const add = (e: FormEvent) => {
     e.preventDefault();
     const label = newLabel.trim();
-    if (!label) return;
+    if (!label || full) return;
     const short = (newShort.trim() || shortFrom(label)).toUpperCase().slice(0, 4);
     update((d) => {
       const key = attributeKeyFrom(label, d.attributes.map((a) => a.key));
@@ -42,7 +53,7 @@ export function AttributesSection({ rules, update, id }: RuleSectionProps & { id
           <span />
         </div>
         <ul className="divide-y divide-ink-700/70">
-          {rules.attributes.map((attr, i) => {
+          {rules.attributes.map((attr) => {
             const builtIn = isBuiltInAttribute(attr);
             return (
               <li
@@ -56,32 +67,20 @@ export function AttributesSection({ rules, update, id }: RuleSectionProps & { id
                   size="sm"
                   checked={attr.enabled}
                   title={attr.enabled ? 'Desactivar' : 'Activar'}
-                  onChange={(v) =>
-                    update((d) => {
-                      d.attributes[i]!.enabled = v;
-                    })
-                  }
+                  onChange={(v) => patchAttr(attr.key, { enabled: v })}
                 />
                 <input
                   value={attr.label}
                   aria-label={`Nombre del atributo ${attr.short}`}
                   maxLength={32}
-                  onChange={(e) =>
-                    update((d) => {
-                      d.attributes[i]!.label = e.target.value;
-                    })
-                  }
+                  onChange={(e) => patchAttr(attr.key, { label: e.target.value })}
                   className={clsx('input input-sm', !attr.label.trim() && 'input-error', !attr.enabled && 'opacity-60')}
                 />
                 <input
                   value={attr.short}
                   aria-label={`Abreviatura de ${attr.label}`}
                   maxLength={4}
-                  onChange={(e) =>
-                    update((d) => {
-                      d.attributes[i]!.short = e.target.value.toUpperCase();
-                    })
-                  }
+                  onChange={(e) => patchAttr(attr.key, { short: e.target.value.toUpperCase() })}
                   className={clsx('input input-sm text-center font-semibold uppercase tracking-wider', !attr.enabled && 'opacity-60')}
                 />
                 <span className="flex min-w-0 items-center gap-1 truncate font-mono text-[11px] text-parchment-400" title="Identificador interno">
@@ -138,11 +137,13 @@ export function AttributesSection({ rules, update, id }: RuleSectionProps & { id
               className="input input-sm text-center uppercase"
             />
           </label>
-          <Button type="submit" size="sm" variant="secondary" icon={<Plus />} disabled={!newLabel.trim()}>
+          <Button type="submit" size="sm" variant="secondary" icon={<Plus />} disabled={!newLabel.trim() || full}>
             Añadir
           </Button>
         </form>
-        {newLabel.trim() && (
+        {full ? (
+          <p className="text-[11px] text-amber-300">Has llegado al máximo de {MAX_ATTRIBUTES} atributos. Elimina alguno personalizado para añadir otro.</p>
+        ) : newLabel.trim() && (
           <p className="text-[11px] text-parchment-400">
             Clave interna: <span className="font-mono text-parchment-300">{attributeKeyFrom(newLabel, rules.attributes.map((a) => a.key))}</span>
           </p>

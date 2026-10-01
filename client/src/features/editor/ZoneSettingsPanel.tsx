@@ -23,7 +23,7 @@ import { saveCampaign } from './shell/campaignSave';
 import { FieldGrid } from './shell/controls';
 import { PanelSection } from './shell/PanelSection';
 import { SoundPicker } from './shell/SoundPicker';
-import { buildZoneTree, descendantIds, zoneSelectOptions } from './shell/zoneTree';
+import { buildZoneTree, descendantIds, orderedZoneIds, zoneSelectOptions } from './shell/zoneTree';
 
 type Direction = keyof ZoneNeighbors;
 
@@ -234,6 +234,11 @@ export function ZoneSettingsPanel() {
         d.gridPos = null;
         if (d.zoneType === 'exterior') d.zoneType = 'subzone';
       }
+    });
+    // Keep the stored slide order in step with the list (each zone followed by its sub-zones).
+    const after = useEditorStore.getState();
+    after.reorderZones(orderedZoneIds(buildZoneTree(after.zones))).catch((err: unknown) => {
+      toast.fromError(err, 'No se pudo actualizar el orden de las zonas');
     });
     if (parentId) {
       const parent = zones.find((z) => z.id === parentId);

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, type LucideIcon } from 'lucide-react';
-import { isOwnHeroToken, type Point, type Token } from '@wailers/shared';
+import { isOwnHeroToken, type Point, type Token, type Zone } from '@wailers/shared';
+import { api } from '../../api/http';
 import { toast } from '../../components/ui/toast';
 import { useDisplayState, useSessionStore } from '../../stores/session';
 import { goToZone, send, sendMany } from './map/actions';
@@ -19,6 +20,48 @@ const EDGES: { dir: EdgeDirection; icon: LucideIcon; className: string }[] = [
 const NEAR_EDGE_CELLS = 2;
 
 /**
+ * Players only receive the zones they may see, so the neighbor across an edge is usually unknown to them.
+ * Its name and default level are looked up once per campaign (zone list endpoint) to label the arrow and
+ * compute the arrival point on the mirrored edge.
+ */
+const campaignZonesCache = new Map<string, Promise<Zone[]>>();
+
+function loadCampaignZones(campaignId: string): Promise<Zone[]> {
+  let pending = campaignZonesCache.get(campaignId);
+  if (!pending) {
+    pending = api.campaigns.zones(campaignId).catch((err: unknown) => {
+      campaignZonesCache.delete(campaignId);
+      throw err;
+    });
+    campaignZonesCache.set(campaignId, pending);
+  }
+  return pending;
+}
+
+function useRemoteNeighbors(campaignId: string | null, neighborIds: string[], enabled: boolean): Record<string, Zone> {
+  const [zones, setZones] = useState<Record<string, Zone>>({});
+  const key = neighborIds.join('|');
+  useEffect(() => {
+    if (!enabled || !campaignId || neighborIds.length === 0) return;
+    if (neighborIds.every((id) => zones[id])) return;
+    let cancelled = false;
+    loadCampaignZones(campaignId)
+      .then((all) => {
+        if (cancelled) return;
+        const next: Record<string, Zone> = {};
+        for (const z of all) if (neighborIds.includes(z.id)) next[z.id] = z;
+        setZones((cur) => ({ ...cur, ...next }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // `key` is the signature of neighborIds.
+  }, [enabled, campaignId, key]);
+  return zones;
+}
+
+/**
  * Arrows on the viewport edges towards the neighbor zones of the current one.
  * DM: moves the selection (or every hero on this level) to the mirrored edge of the neighbor and follows them.
  * Player: appears when the own token is near that edge and moving is allowed.
@@ -30,11 +73,16 @@ export function EdgeNavigator() {
   const viewZone = useSessionStore((s) => s.viewZone);
   const selectedIds = useSessionStore((s) => s.selectedTokenIds);
   const casting = useGameUi((s) => s.cast !== null);
+  const campaignId = useSessionStore((s) => s.campaign?.id ?? s.view?.state.campaignId ?? null);
   const { state, effective } = useDisplayState();
   const [busy, setBusy] = useState<EdgeDirection | null>(null);
 
   const zone = viewZone ? zonesById[viewZone.zoneId] ?? null : null;
   const level = findLevel(zone, viewZone?.levelId);
+  const unknownNeighbors = zone
+    ? EDGES.map(({ dir }) => zone.neighbors[dir]).filter((id): id is string => !!id && id !== zone.id && !zonesById[id])
+    : [];
+  const remote = useRemoteNeighbors(campaignId, unknownNeighbors, role === 'player');
   if (!zone || !level || !state || !effective || !meUserId || casting) return null;
   const isDm = role === 'dm';
   const cell = level.grid.size > 0 ? level.grid.size : 70;
@@ -88,17 +136,23 @@ export function EdgeNavigator() {
   };
 
   const travelPlayer = async (dir: EdgeDirection, neighborId: string, token: Token) => {
-    const neighbor = zonesById[neighborId];
-    const target = findLevel(neighbor, neighbor?.defaultLevelId);
     setBusy(dir);
-    if (neighbor && target) {
+    try {
+      let neighbor: Zone | null = zonesById[neighborId] ?? remote[neighborId] ?? null;
+      if (!neighbor && campaignId) {
+        const all = await loadCampaignZones(campaignId).catch(() => [] as Zone[]);
+        neighbor = all.find((z) => z.id === neighborId) ?? null;
+      }
+      const target = findLevel(neighbor, neighbor?.defaultLevelId);
+      if (!neighbor || !target) {
+        toast.error('No se encontró la zona vecina');
+        return;
+      }
       const p = placeToken(mirroredEdgePoint(token, dir, level, target), token.cells, target);
       await send('token:transfer', { tokenIds: [token.id], zoneId: neighbor.id, levelId: target.id, x: p.x, y: p.y }, 'No puedes salir por aquí');
-    } else {
-      // The neighbor zone is not known to this player yet: the server picks its default level and position.
-      await send('token:transfer', { tokenIds: [token.id], zoneId: neighborId, levelId: '' }, 'No puedes salir por aquí');
+    } finally {
+      setBusy(null);
     }
-    setBusy(null);
   };
 
   const arrows = EDGES.flatMap(({ dir, icon: Icon, className }) => {
@@ -117,7 +171,7 @@ export function EdgeNavigator() {
     if (!effective.canMoveOwnToken) return [];
     const near = ownTokens.find((t) => distanceToEdge(t, dir, level) <= NEAR_EDGE_CELLS * cell);
     if (!near) return [];
-    const name = neighbor?.name ?? 'Zona contigua';
+    const name = neighbor?.name ?? remote[neighborId]?.name ?? 'Zona contigua';
     return [{ dir, Icon, className, label: name, title: `Viajar a ${name}`, emphasis: true, run: () => void travelPlayer(dir, neighborId, near) }];
   });
 

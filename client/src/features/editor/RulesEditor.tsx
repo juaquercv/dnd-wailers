@@ -14,6 +14,7 @@ import { PermissionsSection } from './extras/rules/PermissionsSection';
 import { RestsSection } from './extras/rules/RestsSection';
 import { useRulesUpdater } from './extras/rules/ruleUtils';
 import { SheetSection } from './extras/rules/SheetSection';
+import { useSyncedValue } from './extras/useSyncedValue';
 
 export interface RulesEditorProps {
   rules: RuleSystem;
@@ -41,8 +42,10 @@ const NAV: NavItem[] = [
  * Full campaign rule system form. Rules only drive what is shown and which manual buttons exist:
  * nothing is ever applied automatically. Every change is emitted with onChange(rules).
  */
-export function RulesEditor({ rules, onChange }: RulesEditorProps) {
-  const update = useRulesUpdater(rules, onChange);
+export function RulesEditor({ rules: externalRules, onChange }: RulesEditorProps) {
+  const synced = useSyncedValue(externalRules, onChange);
+  const rules = synced.value;
+  const update = useRulesUpdater(synced);
   const confirm = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(NAV[0]!.id);
@@ -82,12 +85,13 @@ export function RulesEditor({ rules, onChange }: RulesEditorProps) {
     const ok = await confirm({
       title: 'Restablecer reglas',
       message:
-        'Se volverán a los valores por defecto todos los apartados (atributos, inventario, moneda, descansos, creación de héroes y permisos). Se conserva el sistema de magia elegido.',
+        'Se volverán a los valores por defecto los atributos, la hoja de personaje, el inventario, la moneda, los descansos, la creación de héroes y los permisos. El sistema de magia y su configuración se conservan.',
       confirmLabel: 'Restablecer',
       danger: true,
     });
     if (!ok) return;
-    onChange(createRuleSystem(rules.magic.mode));
+    const current = synced.latest();
+    synced.commit({ ...createRuleSystem(current.magic.mode), magic: structuredClone(current.magic) });
     toast.success('Reglas restablecidas');
   };
 

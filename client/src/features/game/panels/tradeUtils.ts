@@ -8,10 +8,22 @@ import type { BadgeTone } from '../../../components/ui/Badge';
  */
 export const TRADE_SUMMARY_MARK = '📦 ';
 
+/** Server limit for trade notes (characters, after trimming). */
+export const TRADE_NOTE_MAX = 300;
+/** Characters reserved for the player's own words; the rest is for the summary line. */
+export const TRADE_NOTE_TEXT_MAX = 180;
+
+function clip(text: string, max: number): string {
+  if (max <= 0) return '';
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+/** Player note + summary line, always within TRADE_NOTE_MAX (the summary is shortened if needed). */
 export function composeTradeNote(note: string, summary: string): string {
-  const text = note.trim();
+  const text = clip(note.trim(), TRADE_NOTE_TEXT_MAX);
   if (!summary) return text;
-  return text ? `${text}\n${TRADE_SUMMARY_MARK}${summary}` : `${TRADE_SUMMARY_MARK}${summary}`;
+  const prefix = text ? `${text}\n${TRADE_SUMMARY_MARK}` : TRADE_SUMMARY_MARK;
+  return `${prefix}${clip(summary, TRADE_NOTE_MAX - prefix.length)}`;
 }
 
 export function splitTradeNote(note: string): { text: string; summary: string | null } {

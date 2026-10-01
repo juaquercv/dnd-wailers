@@ -19,7 +19,6 @@ export function GridConnections({ pairs, cols, rows, cellW, cellH, gap }: GridCo
   const uid = useId().replace(/:/g, '');
   const gold = `gz-gold-${uid}`;
   const amber = `gz-amber-${uid}`;
-  const glow = `gz-glow-${uid}`;
   const width = Math.max(0, cols * (cellW + gap) - gap);
   const height = Math.max(0, rows * (cellH + gap) - gap);
   const inset = 3;
@@ -39,13 +38,6 @@ export function GridConnections({ pairs, cols, rows, cellW, cellH, gap }: GridCo
         <marker id={amber} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill={AMBER} />
         </marker>
-        <filter id={glow} x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="2" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
       </defs>
       {pairs.map((pair) => {
         let x1: number;
@@ -85,20 +77,22 @@ export function GridConnections({ pairs, cols, rows, cellW, cellH, gap }: GridCo
             />
           );
         }
+        // Glow underlay: an SVG filter would vanish on perfectly horizontal/vertical lines (zero-size bounding box).
         return (
-          <line
-            key={pair.key}
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
-            stroke={GOLD}
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            filter={`url(#${glow})`}
-            markerStart={`url(#${gold})`}
-            markerEnd={`url(#${gold})`}
-          />
+          <g key={pair.key}>
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={GOLD} strokeOpacity={0.22} strokeWidth={8} strokeLinecap="round" />
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke={GOLD}
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              markerStart={`url(#${gold})`}
+              markerEnd={`url(#${gold})`}
+            />
+          </g>
         );
       })}
     </svg>

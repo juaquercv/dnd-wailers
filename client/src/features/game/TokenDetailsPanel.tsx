@@ -124,7 +124,8 @@ export function TokenDetailsPanel({ tokenId, onClose }: TokenDetailsPanelProps) 
         <IconButton icon={<X />} title="Cerrar (Esc)" size="sm" onClick={onClose} />
       </header>
 
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      {/* No bottom padding: the DM action bar sticks flush to the bottom edge. */}
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 pt-3">
         {!token || !ctx.state ? (
           <EmptyState
             compact
@@ -138,9 +139,10 @@ export function TokenDetailsPanel({ tokenId, onClose }: TokenDetailsPanelProps) 
             }
           />
         ) : ctx.canManage ? (
-          <DmDetails ctx={ctx} state={ctx.state} token={token} onClose={onClose} />
+          // Keyed by token: pending debounced edits are flushed to the right token when the panel switches.
+          <DmDetails key={token.id} ctx={ctx} state={ctx.state} token={token} onClose={onClose} />
         ) : (
-          <PlayerDetails ctx={ctx} state={ctx.state} token={token} />
+          <PlayerDetails key={token.id} ctx={ctx} state={ctx.state} token={token} />
         )}
       </div>
     </aside>,
@@ -394,10 +396,16 @@ function PlayerDetails({ ctx, state, token }: { ctx: PanelContext; state: LiveSt
   const hp = tokenHp(state, token);
   const statuses = isHero ? state.heroes[token.heroId!]!.data.statuses : token.statuses;
 
-  if (isHero) return <HeroSheet heroId={token.heroId!} />;
+  if (isHero) {
+    return (
+      <div className="pb-4">
+        <HeroSheet heroId={token.heroId!} />
+      </div>
+    );
+  }
 
   return (
-    <div>
+    <div className="pb-4">
       {token.kind !== 'item' && (
         <Section icon={<HeartPulse />} title="Estado">
           <HpBar size="lg" info={hp} unknownLabel="No sabes cuánta vida le queda" />

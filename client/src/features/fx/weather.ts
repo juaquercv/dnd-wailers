@@ -144,10 +144,13 @@ interface Strike {
 }
 
 const DROP_BUCKETS: { alpha: number; width: number }[] = [
-  { alpha: 0.2, width: 0.8 },
-  { alpha: 0.3, width: 1.1 },
-  { alpha: 0.45, width: 1.6 },
+  { alpha: 0.24, width: 0.9 },
+  { alpha: 0.36, width: 1.2 },
+  { alpha: 0.52, width: 1.7 },
 ];
+
+/** Peak opacity of a storm lightning flash (it repeats every few seconds, so it stays moderate). */
+const LIGHTNING_PEAK = 0.62;
 
 class RainSystem implements WeatherSystem {
   private drops: Drop[] = [];
@@ -302,7 +305,7 @@ class RainSystem implements WeatherSystem {
     if (!this.storm) return;
     const strike = this.strikeIntensity(now);
     if (strike > 0.001) {
-      const k = env.flashes && !env.reduced ? 1 : 0.15;
+      const k = env.flashes && !env.reduced ? LIGHTNING_PEAK : 0.12;
       c.globalAlpha = alpha * strike * k;
       const g = c.createRadialGradient(env.w * 0.5, env.h * 0.35, 0, env.w * 0.5, env.h * 0.35, Math.max(env.w, env.h) * 0.9);
       g.addColorStop(0, 'rgba(232, 240, 255, 0.95)');

@@ -16,18 +16,22 @@ export interface ManaBarProps {
   /** Delta-based change of the maximum (DM). */
   onMaxDelta?: (delta: number) => void;
   compact?: boolean;
+  /** Show the resource name before the bar (hide it when a surrounding title already says it). */
+  showLabel?: boolean;
   className?: string;
 }
 
 /** Resource bar + optional steppers. */
-export function ManaBar({ name, current, max, onDelta, onMaxDelta, compact = false, className }: ManaBarProps) {
+export function ManaBar({ name, current, max, onDelta, onMaxDelta, compact = false, showLabel = true, className }: ManaBarProps) {
   const ratio = max > 0 ? Math.min(1, Math.max(0, current / max)) : 0;
   return (
     <div className={clsx('min-w-0', className)}>
       <div className="flex items-center gap-2">
-        <span className="w-14 shrink-0 truncate text-[10px] font-semibold uppercase tracking-[0.1em] text-arcane-300" title={name}>
-          {name}
-        </span>
+        {showLabel && (
+          <span className="w-14 shrink-0 truncate text-[10px] font-semibold uppercase tracking-[0.1em] text-arcane-300" title={name}>
+            {name}
+          </span>
+        )}
         <div
           className={clsx('relative min-w-0 flex-1 overflow-hidden rounded-full border border-black/40 bg-ink-950/80', compact ? 'h-1.5' : 'h-2.5')}
           role="meter"

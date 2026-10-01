@@ -4,6 +4,7 @@ import {
   BookMarked,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   Ellipsis,
   FilePlus2,
@@ -31,11 +32,12 @@ import {
 } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ZONE_TYPE_LABELS, type Zone } from '@wailers/shared';
+import { ZONE_TYPE_LABELS, type Zone, type ZoneType } from '@wailers/shared';
 import { Button, IconButton, toast, useContextMenu, type ContextMenuItem, type MenuAnchorEvent } from '../../components/ui';
 import { plural } from '../../lib/format';
 import { useEditorStore } from './editorStore';
 import { InlineEdit } from './shell/InlineEdit';
+import { MenuPopover, type MenuPopoverItem } from './shell/MenuPopover';
 import { SaveTemplateModal, TemplatePickerModal } from './shell/TemplateModals';
 import { useZoneActions } from './shell/zoneActions';
 import { buildZoneTree, flattenZoneTree, orderedZoneIds, type ZoneNode } from './shell/zoneTree';
@@ -88,6 +90,15 @@ function SlideThumbnail({ zone, compact }: { zone: Zone; compact: boolean }) {
 // ---------------------------------------------------------------------------
 // Slide card
 // ---------------------------------------------------------------------------
+
+/** Tint of the zone type badge. */
+const ZONE_TYPE_BADGE: Partial<Record<ZoneType, string>> = {
+  exterior: 'border-emerald-700/50 bg-emerald-500/10 text-emerald-300',
+  interior: 'border-gold-700/50 bg-gold-500/10 text-gold-300',
+  dungeon: 'border-blood-600/50 bg-blood-500/10 text-blood-300',
+  city: 'border-sky-700/50 bg-sky-500/10 text-sky-300',
+  subzone: 'border-arcane-600/50 bg-arcane-500/10 text-arcane-300',
+};
 
 interface DragBindings {
   attributes: DraggableAttributes;
@@ -245,8 +256,15 @@ function SlideCard({
             <Ellipsis className="h-3.5 w-3.5" />
           </button>
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-parchment-400">
-          <span className="truncate">{ZONE_TYPE_LABELS[zone.zoneType] ?? zone.zoneType}</span>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-parchment-400">
+          <span
+            className={clsx(
+              'truncate rounded border px-1 text-[9px] font-semibold uppercase leading-[0.95rem] tracking-[0.08em]',
+              ZONE_TYPE_BADGE[zone.zoneType] ?? 'border-ink-500 bg-ink-800 text-parchment-300',
+            )}
+          >
+            {ZONE_TYPE_LABELS[zone.zoneType] ?? zone.zoneType}
+          </span>
           {collapsed && childCount > 0 && <span className="shrink-0 text-gold-400/80">· {plural(childCount, 'sub-zona', 'sub-zonas')}</span>}
         </div>
       </div>
@@ -308,6 +326,8 @@ export function SlidesPanel({ onCollapse }: SlidesPanelProps) {
   const [templateZone, setTemplateZone] = useState<Zone | null>(null);
   const [picker, setPicker] = useState<{ parentZoneId: string | null } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
@@ -318,11 +338,15 @@ export function SlidesPanel({ onCollapse }: SlidesPanelProps) {
     }),
   );
 
-  // Reveal the open zone: expand its collapsed ancestors and scroll it into view.
+  // Reveal the open zone once per zone change (not on every edit): expand its collapsed ancestors
+  // and scroll it into view. A just-created zone is revealed as soon as it shows up in the tree.
+  const revealedZoneId = useRef<string | null>(null);
   useEffect(() => {
-    if (!currentZoneId) return;
+    if (!currentZoneId || revealedZoneId.current === currentZoneId) return;
     const flat = flattenZoneTree(tree);
     const byId = new Map(flat.map((n) => [n.zone.id, n]));
+    if (!byId.has(currentZoneId)) return;
+    revealedZoneId.current = currentZoneId;
     const ancestors: string[] = [];
     let cur = byId.get(currentZoneId)?.zone.parentZoneId ?? null;
     const guard = new Set<string>();
@@ -331,20 +355,34 @@ export function SlidesPanel({ onCollapse }: SlidesPanelProps) {
       ancestors.push(cur);
       cur = byId.get(cur)?.zone.parentZoneId ?? null;
     }
-    if (ancestors.some((a) => collapsed.has(a))) {
-      setCollapsed((prev) => {
-        const next = new Set(prev);
-        for (const a of ancestors) next.delete(a);
-        return next;
-      });
-    }
-    const raf = requestAnimationFrame(() => {
-      const cards = listRef.current?.querySelectorAll<HTMLElement>('[data-zone-id]') ?? [];
-      const el = Array.from(cards).find((c) => c.dataset.zoneId === currentZoneId);
-      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    setCollapsed((prev) => {
+      if (!ancestors.some((a) => prev.has(a))) return prev;
+      const next = new Set(prev);
+      for (const a of ancestors) next.delete(a);
+      return next;
     });
-    return () => cancelAnimationFrame(raf);
+    // After the expanded children have rendered.
+    const zoneId = currentZoneId;
+    window.setTimeout(() => {
+      const list = listRef.current;
+      if (!list) return;
+      const el = Array.from(list.querySelectorAll<HTMLElement>('[data-zone-id]')).find((c) => c.dataset.zoneId === zoneId);
+      if (!el) return;
+      // Scroll only the slide list (scrollIntoView would also move overflow-hidden ancestors).
+      const listBox = list.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      if (box.top < listBox.top) list.scrollBy({ top: box.top - listBox.top - 8, behavior: 'smooth' });
+      else if (box.bottom > listBox.bottom) list.scrollBy({ top: box.bottom - listBox.bottom + 8, behavior: 'smooth' });
+    }, 30);
   }, [currentZoneId, tree]);
+
+  const expand = (id: string) =>
+    setCollapsed((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
 
   const toggleCollapsed = (id: string) =>
     setCollapsed((prev) => {
@@ -361,11 +399,7 @@ export function SlidesPanel({ onCollapse }: SlidesPanelProps) {
       label: 'Añadir sub-zona',
       icon: <FolderPlus />,
       onClick: () => {
-        setCollapsed((prev) => {
-          const next = new Set(prev);
-          next.delete(zone.id);
-          return next;
-        });
+        expand(zone.id);
         void actions.createBlank(zone.id);
       },
     },
@@ -383,28 +417,48 @@ export function SlidesPanel({ onCollapse }: SlidesPanelProps) {
     }
   };
 
-  const openNewMenu = (anchor: HTMLElement) => {
-    const r = anchor.getBoundingClientRect();
-    const current = zones.find((z) => z.id === currentZoneId) ?? null;
-    menu.openAt(r.left, r.bottom + 4, [
-      { heading: true, label: 'Nueva zona' },
-      { label: 'En blanco', icon: <FilePlus2 />, onClick: () => void actions.createBlank(null) },
-      { label: 'Desde plantilla…', icon: <LayoutTemplate />, onClick: () => setPicker({ parentZoneId: null }) },
-      { separator: true },
-      {
-        label: current ? `Sub-zona de «${current.name}»` : 'Sub-zona de la actual',
-        icon: <FolderPlus />,
-        disabled: !current,
-        onClick: () => current && void actions.createBlank(current.id),
+  const currentZone = zones.find((z) => z.id === currentZoneId) ?? null;
+  const newZoneItems: MenuPopoverItem[] = [
+    {
+      id: 'blank',
+      label: 'En blanco',
+      description: 'Un mapa vacío con un nivel, listo para dibujar o subir una imagen.',
+      icon: <FilePlus2 />,
+      onSelect: () => void actions.createBlank(null),
+    },
+    {
+      id: 'template',
+      label: 'Desde plantilla…',
+      description: 'Copia un mapa de la biblioteca con sus niveles, paredes y luces.',
+      icon: <LayoutTemplate />,
+      onSelect: () => setPicker({ parentZoneId: null }),
+    },
+    {
+      id: 'sub-blank',
+      label: currentZone ? `Sub-zona de «${currentZone.name}»` : 'Sub-zona de la actual',
+      description: 'Una casa, cueva o mazmorra dentro de la zona abierta.',
+      icon: <FolderPlus />,
+      disabled: !currentZone,
+      separatorBefore: true,
+      onSelect: () => {
+        if (!currentZone) return;
+        expand(currentZone.id);
+        void actions.createBlank(currentZone.id);
       },
-      {
-        label: 'Sub-zona desde plantilla…',
-        icon: <LayoutTemplate />,
-        disabled: !current,
-        onClick: () => current && setPicker({ parentZoneId: current.id }),
+    },
+    {
+      id: 'sub-template',
+      label: 'Sub-zona desde plantilla…',
+      description: 'Una plantilla de la biblioteca colgando de la zona abierta.',
+      icon: <LayoutTemplate />,
+      disabled: !currentZone,
+      onSelect: () => {
+        if (!currentZone) return;
+        expand(currentZone.id);
+        setPicker({ parentZoneId: currentZone.id });
       },
-    ]);
-  };
+    },
+  ];
 
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
@@ -506,16 +560,25 @@ export function SlidesPanel({ onCollapse }: SlidesPanelProps) {
 
       <div className="shrink-0 border-t border-ink-700/80 p-2">
         <Button
+          ref={newButtonRef}
           block
           variant="secondary"
           icon={<Plus />}
-          iconRight={<ChevronDown />}
-          onClick={(e) => openNewMenu(e.currentTarget)}
+          iconRight={<ChevronUp className={clsx('transition-transform', !newMenuOpen && 'rotate-180')} />}
+          onClick={() => setNewMenuOpen((o) => !o)}
           aria-haspopup="menu"
+          aria-expanded={newMenuOpen}
         >
           Nueva zona
         </Button>
       </div>
+      <MenuPopover
+        open={newMenuOpen}
+        onClose={() => setNewMenuOpen(false)}
+        anchorRef={newButtonRef}
+        title="Nueva zona"
+        items={newZoneItems}
+      />
 
       <SaveTemplateModal zone={templateZone} onClose={() => setTemplateZone(null)} />
       <TemplatePickerModal open={picker !== null} parentZoneId={picker?.parentZoneId ?? null} onClose={() => setPicker(null)} />

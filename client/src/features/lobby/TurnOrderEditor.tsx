@@ -12,7 +12,7 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Dices, EyeOff, GripVertical, Hand, ListOrdered, Play, UserRoundCheck, X } from 'lucide-react';
+import { Dices, EyeOff, GripVertical, Hand, ListOrdered, Play, TriangleAlert, UserRoundCheck, X } from 'lucide-react';
 import type { TurnEntry } from '@wailers/shared';
 import { emitAck } from '../../api/socket';
 import { Badge } from '../../components/ui/Badge';
@@ -22,7 +22,7 @@ import { IconButton } from '../../components/ui/IconButton';
 import { Tabs } from '../../components/ui/Tabs';
 import { toast } from '../../components/ui/toast';
 import { useSessionStore } from '../../stores/session';
-import { Portrait, useUserDirectory, type UserLookup } from './lobbyUi';
+import { Portrait, useSessionPlayers, useUserDirectory, type UserLookup } from './lobbyUi';
 
 export interface TurnOrderEditorProps {
   compact?: boolean;
@@ -237,6 +237,7 @@ export function TurnOrderEditor({ compact = false }: TurnOrderEditorProps) {
   const meUserId = useSessionStore((s) => s.view?.meUserId ?? '');
   const canSee = useSessionStore((s) => s.view?.effective.canSeeInitiative ?? false);
   const lookup = useUserDirectory();
+  const players = useSessionPlayers();
 
   const [optimistic, setOptimistic] = useState<string[] | null>(null);
   const [busy, setBusy] = useState<'mode' | 'random' | 'sync' | null>(null);
@@ -265,6 +266,13 @@ export function TurnOrderEditor({ compact = false }: TurnOrderEditorProps) {
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  // Players with a hero are only added to the order when the DM syncs (or at start with an empty order).
+  const missingPlayers = useMemo(() => {
+    if (!turn) return [];
+    const inOrder = new Set(turn.order.filter((e) => e.type === 'player' && e.userId).map((e) => e.userId));
+    return players.filter((p) => p.heroId && !inOrder.has(p.userId));
+  }, [turn, players]);
 
   if (!turn) return null;
 
@@ -431,12 +439,40 @@ export function TurnOrderEditor({ compact = false }: TurnOrderEditorProps) {
       )}
       {header}
 
+      {missingPlayers.length > 0 && entries.length > 0 && (
+        <div className="flex animate-fade-in items-start gap-2 rounded-lg border border-gold-600/50 bg-gold-500/10 px-2.5 py-2 text-[11px] leading-snug text-parchment-200">
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-gold-400" aria-hidden />
+          <span className="min-w-0 flex-1">
+            {compact ? (
+              `${missingPlayers.length} ${missingPlayers.length === 1 ? 'jugador fuera' : 'jugadores fuera'} del orden`
+            ) : (
+              <>
+                <strong className="text-parchment-50">{missingPlayers.map((p) => p.name).join(', ')}</strong>{' '}
+                {missingPlayers.length === 1 ? 'ya tiene héroe pero no está' : 'ya tienen héroe pero no están'} en el orden de turnos.
+              </>
+            )}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 font-semibold text-gold-300 underline-offset-2 hover:text-gold-200 hover:underline disabled:opacity-50"
+            disabled={busy !== null}
+            onClick={() => void syncPlayers()}
+          >
+            Sincronizar
+          </button>
+        </div>
+      )}
+
       {entries.length === 0 ? (
         <EmptyState
           compact
           icon={<ListOrdered />}
           title="Nadie en el orden de turnos"
-          description="Pulsa «Sincronizar jugadores» para añadir a los aventureros de la sala."
+          description={
+            missingPlayers.length > 0
+              ? 'Pulsa «Sincronizar jugadores» para añadir a los aventureros que ya han elegido héroe.'
+              : 'Cuando los jugadores elijan su héroe, pulsa «Sincronizar jugadores» para añadirlos.'
+          }
           className="rounded-lg border border-dashed border-ink-500/70"
         />
       ) : (

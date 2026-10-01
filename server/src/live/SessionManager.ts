@@ -127,6 +127,11 @@ export class RunningSession implements LiveSession {
   persistTimer: NodeJS.Timeout | null = null;
   unloadTimer: NodeJS.Timeout | null = null;
   unloaded = false;
+  /** Nesting level of mutate() on this session and the options collected from nested calls. */
+  mutateDepth = 0;
+  readonly nestedOptions: MutateOptions[] = [];
+  /** Log lines are written and emitted one after another, in call order. */
+  logChain: Promise<void> = Promise.resolve();
 
   constructor(id: string, state: LiveState, campaign: CampaignRuntime, entries: Map<string, LibraryEntry>) {
     this.id = id;
@@ -161,6 +166,9 @@ export function canSeeLog(state: LiveState, entry: Pick<LogEntry, 'type' | 'visi
   return true;
 }
 
+/** 'session:leave' from a socket that is not in a session any more: nothing to do, answered as success. */
+class AlreadyOutside extends Error {}
+
 function heroDataChanged(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) !== JSON.stringify(b);
 }
@@ -180,8 +188,6 @@ export class SessionManager implements SessionManagerApi {
   private readonly zoneReloadTimers = new Map<string, NodeJS.Timeout>();
   private readonly zoneReloadChains = new Map<string, Promise<void>>();
   private readonly unsubscribers: Array<() => void> = [];
-  private mutateDepth = 0;
-  private readonly nestedOptions: MutateOptions[] = [];
 
   constructor(io: IO) {
     this.io = io;
@@ -311,23 +317,24 @@ export class SessionManager implements SessionManagerApi {
   mutate(session: LiveSession, fn: (state: LiveState) => void, opts: MutateOptions = {}): void {
     const running = this.asRunning(session);
     if (running.unloaded) throw new HandlerError('La partida ya no está activa');
-    if (this.mutateDepth > 0) {
+    if (running.mutateDepth > 0) {
+      // Nested call (e.g. a helper that mutates, invoked from another mutation): the outer call finishes the job.
       fn(running.state);
-      this.nestedOptions.push(opts);
+      running.nestedOptions.push(opts);
       return;
     }
     const backup = structuredClone(running.state);
-    this.mutateDepth++;
+    running.mutateDepth++;
     try {
       fn(running.state);
     } catch (err) {
       running.state = backup;
-      this.nestedOptions.length = 0;
+      running.nestedOptions.length = 0;
       throw err;
     } finally {
-      this.mutateDepth--;
+      running.mutateDepth--;
     }
-    const all = [opts, ...this.nestedOptions.splice(0)];
+    const all = [opts, ...running.nestedOptions.splice(0)];
     const state = running.state;
     state.version += 1;
     this.syncHeroMirrors(state);
@@ -358,6 +365,10 @@ export class SessionManager implements SessionManagerApi {
       token.name = hero.name;
       token.imageUrl = hero.imageUrl;
       token.ac = hero.data.ac;
+      const statuses = hero.data.statuses;
+      if (token.statuses.length !== statuses.length || token.statuses.some((s, i) => s !== statuses[i])) {
+        token.statuses = [...statuses];
+      }
     }
     for (const entry of state.turn.order) {
       if (entry.type !== 'player' || !entry.heroId) continue;
@@ -442,8 +453,9 @@ export class SessionManager implements SessionManagerApi {
       if (!views.has(userId)) views.set(userId, this.buildView(session, userId));
       const view = views.get(userId);
       if (!view) continue;
-      socket.emit('session:state', view);
+      // Zones first: a client never renders a state whose zones it has not received yet.
       this.sendZones(session, socket, false);
+      socket.emit('session:state', view);
     }
   }
 
@@ -718,23 +730,52 @@ export class SessionManager implements SessionManagerApi {
     if (ids.length > 0) this.io.to(ids).emit('session:event', event);
   }
 
-  async log(session: LiveSession, input: LogInput): Promise<LogEntry> {
+  log(session: LiveSession, input: LogInput): Promise<LogEntry> {
     const state = session.state;
+    // Resolved now: the actor may leave the session before the line is written.
     const actorUserId = input.actorUserId ?? null;
     const actorName = actorUserId ? (state.players[actorUserId]?.name ?? claims.getUser(actorUserId)?.name ?? actorUserId) : null;
-    const visibility = input.visibility ?? 'all';
-    const targetUserId = input.targetUserId ?? null;
-    const text = String(input.text ?? '').slice(0, MAX_LOG_TEXT);
-    const data = input.data === undefined ? null : input.data;
+    const line: Omit<LogEntry, 'id' | 'at'> = {
+      sessionId: session.id,
+      type: input.type,
+      actorUserId,
+      actorName,
+      text: String(input.text ?? '').slice(0, MAX_LOG_TEXT),
+      visibility: input.visibility ?? 'all',
+      targetUserId: input.targetUserId ?? null,
+      data: input.data === undefined ? null : input.data,
+    };
+    const running = this.sessions.get(session.id);
+    if (!running) return this.writeLog(session, line);
+    // Chained per session so lines are stored (createdAt) and delivered in the order they were produced.
+    const result = running.logChain.then(() => this.writeLog(running, line));
+    running.logChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** Stores a log line and emits it to the sockets allowed to see it. Never rejects. */
+  private async writeLog(session: LiveSession, line: Omit<LogEntry, 'id' | 'at'>): Promise<LogEntry> {
     let entry: LogEntry;
     try {
       const row = await prisma.sessionLog.create({
-        data: { sessionId: session.id, type: input.type, actorUserId, actorName, visibility, targetUserId, text, data: toNullableJson(data) },
+        data: {
+          sessionId: line.sessionId,
+          type: line.type,
+          actorUserId: line.actorUserId,
+          actorName: line.actorName,
+          visibility: line.visibility,
+          targetUserId: line.targetUserId,
+          text: line.text,
+          data: toNullableJson(line.data),
+        },
       });
       entry = logToDTO(row);
     } catch (err) {
       if (!isMissingRecordError(err)) console.error('[live] No se pudo guardar el registro de la partida:', err);
-      entry = { id: newId('log'), sessionId: session.id, at: new Date().toISOString(), type: input.type, actorUserId, actorName, text, visibility, targetUserId, data };
+      entry = { ...line, id: newId('log'), at: new Date().toISOString() };
     }
     const ids = this.socketIdsWhere(session, (userId) => canSeeLog(session.state, entry, userId));
     if (ids.length > 0) this.io.to(ids).emit('session:log', entry);
@@ -1199,6 +1240,10 @@ export class SessionManager implements SessionManagerApi {
       const result = await handler(ctx, payload as C2SPayloads[E]);
       reply({ ok: true, data: (result ?? null) as C2SResult<E> });
     } catch (err) {
+      if (err instanceof AlreadyOutside) {
+        reply({ ok: true, data: null as C2SResult<E> });
+        return;
+      }
       if (err instanceof HandlerError) {
         reply({ ok: false, error: err.message });
         return;
@@ -1220,17 +1265,24 @@ export class SessionManager implements SessionManagerApi {
       session = await this.loadRunning(sessionId);
     } else {
       const sessionId = socket.data.sessionId;
-      if (!sessionId) throw new HandlerError('No estás en ninguna partida');
+      const leaving = event === 'session:leave';
+      if (!sessionId) {
+        if (leaving) throw new AlreadyOutside();
+        throw new HandlerError('No estás en ninguna partida');
+      }
       session = this.sessions.get(sessionId);
       if (!session) {
         socket.data.sessionId = null;
+        if (leaving) throw new AlreadyOutside();
         throw new HandlerError('La partida ya no está activa. Vuelve a unirte.');
       }
     }
 
     const isDm = session.state.hostUserId === userId;
     if (opts.dmOnly && !isDm) throw new HandlerError('Solo el DM puede hacer esto');
-    if (event !== 'session:join' && !isDm && !session.state.players[userId]) throw new HandlerError('No formas parte de esta partida');
+    if (event !== 'session:join' && event !== 'session:leave' && !isDm && !session.state.players[userId]) {
+      throw new HandlerError('No formas parte de esta partida');
+    }
     return {
       io: this.io,
       socket,
@@ -1255,7 +1307,7 @@ export class SessionManager implements SessionManagerApi {
   // REST helpers
   // ---------------------------------------------------------------------------
 
-  /** Host resumed a paused/ended session that is still in memory. */
+  /** Host resumed a paused/ended session (loaded first, so memory and database cannot diverge). */
   async resumeLoaded(session: RunningSession): Promise<void> {
     this.cancelUnload(session);
     this.mutate(
@@ -1274,6 +1326,9 @@ export class SessionManager implements SessionManagerApi {
 
   /** Delete a session: everyone inside is notified and the row (with its log) removed. */
   async deleteSession(sessionId: string): Promise<void> {
+    // A load in flight would otherwise bring the session back into memory after the row is gone.
+    const pending = this.loading.get(sessionId);
+    if (pending) await pending.catch(() => undefined);
     const live = this.sessions.get(sessionId);
     if (live) {
       this.emitEvent(live, { type: 'sessionEnded', reason: 'El DM ha eliminado la partida.' });

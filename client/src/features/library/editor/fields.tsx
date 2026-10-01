@@ -16,7 +16,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { NumberInput } from '../../../components/ui/NumberInput';
 import { toast } from '../../../components/ui/toast';
 import { LibraryBrowser } from '../LibraryBrowser';
-import { KindIcon } from '../meta';
+import { KindIcon, lowerLabel } from '../meta';
 
 // ---------------------------------------------------------------------------
 // Free-text chips (resistances, classes…)
@@ -287,7 +287,7 @@ export function EntryPickerModal({ open, kind, onClose, onPick, title, pickLabel
       onClose={onClose}
       size="lg"
       icon={<KindIcon kind={kind} />}
-      title={title ?? `Elegir ${ENTRY_KIND_LABELS[kind].singular.toLowerCase()} de la biblioteca`}
+      title={title ?? `Elegir ${lowerLabel(ENTRY_KIND_LABELS[kind].singular)} de la biblioteca`}
       subtitle={multi ? 'Puedes añadir varios; cierra el diálogo cuando termines.' : undefined}
       bodyClassName="p-0"
       footer={

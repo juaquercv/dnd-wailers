@@ -324,7 +324,7 @@ function ping(manager: SessionManagerApi, ctx: HandlerCtx, payload: { zoneId: st
   const event: SessionEvent = {
     type: 'ping',
     userId: ctx.userId,
-    name: ctx.isDm ? 'DM' : playerName(ctx.session, ctx.userId),
+    name: playerName(ctx.session, ctx.userId),
     color: userColor(ctx.session, ctx.userId),
     zoneId: zone.id,
     levelId: level.id,

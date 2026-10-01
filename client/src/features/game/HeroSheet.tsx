@@ -94,13 +94,21 @@ export function HeroSheet({ heroId }: HeroSheetProps) {
   const invVisible = canSeeInventoryOf(ctx, hero);
   const adjust = (field: Parameters<typeof adjustHero>[1], delta: number) => adjustHero(hero.id, field, delta);
 
-  const tabs: TabItem<SheetTab>[] = [
-    { id: 'stats', label: 'Atributos', icon: <Gauge /> },
-    { id: 'inventory', label: 'Inventario', icon: <Backpack />, badge: invVisible && d.inventory.length > 0 ? d.inventory.length : undefined },
+  const tabDefs: { id: SheetTab; text: string; icon: ReactNode; badge?: number }[] = [
+    { id: 'stats', text: 'Atributos', icon: <Gauge /> },
+    { id: 'inventory', text: 'Inventario', icon: <Backpack />, badge: invVisible && d.inventory.length > 0 ? d.inventory.length : undefined },
   ];
-  if (showPowers) tabs.push({ id: 'powers', label: 'Poderes', icon: <WandSparkles />, badge: d.spells.length > 0 ? d.spells.length : undefined });
-  if (showNotes) tabs.push({ id: 'notes', label: 'Notas', icon: <NotebookPen /> });
-  const activeTab: SheetTab = tabs.some((t) => t.id === tab) ? tab : 'stats';
+  if (showPowers) tabDefs.push({ id: 'powers', text: 'Poderes', icon: <WandSparkles />, badge: d.spells.length > 0 ? d.spells.length : undefined });
+  if (showNotes) tabDefs.push({ id: 'notes', text: 'Notas', icon: <NotebookPen /> });
+  const activeTab: SheetTab = tabDefs.some((t) => t.id === tab) ? tab : 'stats';
+  // Sidebars are narrow: only the active tab shows its name, the rest are icons with a tooltip.
+  const tabs: TabItem<SheetTab>[] = tabDefs.map((t) => ({
+    id: t.id,
+    icon: t.icon,
+    badge: t.badge,
+    title: t.text,
+    label: t.id === activeTab ? t.text : <span className="sr-only">{t.text}</span>,
+  }));
 
   return (
     <div className="space-y-3">
@@ -145,7 +153,7 @@ export function HeroSheet({ heroId }: HeroSheetProps) {
               <IconButton icon={<Crosshair />} title="Centrar el mapa en su ficha" size="xs" onClick={() => emitUiEvent('center-on-token', { tokenId: token.id })} />
             )}
           </div>
-          <HeroChips categoryIds={hero.categoryIds} className="mt-1.5" size="xs" />
+          <HeroChips heroId={hero.id} categoryIds={hero.categoryIds} className="mt-1.5" size="xs" />
         </div>
       </div>
 
@@ -448,6 +456,7 @@ function ResourcesBlock({ hero, rules, resEdit, manage }: { hero: HeroSheetData;
     return (
       <Block icon={<Sparkles />} title={rules.magic.manaName || 'Recurso'} tone="arcane">
         <ManaBar
+          showLabel={false}
           name={rules.magic.manaName || 'Recurso'}
           current={res.mana.current}
           max={res.mana.max}

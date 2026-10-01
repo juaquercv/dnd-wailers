@@ -244,6 +244,11 @@ export function InitiativePanel() {
   };
 
   const current = views.find((v) => v.entry.id === currentId) ?? null;
+  const myTurn =
+    !!current &&
+    !!ctx.viewerId &&
+    ctx.viewerId !== ctx.hostUserId &&
+    (current.entry.userId === ctx.viewerId || (!!current.hero && state.players[ctx.viewerId]?.heroId === current.hero.id));
 
   const Row = manage ? SortableInitiativeRow : InitiativeRow;
   const list = (
@@ -346,6 +351,11 @@ export function InitiativePanel() {
             )}
           </div>
         </div>
+        {myTurn && (
+          <span className="shrink-0 animate-pop rounded-full border border-gold-400/70 bg-gold-500/20 px-2 py-0.5 font-display text-[11px] font-bold uppercase tracking-wider text-gold-100 shadow-glow-gold">
+            ¡Tu turno!
+          </span>
+        )}
         {manage && <IconButton icon={<UserPlus />} title="Añadir a la iniciativa" size="sm" variant="secondary" onClick={openAddMenu} />}
       </div>
 
@@ -407,8 +417,8 @@ export function InitiativePanel() {
               Añadir
             </Button>
           </div>
-          <p className="hidden text-center text-[10px] text-parchment-400 sm:block">
-            Con el panel enfocado: <Kbd>N</Kbd> siguiente · <Kbd>Mayús</Kbd>+<Kbd>N</Kbd> anterior
+          <p className="hidden text-center text-[10px] text-parchment-400 sm:block" title="Atajos con el panel enfocado">
+            <Kbd>N</Kbd> siguiente · <Kbd>Mayús</Kbd>+<Kbd>N</Kbd> anterior
           </p>
         </div>
       )}
@@ -470,7 +480,8 @@ function InitiativeRow({ view, index, current, manage, ctx, editingInit, onEditI
       onContextMenu={manage ? onContextMenu : undefined}
       onDoubleClick={manage ? onSetCurrent : undefined}
       className={clsx(
-        'group relative flex items-center gap-2 rounded-lg border px-1.5 py-1.5 transition-[background-color,border-color,box-shadow] duration-300',
+        'group relative flex items-center gap-2 rounded-lg border py-1.5 pr-1.5 transition-[background-color,border-color,box-shadow] duration-300',
+        sortable ? 'pl-4' : 'pl-1.5',
         current
           ? 'border-gold-400/80 bg-gradient-to-r from-gold-500/20 via-ink-800/90 to-ink-800/90 shadow-[0_0_0_1px_rgba(233,192,99,0.35),0_0_22px_-4px_rgba(233,192,99,0.65)]'
           : 'border-ink-600/70 bg-ink-800/60 hover:border-ink-500 hover:bg-ink-800',
@@ -480,18 +491,19 @@ function InitiativeRow({ view, index, current, manage, ctx, editingInit, onEditI
     >
       {current && <span aria-hidden className="absolute -left-[3px] top-1/2 h-6 w-1 -translate-y-1/2 animate-glow-pulse rounded-full bg-gold-300" />}
       {sortable ? (
+        // Drag handle over the left padding: it takes no width from the name.
         <button
           type="button"
-          className="flex h-7 w-4 shrink-0 cursor-grab items-center justify-center text-parchment-400/60 transition hover:text-parchment-100 active:cursor-grabbing"
+          className="absolute inset-y-0 left-0 flex w-4 cursor-grab items-center justify-center rounded-l-lg text-parchment-400/50 transition hover:bg-ink-700/60 hover:text-parchment-100 active:cursor-grabbing"
           aria-label={`Reordenar ${view.name}`}
           title="Arrastra para reordenar"
           {...sortable.attributes}
           {...sortable.listeners}
         >
-          <GripVertical className="h-3.5 w-3.5" />
+          <GripVertical className="h-3 w-3" />
         </button>
       ) : (
-        <span className="w-4 shrink-0 text-center text-[10px] font-semibold tabular-nums text-parchment-400">{index + 1}</span>
+        <span className="w-3.5 shrink-0 text-center text-[10px] font-semibold tabular-nums text-parchment-400">{index + 1}</span>
       )}
 
       <button type="button" className="shrink-0" onClick={onClick} title={view.token ? 'Centrar el mapa en la ficha' : view.name} disabled={!view.token}>
@@ -510,41 +522,36 @@ function InitiativeRow({ view, index, current, manage, ctx, editingInit, onEditI
         {view.statuses.length > 0 && !view.masked && <StatusIcons statuses={view.statuses} size="xs" max={5} className="mt-1" />}
       </button>
 
-      {manage && creature && token && (
-        <div className="flex shrink-0 flex-col gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-          <button
-            type="button"
-            className="flex h-4 w-5 items-center justify-center rounded bg-ink-700 text-emerald-300 hover:bg-emerald-600/30"
-            title="+1 PV (Mayús: +5)"
-            aria-label="Curar"
-            onClick={(e) => void send('token:hp', { tokenId: token.id, delta: e.shiftKey ? 5 : 1 })}
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            className="flex h-4 w-5 items-center justify-center rounded bg-ink-700 text-blood-300 hover:bg-blood-600/30"
-            title="−1 PV (Mayús: −5)"
-            aria-label="Dañar"
-            onClick={(e) => void send('token:hp', { tokenId: token.id, delta: e.shiftKey ? -5 : -1 })}
-          >
-            <Minus className="h-3 w-3" />
-          </button>
-        </div>
-      )}
-
       <InitiativeValue value={entry.initiative} editable={manage} editing={editingInit} onEditing={onEditInit} entryId={entry.id} current={current} />
 
-      {manage && (
-        <div className="flex shrink-0 flex-col items-center gap-0.5">
-          <IconButton
-            icon={<Play />}
-            title="Dar el turno (doble clic en la fila)"
-            size="xs"
-            className={clsx(current ? 'invisible' : 'opacity-0 group-hover:opacity-100 focus:opacity-100')}
-            onClick={onSetCurrent}
-          />
-          <IconButton icon={<X />} title="Quitar de la iniciativa" size="xs" variant="danger" className="opacity-0 group-hover:opacity-100 focus:opacity-100" onClick={onRemove} />
+      {manage && !editingInit && (
+        // Floating quick actions (hover / keyboard focus): they overlay the row instead of taking width.
+        <div className="pointer-events-none absolute right-11 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-ink-500/80 bg-ink-900/95 p-0.5 opacity-0 shadow-panel transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+          {creature && token && (
+            <>
+              <button
+                type="button"
+                className="flex h-6 w-6 items-center justify-center rounded text-blood-300 transition hover:bg-blood-600/30"
+                title="−1 PV (Mayús: −5)"
+                aria-label={`Dañar a ${view.name}`}
+                onClick={(e) => void send('token:hp', { tokenId: token.id, delta: e.shiftKey ? -5 : -1 })}
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                className="flex h-6 w-6 items-center justify-center rounded text-emerald-300 transition hover:bg-emerald-600/30"
+                title="+1 PV (Mayús: +5)"
+                aria-label={`Curar a ${view.name}`}
+                onClick={(e) => void send('token:hp', { tokenId: token.id, delta: e.shiftKey ? 5 : 1 })}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+              <span aria-hidden className="mx-0.5 h-4 w-px bg-ink-500" />
+            </>
+          )}
+          {!current && <IconButton icon={<Play />} title="Dar el turno (doble clic en la fila)" size="xs" onClick={onSetCurrent} />}
+          <IconButton icon={<X />} title="Quitar de la iniciativa" size="xs" variant="danger" onClick={onRemove} />
         </div>
       )}
     </li>
@@ -567,23 +574,43 @@ function InitiativeValue({
   current: boolean;
 }) {
   const [text, setText] = useState('');
+  /** Value shown between the commit and the server echo (undefined = show the real value). */
+  const [optimistic, setOptimistic] = useState<number | null | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Set once the edit is closed (Enter / Escape) so a trailing blur does nothing. */
+  const cancelled = useRef(false);
 
   useEffect(() => {
-    if (editing) {
-      setText(value === null ? '' : String(value));
-      requestAnimationFrame(() => inputRef.current?.select());
+    if (!editing) return;
+    cancelled.current = false;
+    setText(value === null ? '' : String(value));
+    const input = inputRef.current;
+    if (input) {
+      input.focus({ preventScroll: true });
+      input.select();
     }
-  }, [editing, value]);
+    // Initialise only when editing starts: a server echo must not overwrite what is being typed.
+  }, [editing]);
+
+  // The server echo (or any newer value) replaces the optimistic one.
+  useEffect(() => setOptimistic(undefined), [value]);
 
   const commit = () => {
+    if (cancelled.current) return;
+    // Enter commits and unmounts the input; the blur that may follow must not send it twice.
+    cancelled.current = true;
     onEditing(false);
     const raw = text.trim().replace(',', '.');
     const next = raw === '' ? null : Math.round(Number(raw));
     if (next !== null && !Number.isFinite(next)) return;
     if (next === value) return;
-    void send('turn:update', { entryId, patch: { initiative: next } });
+    setOptimistic(next);
+    void send('turn:update', { entryId, patch: { initiative: next } }).then((ok) => {
+      if (!ok) setOptimistic(undefined);
+    });
   };
+
+  const shown = optimistic !== undefined ? optimistic : value;
 
   const badge = clsx(
     'flex h-8 w-9 shrink-0 items-center justify-center rounded-md border font-display text-sm font-bold tabular-nums',
@@ -595,6 +622,7 @@ function InitiativeValue({
       <input
         ref={inputRef}
         value={text}
+        autoFocus
         inputMode="numeric"
         aria-label="Iniciativa"
         onChange={(e) => setText(e.target.value)}
@@ -602,7 +630,10 @@ function InitiativeValue({
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === 'Enter') commit();
-          else if (e.key === 'Escape') onEditing(false);
+          else if (e.key === 'Escape') {
+            cancelled.current = true;
+            onEditing(false);
+          }
         }}
         className="input h-8 w-11 shrink-0 px-1 py-0 text-center text-sm font-bold tabular-nums"
       />
@@ -611,11 +642,11 @@ function InitiativeValue({
 
   return editable ? (
     <button type="button" className={clsx(badge, 'transition hover:border-gold-500')} title="Clic para editar la iniciativa" onClick={() => onEditing(true)}>
-      {value ?? '—'}
+      {shown ?? '—'}
     </button>
   ) : (
     <span className={badge} title="Iniciativa">
-      {value ?? '—'}
+      {shown ?? '—'}
     </span>
   );
 }

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import clsx from 'clsx';
 import {
   DndContext,
@@ -73,11 +73,25 @@ function parseZoneDragId(id: UniqueIdentifier): string | null {
   return s.startsWith('zone:') ? s.slice(5) : null;
 }
 
-/** Pointer first (precise for cells), rectangles for keyboard dragging. */
-const collisionDetection: CollisionDetection = (args) => {
-  const hits = pointerWithin(args);
-  return hits.length > 0 ? hits : rectIntersection(args);
-};
+function containsPoint(rect: DOMRect, p: { x: number; y: number }): boolean {
+  return p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom;
+}
+
+/**
+ * Pointer first (precise for cells), rectangles for keyboard dragging. The tray always wins, and cells
+ * scrolled out of the board viewport (clipped, but still measured by dnd-kit) never catch the pointer.
+ */
+function makeCollisionDetection(board: RefObject<HTMLElement>): CollisionDetection {
+  return (args) => {
+    const pointer = args.pointerCoordinates;
+    const hits = pointerWithin(args);
+    const trayHit = hits.find((h) => h.id === TRAY_ID);
+    if (trayHit) return [trayHit];
+    const boardRect = board.current?.getBoundingClientRect();
+    if (pointer && boardRect && !containsPoint(boardRect, pointer)) return [];
+    return hits.length > 0 ? hits : rectIntersection(args);
+  };
+}
 
 /**
  * Zone grid: top-level zones laid out in cells. Adjacent zones become neighbors ("Aplicar vecinas"),
@@ -94,6 +108,8 @@ export function ZoneGridEditor({ zones, onApply, onOpenZone }: ZoneGridEditorPro
   const [extra, setExtra] = useState({ cols: 0, rows: 0 });
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
   const suppressClickUntil = useRef(0);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const collisionDetection = useMemo(() => makeCollisionDetection(boardRef), []);
 
   const cols = Math.max(DEFAULT_COLS, layout.maxX + 2) + extra.cols;
   const rows = Math.max(DEFAULT_ROWS, layout.maxY + 2) + extra.rows;
@@ -222,7 +238,7 @@ export function ZoneGridEditor({ zones, onApply, onOpenZone }: ZoneGridEditorPro
       cellsList.push(
         <BoardCell key={posKey(x, y)} x={x} y={y} occupied={!!zone} dragging={activeZoneId !== null}>
           {zone && (
-            <DraggableZone zoneId={zone.id} label={zone.name}>
+            <DraggableZone zoneId={zone.id} label={zone.name} fill>
               {(isDragging) => {
                 const info = dirInfo(zone);
                 return (
@@ -254,6 +270,7 @@ export function ZoneGridEditor({ zones, onApply, onOpenZone }: ZoneGridEditorPro
     <DndContext
       sensors={sensors}
       collisionDetection={collisionDetection}
+      autoScroll={{ threshold: { x: 0.1, y: 0.12 } }}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onDragCancel={() => setActiveZoneId(null)}
@@ -318,7 +335,7 @@ export function ZoneGridEditor({ zones, onApply, onOpenZone }: ZoneGridEditorPro
           </div>
 
           {/* Board */}
-          <div className="scroll-thin relative min-h-0 flex-1 overflow-auto">
+          <div ref={boardRef} className="scroll-thin relative min-h-0 flex-1 overflow-auto">
             {layout.topZones.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
                 <Grid3x3 className="h-10 w-10 text-gold-600" />
@@ -398,7 +415,18 @@ function overlayInfo(
   return { dirStatus, neighborNames };
 }
 
-function DraggableZone({ zoneId, label, children }: { zoneId: string; label: string; children: (isDragging: boolean) => ReactNode }) {
+function DraggableZone({
+  zoneId,
+  label,
+  fill = false,
+  children,
+}: {
+  zoneId: string;
+  label: string;
+  /** Fill the parent (board cells); tray rows keep their natural height. */
+  fill?: boolean;
+  children: (isDragging: boolean) => ReactNode;
+}) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: zoneDragId(zoneId) });
   return (
     <div
@@ -406,7 +434,10 @@ function DraggableZone({ zoneId, label, children }: { zoneId: string; label: str
       {...attributes}
       {...listeners}
       aria-label={`Zona ${label}`}
-      className="h-full w-full touch-none rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950"
+      className={clsx(
+        'touch-none outline-none focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950',
+        fill ? 'h-full w-full rounded-xl' : 'rounded-lg',
+      )}
     >
       {children(isDragging)}
     </div>

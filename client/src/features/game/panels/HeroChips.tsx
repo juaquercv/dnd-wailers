@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import type { CategoryDTO } from '@wailers/shared';
+import { api } from '../../../api/http';
 import { withAlpha } from '../../../components/ui/Badge';
 import { useCategories } from '../../../stores/categories';
 
@@ -54,8 +55,50 @@ export function useHeroChipGroups(categoryIds: string[]): HeroChipGroup[] {
   }, [categoryIds, byId, loaded]);
 }
 
+/** Library categories of heroes whose live sheet arrived without them (one request per hero). */
+const libraryCategoryCache = new Map<string, Promise<string[]>>();
+
+function libraryCategoryIds(heroId: string): Promise<string[]> {
+  let pending = libraryCategoryCache.get(heroId);
+  if (!pending) {
+    pending = api.library
+      .get(heroId)
+      .then((entry) => (entry.kind === 'hero' ? entry.categoryIds : []))
+      .catch(() => {
+        // Allow a later retry (e.g. the server was restarting).
+        libraryCategoryCache.delete(heroId);
+        return [] as string[];
+      });
+    libraryCategoryCache.set(heroId, pending);
+  }
+  return pending;
+}
+
+/**
+ * The hero's category ids: the live sheet's when present, else the library hero's (older live sheets
+ * may have been created without their categories).
+ */
+export function useHeroCategoryIds(heroId: string | undefined, liveIds: string[]): string[] {
+  const [fallback, setFallback] = useState<{ heroId: string; ids: string[] } | null>(null);
+  const needsFallback = !!heroId && liveIds.length === 0;
+  useEffect(() => {
+    if (!needsFallback || !heroId) return;
+    let alive = true;
+    void libraryCategoryIds(heroId).then((ids) => {
+      if (alive) setFallback({ heroId, ids });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [needsFallback, heroId]);
+  if (!needsFallback) return liveIds;
+  return fallback && fallback.heroId === heroId ? fallback.ids : liveIds;
+}
+
 export interface HeroChipsProps {
   categoryIds: string[];
+  /** Live hero id: enables the library fallback when the sheet carries no categories. */
+  heroId?: string;
   /** Only the first N facets (e.g. 2 → race and class in the party cards). */
   maxFacets?: number;
   size?: 'xs' | 'sm';
@@ -63,8 +106,9 @@ export interface HeroChipsProps {
 }
 
 /** Category chips of a hero (names come from the categories store; nothing hardcoded). */
-export function HeroChips({ categoryIds, maxFacets, size = 'sm', className }: HeroChipsProps) {
-  const groups = useHeroChipGroups(categoryIds);
+export function HeroChips({ categoryIds, heroId, maxFacets, size = 'sm', className }: HeroChipsProps) {
+  const ids = useHeroCategoryIds(heroId, categoryIds);
+  const groups = useHeroChipGroups(ids);
   const shown = maxFacets !== undefined ? groups.slice(0, maxFacets) : groups;
   if (shown.length === 0) return null;
   return (

@@ -31,6 +31,7 @@ import {
   idList,
   joinNames,
   levelCenter,
+  levelSize,
   loadEntry,
   longText,
   markEntryUsed,
@@ -50,7 +51,7 @@ import {
   requireLevel,
   requirePlaying,
   requireToken,
-  removeTurnEntriesForToken,
+  requireZone,
   sizeLabel,
   snapPoint,
   statusLabel,
@@ -62,6 +63,7 @@ import {
   type Point,
 } from '../helpers';
 import { HandlerError, type HandlerCtx, type HandlerModule, type LogInput, type SessionManagerApi } from '../types';
+import { removeTurnEntries } from './turns';
 
 /*
  * Token handlers: spawning from the library, hero placement, movement (with drag previews),
@@ -155,7 +157,8 @@ async function spawnTokens(
     },
   );
 
-  if (fx) manager.emitEvent(ctx.session, { type: 'fx', fx }, { kind: 'all' });
+  // A hidden dramatic entrance is only previewed by the DM: players must not learn about it yet.
+  if (fx) manager.emitEvent(ctx.session, { type: 'fx', fx }, hidden ? { kind: 'dm' } : { kind: 'all' });
   void markEntryUsed(entry.id, ctx.session.state.campaignId, ctx.userId);
   return ids;
 }
@@ -211,21 +214,29 @@ function placeHeroes(
       }
       const positions = freeCellsAround(s, target.zoneId, target.level, target.point, userIds.length, 1, moving);
       userIds.forEach((uid, i) => {
-        const heroId = s.players[uid]?.heroId;
-        const hero = heroId ? s.heroes[heroId] : undefined;
-        if (!hero) return;
+        const player = s.players[uid];
+        const hero = player?.heroId ? s.heroes[player.heroId] : undefined;
+        if (!player || !hero) return;
         const pos = positions[i]!;
         const at: SpawnPoint = { zoneId: target.zoneId, levelId: target.level.id, x: pos.x, y: pos.y };
         const existing = heroTokenOf(s, uid);
+        let tokenId: string;
         if (existing && existing.heroId === hero.id) {
           existing.zoneId = at.zoneId;
           existing.levelId = at.levelId;
           existing.x = at.x;
           existing.y = at.y;
+          existing.ownerUserId = uid;
+          existing.color = player.color || existing.color;
+          tokenId = existing.id;
         } else {
           if (existing) delete s.tokens[existing.id];
           const token = createHeroToken(s, hero, uid, at);
           s.tokens[token.id] = token;
+          tokenId = token.id;
+        }
+        for (const entry of s.turn.order) {
+          if (entry.type === 'player' && entry.heroId === hero.id) entry.tokenId = tokenId;
         }
       });
     },
@@ -300,20 +311,37 @@ function transferTokens(
   const state = ctx.session.state;
   const tokenIds = idList(payload.tokenIds, 'fichas', 1, 100);
   const tokens = tokenIds.map((id) => requireToken(state, id));
-  const { zone, level } = requireLevel(manager, ctx.session, payload.zoneId, payload.levelId);
-  const x = optNum(payload.x, 'x');
-  const y = optNum(payload.y, 'y');
   const first = tokens[0]!;
   const fromLoc = getLevel(ctx.session, first.zoneId, first.levelId);
+  const zone = requireZone(manager, ctx.session, payload.zoneId);
+  if (zone.levels.length === 0) throw new HandlerError('Esa zona no tiene niveles');
+  const direction = fromLoc && fromLoc.zone.id !== zone.id ? neighborDirection(fromLoc.zone, zone.id) : null;
+
+  // An empty level id (e.g. a player travelling to a zone they do not know yet) picks the level a
+  // neighbor edge or a transition of the current level leads to, else the zone's default level.
+  let level: ZoneLevel;
+  const rawLevelId: unknown = payload.levelId;
+  if (rawLevelId === undefined || rawLevelId === null || rawLevelId === '') {
+    const transition = !direction && fromLoc ? findTransitionTarget(fromLoc.level, zone.id, null, ctx.isDm) : null;
+    level = (transition && zone.levels.find((l) => l.id === transition.levelId)) || defaultLevel(zone);
+  } else {
+    level = requireLevel(manager, ctx.session, zone.id, payload.levelId).level;
+  }
+  let x = optNum(payload.x, 'x');
+  let y = optNum(payload.y, 'y');
+  const transitionTarget = fromLoc ? findTransitionTarget(fromLoc.level, zone.id, level.id, ctx.isDm) : null;
 
   if (!ctx.isDm) {
     requirePlaying(ctx);
     if (tokens.length !== 1 || !canPlayerMoveToken(ctx, first)) throw new HandlerError(NO_MOVE);
-    const sameZone = first.zoneId === zone.id;
-    const isNeighbor = !sameZone && fromLoc !== null && neighborDirection(fromLoc.zone, zone.id) !== null;
-    const viaTransition = fromLoc !== null && findTransitionTarget(fromLoc.level, zone.id, level.id, false) !== null;
-    if (!isNeighbor && !viaTransition && !(sameZone && first.levelId === level.id)) {
-      throw new HandlerError('Tu ficha no puede llegar a esa zona desde aquí');
+    const sameLevel = first.zoneId === zone.id && first.levelId === level.id;
+    const viaNeighbor = direction !== null && level.id === defaultLevel(zone).id;
+    const viaTransition = transitionTarget !== null;
+    if (!sameLevel && !viaNeighbor && !viaTransition) throw new HandlerError('Tu ficha no puede llegar a esa zona desde aquí');
+    // Passing through a door/stairs always lands on its target point.
+    if (!sameLevel && !viaNeighbor) {
+      x = undefined;
+      y = undefined;
     }
   }
 
@@ -321,18 +349,14 @@ function transferTokens(
   let anchor: Point;
   if (x !== undefined && y !== undefined) {
     anchor = clampToLevel(level, { x, y });
+  } else if (transitionTarget) {
+    anchor = clampToLevel(level, transitionTarget);
+  } else if (direction && fromLoc) {
+    const from = levelSize(fromLoc.level);
+    const along = direction === 'left' || direction === 'right' ? first.y / Math.max(1, from.height) : first.x / Math.max(1, from.width);
+    anchor = entryEdgePoint(level, direction, along);
   } else {
-    const viaTransition = fromLoc ? findTransitionTarget(fromLoc.level, zone.id, level.id, ctx.isDm) : null;
-    const direction = fromLoc && fromLoc.zone.id !== zone.id ? neighborDirection(fromLoc.zone, zone.id) : null;
-    if (viaTransition) {
-      anchor = clampToLevel(level, viaTransition);
-    } else if (direction && fromLoc) {
-      const from = fromLoc.level.background;
-      const along = direction === 'left' || direction === 'right' ? first.y / Math.max(1, from.height) : first.x / Math.max(1, from.width);
-      anchor = entryEdgePoint(level, direction, along);
-    } else {
-      anchor = levelCenter(level);
-    }
+    anchor = levelCenter(level);
   }
 
   const heroNames: string[] = [];
@@ -650,16 +674,22 @@ function tokenStatus(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tok
 // ---------------------------------------------------------------------------
 
 function removeToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tokenId: string }): null {
-  const token = requireToken(ctx.session.state, payload.tokenId);
+  const state = ctx.session.state;
+  const token = requireToken(state, payload.tokenId);
+  const visibility: 'all' | 'dm' = token.kind === 'hero' && !token.hidden ? 'all' : 'dm';
   manager.mutate(
     ctx.session,
     (s) => {
       delete s.tokens[token.id];
-      removeTurnEntriesForToken(s, token.id);
+      // Players keep their turn (their hero token can be placed again); other entries of the token go.
+      for (const entry of s.turn.order) {
+        if (entry.tokenId === token.id && entry.type === 'player') entry.tokenId = null;
+      }
+      removeTurnEntries(s, (entry) => entry.tokenId === token.id && entry.type !== 'player');
     },
     {
       zones: token.kind === 'hero',
-      log: { type: 'system', text: `${token.name} se retira del mapa`, actorUserId: ctx.userId, visibility: 'dm' },
+      log: { type: 'system', text: `${token.name} se retira del mapa`, actorUserId: ctx.userId, visibility },
     },
   );
   return null;

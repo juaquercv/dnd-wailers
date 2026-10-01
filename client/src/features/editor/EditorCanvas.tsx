@@ -14,6 +14,7 @@ import { SceneLayers } from './canvas/SceneLayers';
 import { SelectionTransformer, TRANSFORMABLE_TYPES } from './canvas/SelectionTransformer';
 import { SpawnFlag } from './canvas/SpawnFlag';
 import { StatusBar } from './canvas/StatusBar';
+import { useCanvasUi } from './canvas/canvasUiStore';
 import { useCanvasController } from './canvas/useCanvasController';
 import { VertexHandles } from './canvas/VertexHandles';
 
@@ -33,6 +34,7 @@ export function EditorCanvas() {
   const layerVisible = useEditorStore((s) => s.layerVisible);
   const layerLocked = useEditorStore((s) => s.layerLocked);
   const spawn = useEditorStore((s) => s.campaign?.spawn ?? null);
+  const editingId = useCanvasUi((s) => s.editing?.id ?? null);
 
   const mapRef = useRef<MapStageHandle>(null);
   const controller = useCanvasController(mapRef);
@@ -51,10 +53,14 @@ export function EditorCanvas() {
     [selected, layerVisible, layerLocked],
   );
 
-  const transformerElements = tool === 'select' ? editableSelected : NO_ELEMENTS;
+  // While a text/note/marker is edited in place, its HTML editor replaces the transformer and outline.
+  const transformerElements = tool === 'select' && !editingId ? editableSelected : NO_ELEMENTS;
   const singleFramed =
     tool === 'select' && selected.length === 1 && transformerElements.length === 1 && TRANSFORMABLE_TYPES.has(transformerElements[0]!.type);
-  const outlineIds = useMemo(() => (singleFramed ? [] : selected.map((el) => el.id)), [singleFramed, selected]);
+  const outlineIds = useMemo(
+    () => (singleFramed ? [] : selected.filter((el) => el.id !== editingId).map((el) => el.id)),
+    [singleFramed, selected, editingId],
+  );
 
   // Hiding the "Fondo" layer also hides the level background image (its color stays as the sheet).
   const backgroundLevel = useMemo<Pick<ZoneLevel, 'background'> | null>(() => {

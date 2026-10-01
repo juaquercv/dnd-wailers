@@ -150,9 +150,12 @@ export function GeneralFields({ draft, onChange, errors, campaigns, users }: Gen
             <Select<string | null>
               label="Jugador"
               containerClassName="sm:col-span-2"
+              hint="Solo el jugador dueño puede modificar su héroe."
+              placeholder="Elige un jugador…"
+              error={errors.ownerId}
               value={draft.ownerId ?? null}
               onChange={(ownerId) => onChange({ ...draft, ownerId })}
-              options={[{ value: null, label: 'Sin jugador asignado' }, ...users.map((u) => ({ value: u.id, label: u.name }))]}
+              options={users.map((u) => ({ value: u.id, label: u.name }))}
             />
           </FormGrid>
         )}

@@ -1,5 +1,6 @@
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { DEFAULT_ABILITIES, normalizeText, type AttributeDef, type RuleSystem } from '@wailers/shared';
+import type { SyncedValue } from '../useSyncedValue';
 
 export type RulesUpdater = (recipe: (draft: RuleSystem) => void) => void;
 
@@ -8,18 +9,17 @@ export interface RuleSectionProps {
   update: RulesUpdater;
 }
 
-/** Immutable updates of a RuleSystem: the recipe mutates a deep copy that is emitted with onChange. */
-export function useRulesUpdater(rules: RuleSystem, onChange: (rules: RuleSystem) => void): RulesUpdater {
-  const rulesRef = useRef(rules);
-  rulesRef.current = rules;
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  return useCallback((recipe) => {
-    const draft = structuredClone(rulesRef.current);
-    recipe(draft);
-    rulesRef.current = draft;
-    onChangeRef.current(draft);
-  }, []);
+/** Immutable updates of a RuleSystem: the recipe mutates a deep copy of the latest rules, which is then committed. */
+export function useRulesUpdater(synced: SyncedValue<RuleSystem>): RulesUpdater {
+  const { latest, commit } = synced;
+  return useCallback(
+    (recipe) => {
+      const draft = structuredClone(latest());
+      recipe(draft);
+      commit(draft);
+    },
+    [latest, commit],
+  );
 }
 
 const BUILT_IN_KEYS = new Set<string>(DEFAULT_ABILITIES.map((a) => a.key));

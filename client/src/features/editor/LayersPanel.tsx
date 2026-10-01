@@ -78,10 +78,10 @@ export function LayersPanel() {
                   {isActive && <span className="h-2 w-2 rounded-full bg-gold-300 shadow-[0_0_6px_rgba(243,213,138,0.8)]" />}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className={clsx('block truncate text-sm', isActive ? 'font-semibold text-gold-100' : 'text-parchment-100')}>
+                  <span className={clsx('block text-sm leading-tight', isActive ? 'font-semibold text-gold-100' : 'text-parchment-100')}>
                     {LAYER_LABELS[layer]}
                   </span>
-                  {LAYER_HINTS[layer] && <span className="block truncate text-[10px] text-parchment-400">{LAYER_HINTS[layer]}</span>}
+                  {LAYER_HINTS[layer] && <span className="mt-0.5 block truncate text-[10px] text-parchment-400">{LAYER_HINTS[layer]}</span>}
                 </span>
                 <span
                   className={clsx(

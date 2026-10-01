@@ -202,6 +202,7 @@ export function validateDraft(d: AnyDraft): FieldError[] {
       break;
     }
     case 'hero': {
+      if (!d.ownerId) push('ownerId', 'general', 'Elige el jugador dueño del héroe.');
       if (!isNum(d.level) || d.level < 1 || d.level > 20) push('level', 'general', 'El nivel debe estar entre 1 y 20.');
       const hp = d.data.hp;
       if (!isNum(hp.max) || hp.max < 1) push('data.hp.max', 'hero-stats', 'Los PV máximos deben ser al menos 1.');
@@ -233,8 +234,12 @@ export function validateDraft(d: AnyDraft): FieldError[] {
   return out;
 }
 
-/** Final payload: trimmed text, normalized tags, derived and irrelevant facet columns cleaned. */
+/**
+ * Final payload: trimmed text, normalized tags, derived and irrelevant facet columns cleaned.
+ * A null owner is omitted for non-hero kinds so the server keeps the stored author (or uses the requester on create).
+ */
 export function toPayload(d: AnyDraft): LibraryEntryInput {
+  const owner = d.ownerId ? { ownerId: d.ownerId } : {};
   const base = {
     name: d.name.trim(),
     description: (d.description ?? '').trim(),
@@ -252,16 +257,16 @@ export function toPayload(d: AnyDraft): LibraryEntryInput {
   };
   switch (d.kind) {
     case 'creature':
-      return { ...base, kind: 'creature', ownerId: d.ownerId ?? null, cr: d.cr ?? null, hp: d.hp ?? null, size: d.size ?? null, data: d.data };
+      return { ...base, ...owner, kind: 'creature', cr: d.cr ?? null, hp: d.hp ?? null, size: d.size ?? null, data: d.data };
     case 'item':
-      return { ...base, kind: 'item', ownerId: d.ownerId ?? null, rarity: d.rarity ?? null, value: d.value ?? null, weight: d.weight ?? null, data: d.data };
+      return { ...base, ...owner, kind: 'item', rarity: d.rarity ?? null, value: d.value ?? null, weight: d.weight ?? null, data: d.data };
     case 'spell':
-      return { ...base, kind: 'spell', ownerId: d.ownerId ?? null, level: d.level ?? 0, data: d.data };
+      return { ...base, ...owner, kind: 'spell', level: d.level ?? 0, data: d.data };
     case 'zone':
-      return { ...base, kind: 'zone', ownerId: d.ownerId ?? null, level: d.data.content?.levels?.length ?? d.level ?? 1, data: d.data };
+      return { ...base, ...owner, kind: 'zone', level: d.data.content?.levels?.length ?? d.level ?? 1, data: d.data };
     case 'sound':
-      return { ...base, kind: 'sound', ownerId: d.ownerId ?? null, data: d.data };
+      return { ...base, ...owner, kind: 'sound', data: d.data };
     case 'hero':
-      return { ...base, kind: 'hero', ownerId: d.ownerId ?? null, level: d.level ?? 1, hp: d.data.hp.max, data: d.data };
+      return { ...base, ...owner, kind: 'hero', level: d.level ?? 1, hp: d.data.hp.max, data: d.data };
   }
 }

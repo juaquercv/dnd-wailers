@@ -1,6 +1,7 @@
 import {
   SIZE_INFO,
   STATUSES,
+  blockingSegments,
   cellsForSize,
   customInventoryItem,
   effectiveVisibility,
@@ -35,6 +36,7 @@ import {
 import { prisma } from '../db';
 import { entryInclude, entryToDTO, isPlainObject } from '../services/serializers';
 import { claims } from '../auth/claims';
+import { TOKEN_COLORS, heroTokenFor } from './runtime';
 import { HandlerError, type Audience, type HandlerCtx, type LiveSession, type SessionManagerApi } from './types';
 
 /*
@@ -198,12 +200,6 @@ export function userColor(session: LiveSession, userId: string): string {
 export function playerHero(state: LiveState, userId: string): HeroSheet | null {
   const heroId = state.players[userId]?.heroId ?? null;
   return heroId ? (state.heroes[heroId] ?? null) : null;
-}
-
-/** In-fiction name of the acting user: 'El DM', the player's hero name or the player's name. */
-export function actorLabel(ctx: HandlerCtx): string {
-  if (ctx.isDm) return 'El DM';
-  return playerHero(ctx.session.state, ctx.userId)?.name ?? playerName(ctx.session, ctx.userId);
 }
 
 export function isPlayer(state: LiveState, userId: string): boolean {
@@ -379,9 +375,25 @@ function* spiralCandidates(level: ZoneLevel, origin: Point, cells: number, maxRi
 }
 
 /**
+ * Whether the path a→b is blocked by the wall segment cd. Passing exactly through a wall vertex
+ * or ending on the wall counts as blocked; a path starting on the wall line, or running along
+ * it, does not (so a point dropped on a wall can still spread around).
+ */
+function segmentsCross(a: Point, b: Point, c: Point, d: Point): boolean {
+  const cross = (o: Point, p: Point, q: Point): number => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  if (d1 === 0 || (d3 === 0 && d4 === 0)) return false;
+  return ((d1 > 0 && d2 <= 0) || (d1 < 0 && d2 >= 0)) && d3 * d4 <= 0;
+}
+
+/**
  * `count` free positions (token centers) around `origin` on a level, in a spiral of grid cells.
- * A position is free when no other token of the level (except `excludeIds`) overlaps it.
- * Falls back to the origin when the level is full.
+ * A position is free when no other token of the level (except `excludeIds`) overlaps it and it is
+ * not behind a blocking wall (closed doors included) as seen from the origin.
+ * Falls back to the origin cell when the level is full.
  */
 export function freeCellsAround(
   state: LiveState,
@@ -394,12 +406,14 @@ export function freeCellsAround(
 ): Point[] {
   const size = gridSize(level);
   const { width, height } = levelSize(level);
+  const from = clampToLevel(level, origin);
+  const walls = blockingSegments(level.walls, state.zoneStates[zoneId]?.doors);
   const occupied: { x: number; y: number; cells: number }[] = Object.values(state.tokens)
     .filter((t) => t.zoneId === zoneId && t.levelId === level.id && !excludeIds.has(t.id))
-    .map((t) => ({ x: t.x, y: t.y, cells: t.cells }));
+    .map((t) => ({ x: t.x, y: t.y, cells: Number.isFinite(t.cells) && t.cells > 0 ? t.cells : 1 }));
   const out: Point[] = [];
   const maxRing = Math.ceil(Math.max(width, height) / size) + 1;
-  for (const candidate of spiralCandidates(level, origin, cells, maxRing)) {
+  for (const candidate of spiralCandidates(level, from, cells, maxRing)) {
     if (out.length >= count) break;
     if (candidate.x < 0 || candidate.y < 0 || candidate.x > width || candidate.y > height) continue;
     const blocked = occupied.some((o) => {
@@ -407,10 +421,12 @@ export function freeCellsAround(
       return Math.hypot(o.x - candidate.x, o.y - candidate.y) < minDist;
     });
     if (blocked) continue;
+    const far = Math.hypot(candidate.x - from.x, candidate.y - from.y) > size * 0.75;
+    if (far && walls.some((w) => segmentsCross(from, candidate, w.a, w.b))) continue;
     out.push(candidate);
     occupied.push({ x: candidate.x, y: candidate.y, cells });
   }
-  const fallback = snapPoint(level, origin, cells);
+  const fallback = snapPoint(level, from, cells);
   while (out.length < count) out.push(fallback);
   return out;
 }
@@ -471,16 +487,7 @@ export function zoneLabel(zone: Zone, level?: ZoneLevel | null): string {
 // Tokens
 // ---------------------------------------------------------------------------
 
-export const TOKEN_COLORS: Record<TokenKind, string> = {
-  hero: '#e9c063',
-  creature: '#c43d33',
-  npc: '#4aa3e2',
-  item: '#d4a63f',
-};
-
-export function tokenColorForKind(kind: TokenKind): string {
-  return TOKEN_COLORS[kind];
-}
+export { TOKEN_COLORS };
 
 /** Creature stat sheet snapshot for a token. */
 export function statsFromEntry(entry: LibraryEntry<'creature'>): TokenStats {
@@ -563,37 +570,9 @@ export function tokenCellsForEntry(entry: LibraryEntry<'creature'> | LibraryEntr
   return cellsForSize(creature.size);
 }
 
-/** Hero token for a hero sheet played by `userId`. */
-export function createHeroToken(state: LiveState, hero: HeroSheet, userId: string | null, at: SpawnPoint): Token {
-  const color = (userId ? state.players[userId]?.color : undefined) ?? TOKEN_COLORS.hero;
-  return {
-    id: newId('tok'),
-    kind: 'hero',
-    entryId: null,
-    heroId: hero.id,
-    ownerUserId: userId,
-    name: hero.name,
-    imageUrl: hero.imageUrl,
-    zoneId: at.zoneId,
-    levelId: at.levelId,
-    x: at.x,
-    y: at.y,
-    cells: 1,
-    facing: 0,
-    hp: hero.data.hp.current,
-    maxHp: hero.data.hp.max,
-    tempHp: hero.data.hp.temp || 0,
-    hpRatio: null,
-    ac: hero.data.ac,
-    statuses: [...hero.data.statuses],
-    hidden: false,
-    light: null,
-    color,
-    loot: [],
-    stats: null,
-    notes: '',
-    sourceElementId: null,
-  };
+/** Hero token for a hero sheet played by `userId` (ring in the player's color). */
+export function createHeroToken(state: LiveState, hero: HeroSheet, userId: string, at: SpawnPoint): Token {
+  return heroTokenFor(hero, { userId, color: state.players[userId]?.color ?? TOKEN_COLORS.hero }, at);
 }
 
 /** Mirror hero statuses/AC on every token of the hero (hp/name/image are mirrored by the manager). */
@@ -633,20 +612,6 @@ export function numberedNames(state: LiveState, baseName: string, count: number)
   if (existing === 0 && count === 1) return [baseName];
   const start = existing === 0 ? 1 : maxNumber + 1;
   return Array.from({ length: count }, (_, i) => `${baseName} ${start + i}`);
-}
-
-/** Remove every turn entry of a token, keeping the current turn index consistent. */
-export function removeTurnEntriesForToken(state: LiveState, tokenId: string): void {
-  const order = state.turn.order;
-  let current = state.turn.currentIndex;
-  for (let i = order.length - 1; i >= 0; i--) {
-    if (order[i]!.tokenId !== tokenId) continue;
-    order.splice(i, 1);
-    if (i < current) current--;
-  }
-  if (order.length === 0) current = 0;
-  else if (current >= order.length) current = 0;
-  state.turn.currentIndex = Math.max(0, current);
 }
 
 /** "Desafío 1/4" style CR text. */

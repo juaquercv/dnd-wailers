@@ -12,7 +12,7 @@ import { Tabs } from '../../components/ui/Tabs';
 import { setEntryDrag } from '../../lib/dnd';
 import { EntryThumb, SoundPreviewButton } from './common';
 import { EntryDetails } from './EntryDetails';
-import { KindIcon, StatChips, entryRarityColor } from './meta';
+import { KindIcon, StatChips, entryRarityColor, lowerLabel } from './meta';
 import { stopSoundPreview } from './soundPreview';
 import { useLibrarySearch } from './useLibrarySearch';
 
@@ -203,7 +203,7 @@ export function LibraryBrowser({ kinds, initialKind, compact = false, campaignId
             debounceMs={200}
             size="sm"
             className="min-w-0 flex-1"
-            placeholder={`Buscar ${label.plural.toLowerCase()}…`}
+            placeholder={`Buscar ${lowerLabel(label.plural)}…`}
           />
           <IconButton
             size="sm"
@@ -263,7 +263,7 @@ export function LibraryBrowser({ kinds, initialKind, compact = false, campaignId
                   ? 'Sin favoritos'
                   : recentOnly
                     ? 'Nada usado recientemente'
-                    : `No hay ${label.plural.toLowerCase()}`
+                    : `No hay ${lowerLabel(label.plural)}`
             }
             description={
               q

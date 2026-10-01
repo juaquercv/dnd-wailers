@@ -1,4 +1,6 @@
+import { useRef } from 'react';
 import { Hourglass, Info, Sparkles } from 'lucide-react';
+import { createRuleSystem } from '@wailers/shared';
 import { NumberInput } from '../../../../components/ui/NumberInput';
 import { TextInput } from '../../../../components/ui/TextInput';
 import { Toggle } from '../../../../components/ui/Toggle';
@@ -7,11 +9,17 @@ import { InfoNote, SettingsSection, SubHeading } from '../SettingsSection';
 import { resourceName, type RuleSectionProps } from './ruleUtils';
 import { SlotsTableEditor } from './SlotsTableEditor';
 
+/** Name given to the resource by the rule presets. */
+const DEFAULT_RESOURCE_NAME = createRuleSystem('mana').magic.manaName;
+
 /** Magic system: mode, resource pool (name, regeneration, per level) and the spell slots table. */
 export function MagicSection({ rules, update, id }: RuleSectionProps & { id: string }) {
   const magic = rules.magic;
   const name = resourceName(rules);
   const example = magic.manaPerLevel * 3;
+  /** Last non-empty resource name (restored if the field is left empty). */
+  const lastName = useRef(magic.manaName.trim() || DEFAULT_RESOURCE_NAME);
+  if (magic.manaName.trim()) lastName.current = magic.manaName.trim();
 
   return (
     <SettingsSection
@@ -38,19 +46,21 @@ export function MagicSection({ rules, update, id }: RuleSectionProps & { id: str
               label="Nombre del recurso"
               value={magic.manaName}
               maxLength={24}
-              placeholder="Maná"
-              hint="Así aparecerá en las hojas, los botones y el registro."
-              onValueChange={(v) =>
+              placeholder={lastName.current}
+              hint="Así aparecerá en las hojas, los botones y el registro (por ejemplo: Maná, Vapor, Ki, Energía)."
+              onValueChange={(v) => {
+                if (v.trim()) lastName.current = v.trim();
                 update((d) => {
                   d.magic.manaName = v;
-                })
-              }
+                });
+              }}
               onBlur={() => {
-                if (!magic.manaName.trim()) {
-                  update((d) => {
-                    d.magic.manaName = 'Maná';
-                  });
-                }
+                const trimmed = magic.manaName.trim();
+                if (trimmed === magic.manaName) return;
+                // Never leave the resource nameless: restore the last name it had.
+                update((d) => {
+                  d.magic.manaName = trimmed || lastName.current;
+                });
               }}
             />
             <NumberInput

@@ -169,7 +169,7 @@ export const GEAR_CITY = {
     ],
   ] as Pt[][],
   vents: [
-    { x: 300, y: 1000 },
+    { x: 520, y: 1005 },
     { x: 760, y: 925 },
     { x: 1420, y: 1005 },
     { x: 1820, y: 925 },
@@ -256,9 +256,9 @@ export const SKY_PORT = (() => {
       { x0: 860, x1: 1770, y: 1070, h: 110 },
     ],
     ships: {
-      gaviota: { cx: 1330, cy: 150, len: 780, wid: 210, envelope: '#d8c8a8', trim: '#2f6f6a', name: 'GAVIOTA DE HIERRO' } as ShipSpec,
+      gaviota: { cx: 1390, cy: 150, len: 780, wid: 210, envelope: '#d8c8a8', trim: '#2f6f6a', name: 'GAVIOTA DE HIERRO' } as ShipSpec,
       albatros: { cx: 1420, cy: 700, len: 920, wid: 300, envelope: '#e8d8b0', trim: '#8a2a2a', name: 'ALBATROS' } as ShipSpec,
-      urraca: { cx: 1330, cy: 1255, len: 700, wid: 200, envelope: '#3a3236', trim: '#c0392b', name: 'LA URRACA' } as ShipSpec,
+      urraca: { cx: 1390, cy: 1255, len: 700, wid: 200, envelope: '#3a3236', trim: '#c0392b', name: 'LA URRACA' } as ShipSpec,
     },
     towers: [
       { x: 1830, y: 330, r: 62 },

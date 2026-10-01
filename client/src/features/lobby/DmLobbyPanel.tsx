@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import clsx from 'clsx';
-import { CircleAlert, Eye, ListOrdered, Settings2, Swords, Users, WifiOff } from 'lucide-react';
+import { CircleAlert, Eye, ListOrdered, Map as MapIcon, Settings2, Swords, Users, WifiOff } from 'lucide-react';
 import { VISION_MODE_LABELS, type SessionPlayer } from '@wailers/shared';
 import { emitAck } from '../../api/socket';
 import { Badge } from '../../components/ui/Badge';
@@ -24,6 +25,9 @@ export function DmLobbyPanel() {
   const visibility = useSessionStore((s) => s.view?.state.visibility.global ?? null);
   const tradeNeedsApproval = useSessionStore((s) => s.view?.state.options.tradeNeedsApproval ?? false);
   const resumed = useSessionStore((s) => !!s.view?.state.startedAt);
+  const campaignId = useSessionStore((s) => s.view?.state.campaignId ?? null);
+  // The DM receives every zone of the campaign on join (before the lobby renders).
+  const noZones = useSessionStore((s) => s.campaign !== null && s.zones.length === 0);
   const [starting, setStarting] = useState(false);
   const [savingOption, setSavingOption] = useState(false);
 
@@ -36,6 +40,10 @@ export function DmLobbyPanel() {
 
   const start = async () => {
     if (starting) return;
+    if (noZones) {
+      toast.warning('La campaña no tiene zonas', { description: 'Crea al menos una zona en el editor antes de iniciar.' });
+      return;
+    }
     if (players.length === 0) {
       const ok = await confirm({
         title: 'Nadie se ha unido todavía',
@@ -193,6 +201,19 @@ export function DmLobbyPanel() {
           )}
 
           <div className="mt-auto pt-1">
+            {noZones && (
+              <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-blood-500/50 bg-blood-500/10 p-3 text-sm text-parchment-200">
+                <MapIcon className="mt-0.5 h-4 w-4 shrink-0 text-blood-300" aria-hidden />
+                <div>
+                  Esta campaña aún no tiene zonas: no hay mapa donde colocar a los héroes.{' '}
+                  {campaignId && (
+                    <Link to={`/campanas/${campaignId}/editor`} className="font-semibold text-gold-300 underline-offset-2 hover:underline">
+                      Abrir el editor
+                    </Link>
+                  )}
+                </div>
+              </div>
+            )}
             <Button
               variant="primary"
               size="lg"

@@ -13,7 +13,7 @@ import { TextArea } from '../../components/ui/TextArea';
 import { formatGold } from '../../lib/format';
 import { send } from './panels/actions';
 import { usePanelContext } from './panels/context';
-import { composeTradeNote } from './panels/tradeUtils';
+import { composeTradeNote, TRADE_NOTE_TEXT_MAX } from './panels/tradeUtils';
 
 export interface TradeDialogProps {
   open: boolean;
@@ -188,7 +188,17 @@ export function TradeDialog({ open, onClose, initialItemId = null, initialTarget
           />
         )}
 
-        <TextArea label="Nota (opcional)" rows={2} autoResize maxRows={5} value={note} placeholder="Por la poción que me diste en la cripta…" onValueChange={setNote} />
+        <TextArea
+          label="Nota (opcional)"
+          rows={2}
+          autoResize
+          maxRows={5}
+          maxLength={TRADE_NOTE_TEXT_MAX}
+          value={note}
+          placeholder="Por la poción que me diste en la cripta…"
+          hint={`${note.length}/${TRADE_NOTE_TEXT_MAX}`}
+          onValueChange={setNote}
+        />
 
         {state.options.tradeNeedsApproval && (
           <p className="flex items-start gap-2 rounded-lg border border-gold-700/40 bg-gold-500/5 px-3 py-2 text-xs text-gold-200">

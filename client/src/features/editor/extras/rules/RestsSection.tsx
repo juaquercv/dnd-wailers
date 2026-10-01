@@ -47,7 +47,7 @@ function RestCard({
 }) {
   const rest = rules.rest[restKey];
   const mode = rules.magic.mode;
-  const name = resourceName(rules);
+  const resourceLabel = mode === 'mana' ? resourceName(rules) : 'puntos de recurso';
   const set = (patch: Partial<RestRule>) =>
     update((d) => {
       d.rest[restKey] = { ...d.rest[restKey], ...patch };
@@ -95,11 +95,11 @@ function RestCard({
           onChange={(v) => set({ restoreHpPct: v })}
         />
         <div className={clsx(mode !== 'mana' && 'opacity-60')}>
-          <span className="label">Recuperar {name}</span>
+          <span className="label">Recuperar {resourceLabel}</span>
           <SegmentedControl<RestRule['restoreMana']>
             size="sm"
             fill
-            aria-label={`Recuperar ${name}`}
+            aria-label={`Recuperar ${resourceLabel}`}
             value={rest.restoreMana}
             onChange={(v) => set({ restoreMana: v })}
             options={[

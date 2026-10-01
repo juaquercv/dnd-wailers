@@ -1,6 +1,7 @@
+import type { LayerId, ZoneLevel } from '@wailers/shared';
 import { isAnyModalOpen, toast } from '../../components/ui';
 import { useHotkeys, type HotkeyHandler } from '../../lib/hotkeys';
-import { useEditorStore } from './editorStore';
+import { useEditorStore, type SelectionItem } from './editorStore';
 import { EDITOR_TOOLS } from './shell/tools';
 
 export interface EditorHotkeysOptions {
@@ -64,11 +65,73 @@ function nudgeSelection(dx: number, dy: number): boolean {
   return true;
 }
 
-function currentGridSize(): number {
+function currentLevel(): ZoneLevel | null {
   const s = useEditorStore.getState();
   const zone = s.zones.find((z) => z.id === s.currentZoneId);
-  const level = zone?.levels.find((l) => l.id === s.currentLevelId) ?? zone?.levels[0];
-  return Math.max(1, Math.round(level?.grid.size ?? 70));
+  return zone?.levels.find((l) => l.id === s.currentLevelId) ?? zone?.levels[0] ?? null;
+}
+
+function currentGridSize(): number {
+  return Math.max(1, Math.round(currentLevel()?.grid.size ?? 70));
+}
+
+/** Selects everything that can be picked on the current level (unlocked, on visible and unlocked layers). */
+function selectAll(): boolean {
+  const s = useEditorStore.getState();
+  const level = currentLevel();
+  if (!level) return false;
+  const editable = (layer: LayerId) => s.layerVisible[layer] && !s.layerLocked[layer];
+  const items: SelectionItem[] = [
+    ...level.elements.filter((el) => !el.locked && editable(el.layer)).map((el) => ({ kind: 'element' as const, id: el.id })),
+    ...(editable('walls') ? level.walls.map((w) => ({ kind: 'wall' as const, id: w.id })) : []),
+    ...(editable('lighting') ? level.lights.map((l) => ({ kind: 'light' as const, id: l.id })) : []),
+    ...(editable('fog') ? level.fogRegions.map((f) => ({ kind: 'fog' as const, id: f.id })) : []),
+  ];
+  if (s.tool !== 'select') s.setTool('select');
+  s.setSelection(items);
+  if (items.length === 0) toast.info('No hay nada que seleccionar en este nivel');
+  return true;
+}
+
+/**
+ * Deletes the selection except locked elements and objects on locked layers (those stay selected).
+ * Returns false when nothing was selected, so the key keeps its default behavior.
+ */
+function deleteUnlockedSelection(): boolean {
+  const s = useEditorStore.getState();
+  if (s.selection.length === 0) return false;
+  const level = currentLevel();
+  if (!level) return false;
+  const locked = s.layerLocked;
+  const isProtected = (item: SelectionItem): boolean => {
+    switch (item.kind) {
+      case 'element': {
+        const el = level.elements.find((e) => e.id === item.id);
+        return !!el && (el.locked || locked[el.layer]);
+      }
+      case 'wall':
+        return locked.walls;
+      case 'light':
+        return locked.lighting;
+      case 'fog':
+        return locked.fog;
+    }
+  };
+  const keep = s.selection.filter(isProtected);
+  const remove = s.selection.filter((item) => !isProtected(item));
+  if (remove.length === 0) {
+    toast.warning(keep.length === 1 ? 'La selección está bloqueada' : 'Todo lo seleccionado está bloqueado', {
+      description: 'Desbloquea el elemento o su capa para poder borrarlo.',
+    });
+    return true;
+  }
+  s.setSelection(remove);
+  s.deleteSelection();
+  if (keep.length > 0) {
+    s.setSelection(keep);
+    toast.info(keep.length === 1 ? 'Un objeto bloqueado no se ha borrado' : `${keep.length} objetos bloqueados no se han borrado`);
+  }
+  return true;
 }
 
 const toolBindings: Record<string, HotkeyHandler> = Object.fromEntries(
@@ -91,11 +154,8 @@ const mapBindings: Record<string, HotkeyHandler> = {
   'mod+shift+z, mod+y': guarded(() => useEditorStore.getState().redo()),
   'mod+z': guarded(() => useEditorStore.getState().undo()),
   'mod+d': guarded(() => useEditorStore.getState().duplicateSelection()),
-  'delete, backspace': guarded(() => {
-    const s = useEditorStore.getState();
-    if (s.selection.length === 0) return false;
-    s.deleteSelection();
-  }),
+  'mod+a': guarded(() => selectAll()),
+  'delete, backspace': guarded(() => deleteUnlockedSelection()),
   escape: guarded(() => {
     const s = useEditorStore.getState();
     if (s.tool === 'select' && s.selection.length === 0) return false;
@@ -124,7 +184,7 @@ const saveBindings: Record<string, HotkeyHandler> = {
 };
 
 /**
- * Editor shortcuts: Ctrl+Z / Ctrl+Mayús+Z / Ctrl+Y, Supr/⌫, Ctrl+D, Ctrl+S, tool letters
+ * Editor shortcuts: Ctrl+Z / Ctrl+Mayús+Z / Ctrl+Y, Supr/⌫, Ctrl+D, Ctrl+A, Ctrl+S, tool letters
  * (V H B L R E T M W I F D N S X), Esc (selection tool + clear selection) and arrow-key nudging
  * (1 px, Mayús: one grid cell). Letters and arrows never fire while typing in a field.
  */

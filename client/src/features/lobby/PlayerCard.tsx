@@ -6,7 +6,7 @@ import { Badge, withAlpha } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { useCategories } from '../../stores/categories';
 import { useSessionStore } from '../../stores/session';
-import { HeroCard, heroRuleWarnings } from './HeroCard';
+import { HeroCard, heroRuleWarnings, useResolvedCategoryIds } from './HeroCard';
 
 export interface PlayerCardProps {
   player: SessionPlayer;
@@ -24,8 +24,9 @@ export interface PlayerCardProps {
 export function PlayerCard({ player, isMe, viewerIsDm, rules, onKick, kicking = false, index = 0 }: PlayerCardProps) {
   const hero = useSessionStore((s) => (player.heroId ? s.view?.state.heroes[player.heroId] ?? null : null));
   const { byId } = useCategories('hero');
+  const categoryIds = useResolvedCategoryIds(hero?.id, hero?.categoryIds);
   const ready = player.ready && !!player.heroId;
-  const warnings = hero && (viewerIsDm || isMe) ? heroRuleWarnings(hero, rules, byId) : [];
+  const warnings = hero && (viewerIsDm || isMe) ? heroRuleWarnings({ ...hero, categoryIds }, rules, byId) : [];
 
   return (
     <article

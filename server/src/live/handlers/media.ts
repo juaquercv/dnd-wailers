@@ -276,8 +276,12 @@ async function spellCast(
   }
 
   if (!caster && hero) caster = (ctx.isDm ? undefined : heroTokenOf(state, ctx.userId)) ?? heroTokenForHero(state, hero.id);
+  if (!ctx.isDm && caster && (caster.zoneId !== zone.id || caster.levelId !== level.id)) {
+    throw new HandlerError('Solo puedes lanzar hechizos donde está tu héroe');
+  }
   const sameLevel = caster !== undefined && caster.zoneId === zone.id && caster.levelId === level.id;
   const casterName = hero?.name ?? caster?.name ?? null;
+  const hiddenCaster = caster !== undefined && caster.hidden;
 
   const fx: FxEvent = {
     kind: 'spell',
@@ -291,9 +295,17 @@ async function spellCast(
     radius: gridSize(level) * 1.5,
     label: spellName,
   };
-  manager.emitEvent(ctx.session, { type: 'fx', fx }, { kind: 'all' });
+  if (hiddenCaster) {
+    // Players see the effect land, but not where a hidden caster stands.
+    manager.emitEvent(ctx.session, { type: 'fx', fx }, { kind: 'dm' });
+    const players = Object.keys(state.players).filter((uid) => uid !== state.hostUserId);
+    if (players.length > 0) {
+      manager.emitEvent(ctx.session, { type: 'fx', fx: { ...fx, fromX: null, fromY: null, label: null } }, { kind: 'users', userIds: players });
+    }
+  } else {
+    manager.emitEvent(ctx.session, { type: 'fx', fx }, { kind: 'all' });
+  }
 
-  const hiddenCaster = caster !== undefined && caster.hidden;
   const text = casterName ? `✨ ${casterName} lanza ${spellName}` : `✨ Se lanza ${spellName} en ${zoneLabel(zone, level)}`;
   try {
     await manager.log(ctx.session, { type: 'fx', text, actorUserId: ctx.userId, visibility: hiddenCaster ? 'dm' : 'all' });

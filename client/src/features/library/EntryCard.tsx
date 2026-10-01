@@ -68,6 +68,7 @@ export function EntryCard({ entry, selected = false, onOpen, onToggleFavorite }:
     <article
       role="button"
       tabIndex={0}
+      data-entry-id={entry.id}
       onClick={() => onOpen(entry)}
       onKeyDown={(ev) => onActivateKey(ev, () => onOpen(entry))}
       aria-label={entry.name}
@@ -185,6 +186,7 @@ export function EntryTable({ kind, entries, selectedId, onOpen, onToggleFavorite
               <tr
                 key={entry.id}
                 tabIndex={0}
+                data-entry-id={entry.id}
                 onClick={() => onOpen(entry)}
                 onKeyDown={(ev) => onActivateKey(ev, () => onOpen(entry))}
                 className={clsx(

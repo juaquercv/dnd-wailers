@@ -71,7 +71,10 @@ export function CampaignCard({ campaign, manaName, isOwner, ownerColor, index, b
             className="aspect-[16/9] w-full"
           />
           <div className="absolute inset-x-3 top-3 flex items-start justify-between gap-2">
-            <MagicModeBadge mode={campaign.magicMode} manaName={manaName} className="shadow-lg backdrop-blur-sm" />
+            {/* Dark backdrop keeps the translucent badge readable on light cover art. */}
+            <span className="inline-flex rounded-full bg-ink-950/85 shadow-lg backdrop-blur-sm">
+              <MagicModeBadge mode={campaign.magicMode} manaName={manaName} />
+            </span>
             <span className="chip border-ink-500/70 bg-ink-950/75 text-parchment-100 shadow-lg backdrop-blur-sm">
               <MapIcon className="h-3 w-3 text-gold-400" />
               {plural(campaign.zoneCount, 'zona', 'zonas')}

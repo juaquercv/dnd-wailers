@@ -597,6 +597,19 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       if (selection.length > 0) {
         items.push({ label: `Mover selección aquí (${selection.length})`, icon: <Move />, onClick: () => moveSelectionTo(world) });
       }
+      const withHero = Object.values(state.players).filter((p) => p.heroId && p.userId !== state.hostUserId).length;
+      if (withHero > 0) {
+        items.push({
+          label: 'Traer aquí a los héroes',
+          icon: <Users />,
+          onClick: () =>
+            void send(
+              'token:placeHeroes',
+              { target: { zoneId: zone.id, levelId: level.id, x: world.x, y: world.y } },
+              'No se pudo colocar a los héroes',
+            ).then((ok) => ok && toast.success('Los héroes aparecen en este punto')),
+        });
+      }
       const shown = new Set(revealed);
       for (const region of level.fogRegions) {
         if (region.points.length < 6 || !pointInPolygon(world, region.points)) continue;
@@ -785,6 +798,20 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     // Only on zone/level changes (initial mount included).
   }, [fitKey]);
 
+  // Players: follow the own token when it arrives on the displayed level (transfers, DM moves between
+  // zones). The zone list and the state can arrive in any order, so the zone switch alone is not enough.
+  const ownLoc = ownToken ? `${ownToken.zoneId}:${ownToken.levelId}` : null;
+  const lastOwnLocRef = useRef<string | null>(ownLoc);
+  useEffect(() => {
+    const prev = lastOwnLocRef.current;
+    lastOwnLocRef.current = ownLoc;
+    if (isDm || !ownLoc || ownLoc === prev) return undefined;
+    const own = levelTokensRef.current.find((t) => isOwnHeroToken(state, t, meUserId));
+    if (!own) return undefined;
+    return gameCamera.whenReady((h) => h.centerOn(own.x, own.y, gameCamera.scaleForCells(12)));
+    // Only when the own token changes level.
+  }, [ownLoc]);
+
   useUiEvent('center-on-token', ({ tokenId }) => {
     const full = useSessionStore.getState().view?.state;
     const t = state.tokens[tokenId] ?? (isDm ? full?.tokens[tokenId] : undefined);
@@ -874,14 +901,15 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       </div>
 
       {activeTransition && activeTransition.target && !modeActive && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center px-4">
+        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center pl-4 pr-16">
           <Button
             variant="primary"
             size="lg"
             epic
-            className="pointer-events-auto animate-pop shadow-glow-gold"
+            className="pointer-events-auto max-w-full animate-pop shadow-glow-gold"
             icon={<span aria-hidden>{TRANSITION_STYLES[activeTransition.transitionType].icon}</span>}
             onClick={() => void takeTransition(activeTransition)}
+            title={`Usar ${activeTransition.label || TRANSITION_STYLES[activeTransition.transitionType].label}`}
           >
             Usar {activeTransition.label || TRANSITION_STYLES[activeTransition.transitionType].label}
           </Button>

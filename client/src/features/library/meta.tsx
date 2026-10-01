@@ -88,10 +88,19 @@ export const KIND_ACCENT: Record<EntryKind, string> = {
   hero: '#f59e5b',
 };
 
+/** Lowercases a label for use mid-sentence, keeping acronyms ("Enemigos y NPCs" → "enemigos y NPCs"). */
+export function lowerLabel(text: string): string {
+  return text.replace(/[\p{L}\p{N}]+/gu, (word) => {
+    const letters = word.replace(/[^\p{L}]/gu, '');
+    const upper = letters.replace(/s$/, '');
+    return upper.length >= 2 && upper === upper.toUpperCase() ? word : word.toLowerCase();
+  });
+}
+
 /** "Nuevo enemigo/NPC", "Nueva zona/mapa"… */
 export function newEntryLabel(kind: EntryKind): string {
   const feminine = kind === 'zone';
-  return `${feminine ? 'Nueva' : 'Nuevo'} ${ENTRY_KIND_LABELS[kind].singular.toLowerCase()}`;
+  return `${feminine ? 'Nueva' : 'Nuevo'} ${lowerLabel(ENTRY_KIND_LABELS[kind].singular)}`;
 }
 
 export const SPELL_ANIMATION_COLORS: Record<SpellAnimation, string> = {

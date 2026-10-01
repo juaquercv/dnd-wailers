@@ -38,7 +38,7 @@ export function releaseHeroIfUnused(manager: SessionManager, session: LiveSessio
   }
 }
 
-async function loadHeroSheet(manager: SessionManager, ctx: HandlerCtx, heroId: string): Promise<{ sheet: HeroSheet; adapted: boolean }> {
+async function loadHeroSheet(ctx: HandlerCtx, heroId: string): Promise<{ sheet: HeroSheet; adapted: boolean }> {
   const live = ctx.session.state.heroes[heroId];
   if (live) {
     if (live.ownerId !== ctx.userId) throw new HandlerError('Ese héroe no es tuyo');
@@ -80,7 +80,7 @@ async function selectHero(manager: SessionManager, ctx: HandlerCtx, heroIdRaw: u
   const takenBy = (state: LiveState): boolean => Object.values(state.players).some((p) => p.userId !== userId && p.heroId === heroId);
   if (takenBy(session.state)) throw new HandlerError('Otro jugador ya ha elegido ese héroe');
 
-  const { sheet, adapted } = await loadHeroSheet(manager, ctx, heroId);
+  const { sheet, adapted } = await loadHeroSheet(ctx, heroId);
 
   // The state may have changed while the hero was loading.
   if (!session.state.players[userId]) throw new HandlerError('Ya no formas parte de esta partida');

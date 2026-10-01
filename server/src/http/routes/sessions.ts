@@ -3,8 +3,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { createLiveState, effectiveVisibility, newId, type LiveState, type LogEntry, type LogType, type SessionSummary } from '@wailers/shared';
 import { prisma } from '../../db';
-import { getManager, type SessionManager } from '../../live/index';
-import { parseLiveState, parseStatus } from '../../live/persistence';
+import { getManager, type RunningSession, type SessionManager } from '../../live/index';
+import { parseLiveState } from '../../live/persistence';
+import { HandlerError } from '../../live/types';
 import { campaignInclude, campaignToDTO, logToDTO, sessionInclude, toJson } from '../../services/serializers';
 import { requireUser } from '../auth';
 import { HttpError, badRequest, conflict, forbidden, notFound } from '../errors';
@@ -79,7 +80,8 @@ function logVisibilityFilter(state: LiveState, userId: string): Prisma.SessionLo
     { OR: [{ visibility: 'all' }, { visibility: 'user', OR: [{ targetUserId: userId }, { actorUserId: userId }] }] },
   ];
   if (!effectiveVisibility(state, userId).canSeeOthersRolls) {
-    filters.push({ NOT: { type: 'roll', actorUserId: { not: null, notIn: [userId, state.hostUserId] } } });
+    // Public rolls of other players are hidden; rolls addressed to the caller ('user') stay visible.
+    filters.push({ NOT: { type: 'roll', visibility: 'all', actorUserId: { not: null, notIn: [userId, state.hostUserId] } } });
   }
   return filters;
 }
@@ -112,25 +114,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     const userId = requireUser(request);
     const manager = engine();
     const { id } = idParams.parse(request.params);
-    const row = await prisma.gameSession.findUnique({ where: { id } });
+    const row = await prisma.gameSession.findUnique({ where: { id }, select: { hostUserId: true } });
     if (!row) throw notFound('La partida no existe');
     if (row.hostUserId !== userId) throw forbidden('Solo el DM puede reanudar la partida');
 
-    const live = manager.getRunning(id);
-    const status = live ? live.state.status : parseStatus(row.status);
-    if (status === 'lobby' || status === 'playing') throw conflict('La partida ya está activa');
-
-    if (live) {
-      await manager.resumeLoaded(live);
-    } else {
-      const state = parseLiveState(row);
-      state.status = 'lobby';
-      for (const player of Object.values(state.players)) {
-        player.connected = false;
-        player.ready = false;
-      }
-      await prisma.gameSession.update({ where: { id }, data: { status: 'lobby', state: toJson(state) } });
+    // Resumed through the engine (loaded if needed) so a copy in memory can never overwrite the change.
+    let live: RunningSession;
+    try {
+      live = await manager.loadRunning(id);
+    } catch (err) {
+      if (err instanceof HandlerError) throw conflict(err.message);
+      throw err;
     }
+    const status = live.state.status;
+    if (status === 'lobby' || status === 'playing') throw conflict('La partida ya está activa');
+    await manager.resumeLoaded(live);
     manager.broadcastSessionsList();
     return summaryById(manager, id);
   });

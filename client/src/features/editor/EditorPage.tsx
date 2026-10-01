@@ -42,6 +42,7 @@ import { RulesEditor } from './RulesEditor';
 import { hasUnsavedWork, retrySave, saveCampaign } from './shell/campaignSave';
 import { InlineEdit } from './shell/InlineEdit';
 import { SaveIndicator, useSaveStatus } from './shell/SaveIndicator';
+import { SideTabs, type SideTab } from './shell/SideTabs';
 import { stopSoundPreview } from './shell/SoundPicker';
 import { TemplatePickerModal } from './shell/TemplateModals';
 import { useZoneActions } from './shell/zoneActions';
@@ -148,14 +149,14 @@ function EditorTopBar({ campaign }: { campaign: Campaign }) {
       />
       <IconButton icon={<ArrowLeft />} title="Volver a las campañas" size="sm" onClick={() => navigate('/campanas')} />
       <D20Icon size={26} className="hidden shrink-0 drop-shadow-[0_0_8px_rgba(233,192,99,0.45)] sm:block" />
-      <div className="flex min-w-0 max-w-[15rem] flex-col leading-none lg:max-w-[18rem]">
+      <div className="flex min-w-0 max-w-[12rem] flex-col leading-none lg:max-w-[16rem] 2xl:max-w-[22rem]">
         <span className="pl-0.5 text-[9px] font-semibold uppercase tracking-[0.22em] text-gold-500/80">Editor de campaña</span>
         <InlineEdit
           value={campaign.name}
           onCommit={(name) => void saveCampaign({ name })}
           label="Nombre de la campaña"
           maxLength={80}
-          className="-ml-1 font-display text-sm font-semibold tracking-wide text-parchment-50"
+          className="relative -left-1.5 font-display text-sm font-semibold tracking-wide text-parchment-50"
         />
       </div>
       <span className="divider-vertical hidden md:block" aria-hidden />
@@ -207,12 +208,22 @@ function CollapsedRail({ side, label, onOpen }: { side: 'left' | 'right'; label:
   );
 }
 
+/** Last side tab, kept while the page lives (switching modes remounts the workspace). */
+let lastRightTab: RightTab = 'properties';
+
 function SidePanel({ onCollapse }: { onCollapse: () => void }) {
-  const [tab, setTab] = useState<RightTab>('properties');
-  const [libraryVisited, setLibraryVisited] = useState(false);
+  const [tab, setTab] = useState<RightTab>(lastRightTab);
+  const [libraryVisited, setLibraryVisited] = useState(lastRightTab === 'library');
   const selectionCount = useEditorStore((s) => s.selection.length);
   const levelCount = useEditorStore((s) => s.zones.find((z) => z.id === s.currentZoneId)?.levels.length ?? 0);
   const prevCount = useRef(selectionCount);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // What the panel is showing: a new zone, level or selected object starts at the top.
+  const contextKey = useEditorStore((s) => `${s.currentZoneId ?? ''}:${s.currentLevelId ?? ''}:${s.selection[0]?.id ?? ''}`);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [contextKey, tab]);
 
   // Selecting something on the map brings the properties forward (except while browsing the library).
   useEffect(() => {
@@ -221,25 +232,25 @@ function SidePanel({ onCollapse }: { onCollapse: () => void }) {
   }, [selectionCount]);
 
   useEffect(() => {
+    lastRightTab = tab;
     if (tab === 'library') setLibraryVisited(true);
   }, [tab]);
 
-  const items: TabItem<RightTab>[] = RIGHT_TABS.map((t) => ({
+  const items: SideTab<RightTab>[] = RIGHT_TABS.map((t) => ({
     id: t.id,
     icon: t.icon,
-    title: t.label,
-    label: t.id === tab ? t.label : <span className="sr-only">{t.label}</span>,
-    badge: t.id === 'properties' && selectionCount > 0 ? selectionCount : t.id === 'levels' && levelCount > 1 ? levelCount : undefined,
+    label: t.label,
+    badge: t.id === 'properties' ? selectionCount : t.id === 'levels' && levelCount > 1 ? levelCount : undefined,
   }));
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-ink-700/80 px-1.5 pt-1">
-        <Tabs<RightTab> items={items} value={tab} onChange={setTab} size="sm" className="min-w-0 flex-1 border-b-0" aria-label="Paneles del editor" />
-        <IconButton icon={<PanelRightClose />} title="Ocultar panel" size="xs" onClick={onCollapse} className="mb-1" />
+      <div className="flex shrink-0 items-end gap-1 border-b border-ink-700/80 px-1.5 pt-1">
+        <SideTabs<RightTab> items={items} value={tab} onChange={setTab} className="min-w-0 flex-1" aria-label="Paneles del editor" />
+        <IconButton icon={<PanelRightClose />} title="Ocultar panel" size="xs" onClick={onCollapse} className="mb-1.5 shrink-0" />
       </div>
       {tab !== 'library' && (
-        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <div ref={scrollRef} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
           {tab === 'properties' && <PropertiesPanel />}
           {tab === 'layers' && <LayersPanel />}
           {tab === 'levels' && <LevelsPanel />}
@@ -345,10 +356,22 @@ function ZoneWorkspace() {
 // Other modes
 // ---------------------------------------------------------------------------
 
-function ScrollPage({ children }: { children: ReactNode }) {
+/** Full-height page with a title for tools that manage their own inner scroll (rollers). */
+function FixedPage({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
   return (
-    <div className="scroll-thin h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">{children}</div>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col px-4 pb-4 pt-6 sm:px-6">
+        <header className="mb-4 flex shrink-0 items-start gap-3">
+          <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gold-700/50 bg-gold-500/10 text-gold-300 [&>svg]:h-5 [&>svg]:w-5">
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <h2 className="title-epic text-2xl">{title}</h2>
+            <p className="mt-1 text-sm text-parchment-300">{description}</p>
+          </div>
+        </header>
+        <div className="min-h-0 flex-1">{children}</div>
+      </div>
     </div>
   );
 }
@@ -397,22 +420,27 @@ function ModeContent({ mode, campaign, zones }: { mode: Exclude<EditorMode, 'zon
         </div>
       );
     case 'rules':
+      // RulesEditor and CampaignSettingsPanel own their scroll container.
       return (
-        <ScrollPage>
+        <div className="h-full min-h-0">
           <RulesEditor rules={campaign.rules} onChange={(rules) => void saveCampaign({ rules })} />
-        </ScrollPage>
+        </div>
       );
     case 'rollers':
       return (
-        <ScrollPage>
+        <FixedPage
+          icon={<Dices />}
+          title="Ruletas y dados"
+          description="Ruletas de eventos, botín o encuentros y dados personalizados de esta campaña. Sus resultados son solo visuales: tú decides qué pasa."
+        >
           <RollerManager campaignId={campaign.id} />
-        </ScrollPage>
+        </FixedPage>
       );
     case 'settings':
       return (
-        <ScrollPage>
+        <div className="h-full min-h-0">
           <CampaignSettingsPanel campaign={campaign} zones={zones} onChange={(patch) => void saveCampaign(patch)} />
-        </ScrollPage>
+        </div>
       );
   }
 }
