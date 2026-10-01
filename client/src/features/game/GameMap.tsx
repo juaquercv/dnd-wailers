@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import type Konva from 'konva';
 import { DoorOpen, Eye, EyeOff, LocateFixed, Map as MapIcon, Maximize, Move, Radar, Shield, Users } from 'lucide-react';
 import {
+  allowedZoneIds,
   decodeExplored,
   emptyZoneLiveState,
   filterZoneForPlayer,
@@ -61,10 +62,12 @@ import { api } from '../../api/http';
 import { useTokenContextMenu } from './TokenContextMenu';
 import { goToZone, request, send, sendMany, spellFxAt, transferTokens } from './map/actions';
 import { gameCamera, useGameCamera } from './map/camera';
+import { unrevealedFogPolygons } from './map/fog';
 import { facingTowards, findFreeSpots, placeToken, pointInTransition, tokenAtPoint } from './map/geometry';
 import { useGameUi } from './map/gameUi';
 import { MarqueeRect, SPELL_COLORS, StageTapBinder, TargetReticle, type MarqueeBox } from './map/Indicators';
 import { MapToolbar } from './map/MapToolbar';
+import { buildQuickActions } from './map/quickActions';
 import { TokensGroup, type TokenHandlers, type TokenPointerEvent, type TokenView } from './map/TokensGroup';
 import { TransitionHotspots, type TransitionPointerEvent } from './map/TransitionHotspots';
 import { useRemoteDrags } from './map/useRemoteDrags';
@@ -115,6 +118,12 @@ export function GameMap() {
   const rawZone = viewZone ? zonesById[viewZone.zoneId] ?? null : null;
   const zone = useMemo(() => (rawZone && isDm && isPreview ? filterZoneForPlayer(rawZone) : rawZone), [rawZone, isDm, isPreview]);
   const level = findLevel(zone, viewZone?.levelId);
+  // "Ver como jugador": a zone the player does not receive at all is not shown as an empty map.
+  const fullState = view?.state ?? null;
+  const previewBlocked = useMemo(() => {
+    if (!isDm || !isPreview || !asUserId || !fullState || !rawZone) return false;
+    return !allowedZoneIds(fullState, zones, asUserId).includes(rawZone.id);
+  }, [isDm, isPreview, asUserId, fullState, zones, rawZone]);
 
   if (!view || !state || !effective) {
     return (
@@ -122,6 +131,9 @@ export function GameMap() {
         <Spinner size="lg" label="Cargando el mapa…" showLabel />
       </div>
     );
+  }
+  if (previewBlocked && rawZone && asUserId) {
+    return <PreviewBlockedZone state={view.state} userId={asUserId} zoneName={rawZone.name} />;
   }
   if (!zone || !level) {
     return (
@@ -154,6 +166,35 @@ export function GameMap() {
       level={level}
       zones={zones}
     />
+  );
+}
+
+/** DM preview of a player looking at a zone that player does not receive. */
+function PreviewBlockedZone({ state, userId, zoneName }: { state: LiveState; userId: string; zoneName: string }) {
+  const name = state.players[userId]?.name ?? 'Este jugador';
+  const own = Object.values(state.tokens).find((t) => isOwnHeroToken(state, t, userId)) ?? null;
+  return (
+    <div className="absolute inset-0 flex items-center justify-center p-6">
+      <div className="panel max-w-md">
+        <EmptyState
+          icon={<EyeOff />}
+          title="Este jugador no ve esta zona"
+          description={`${name} no recibe nada de «${zoneName}»: solo ve las zonas donde están sus fichas (o las del grupo con visión compartida), salvo que le permitas ver otras zonas.`}
+          action={
+            <>
+              {own && (
+                <Button variant="primary" size="sm" icon={<LocateFixed />} onClick={() => goToZone(own.zoneId, own.levelId, { x: own.x, y: own.y })}>
+                  Ir a su zona
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => useSessionStore.getState().setViewAs(null)}>
+                Salir de la vista previa
+              </Button>
+            </>
+          }
+        />
+      </div>
+    </div>
   );
 }
 
@@ -215,11 +256,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   }, [zone.id, level.id, level.background.width, level.background.height, level.grid]);
 
   // --- tokens of this level -------------------------------------------------------
-  const unrevealedFog = useMemo(() => {
-    if (!asPlayer) return [] as number[][];
-    const shown = new Set(revealed);
-    return level.fogRegions.filter((r) => !shown.has(r.id) && r.points.length >= 6).map((r) => r.points);
-  }, [asPlayer, level.fogRegions, revealed]);
+  const unrevealedFog = useMemo(() => (asPlayer ? unrevealedFogPolygons(level, revealed) : []), [asPlayer, level, revealed]);
 
   const levelTokens = useMemo(() => {
     const list = Object.values(state.tokens).filter((t) => {
@@ -231,10 +268,12 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     return list.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
   }, [state.tokens, zone.id, level.id, unrevealedFog]);
 
-  const ownToken = useMemo(
-    () => (!isDm ? levelTokens.find((t) => isOwnHeroToken(state, t, meUserId)) ?? null : null),
-    [isDm, levelTokens, state, meUserId],
+  // Hero token the camera follows: the own one, or the previewed player's one in "Ver como jugador".
+  const followToken = useMemo(
+    () => (asPlayer && asUserId ? levelTokens.find((t) => isOwnHeroToken(state, t, asUserId)) ?? null : null),
+    [asPlayer, asUserId, levelTokens, state],
   );
+  const ownToken = isDm ? null : followToken;
 
   // HP objects are reused while unchanged so memoized sprites do not re-render.
   const hpCache = useRef(new Map<string, TokenHpInfo>());
@@ -765,7 +804,11 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
         break;
       }
       case 'sound':
-        void send('audio:sfx', { soundId: entry.id }, 'No se pudo reproducir el sonido');
+        // Same action as the quick search: music / ambience go to their channel, effects play once.
+        void api.library
+          .get<'sound'>(entry.id)
+          .then((full) => buildQuickActions(full)[0]?.run())
+          .catch((err: unknown) => toast.fromError(err, 'No se pudo cargar el sonido'));
         break;
       case 'spell':
         void api.library
@@ -790,27 +833,25 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     if (focus) {
       return gameCamera.whenReady((h) => h.centerOn(focus.x, focus.y, focus.scale ?? Math.max(h.getScale(), gameCamera.scaleForCells(18) ?? 0)));
     }
-    if (!isDm) {
-      const own = levelTokensRef.current.find((t) => isOwnHeroToken(state, t, meUserId));
-      if (own) return gameCamera.whenReady((h) => h.centerOn(own.x, own.y, gameCamera.scaleForCells(12)));
-    }
+    const own = followToken;
+    if (own) return gameCamera.whenReady((h) => h.centerOn(own.x, own.y, gameCamera.scaleForCells(12)));
     return undefined;
     // Only on zone/level changes (initial mount included).
   }, [fitKey]);
 
-  // Players: follow the own token when it arrives on the displayed level (transfers, DM moves between
-  // zones). The zone list and the state can arrive in any order, so the zone switch alone is not enough.
-  const ownLoc = ownToken ? `${ownToken.zoneId}:${ownToken.levelId}` : null;
-  const lastOwnLocRef = useRef<string | null>(ownLoc);
+  // Players (and the DM preview): follow the hero token when it arrives on the displayed level (transfers,
+  // DM moves between zones). The zone list and the state can arrive in any order, so the zone switch alone
+  // is not enough.
+  const followLoc = followToken ? `${asUserId ?? ''}|${followToken.zoneId}:${followToken.levelId}` : null;
+  const lastFollowLocRef = useRef<string | null>(followLoc);
   useEffect(() => {
-    const prev = lastOwnLocRef.current;
-    lastOwnLocRef.current = ownLoc;
-    if (isDm || !ownLoc || ownLoc === prev) return undefined;
-    const own = levelTokensRef.current.find((t) => isOwnHeroToken(state, t, meUserId));
-    if (!own) return undefined;
+    const prev = lastFollowLocRef.current;
+    lastFollowLocRef.current = followLoc;
+    const own = followToken;
+    if (!followLoc || followLoc === prev || !own) return undefined;
     return gameCamera.whenReady((h) => h.centerOn(own.x, own.y, gameCamera.scaleForCells(12)));
-    // Only when the own token changes level.
-  }, [ownLoc]);
+    // Only when the followed token changes level (or the previewed player changes).
+  }, [followLoc]);
 
   useUiEvent('center-on-token', ({ tokenId }) => {
     const full = useSessionStore.getState().view?.state;
@@ -865,7 +906,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
         onViewChange={(v) => useGameCamera.getState().setScale(v.scale)}
         background="#070605"
       >
-        <LevelStack zone={zone} currentLevelId={level.id} viewOffset={ZERO_OFFSET} />
+        <LevelStack zone={zone} currentLevelId={level.id} viewOffset={ZERO_OFFSET} viewer={dmView ? 'dm' : 'player'} revealedFog={revealed} />
         <CombinedLayer listening={false}>
           <LevelBackground level={level} />
           <SceneElementsLayer level={level} layers={dmView ? DM_LAYERS : PLAYER_LAYERS} showHidden={dmView} excludeTypes={LIVE_EXCLUDE} />
@@ -885,8 +926,9 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
           <StageTapBinder onTap={onStageTap} />
         </CombinedLayer>
         <LightingOverlay level={level} lighting={lighting} lights={level.lights} tokenLights={tokenLights} animate doorStates={doorStates} />
-        {asPlayer && <VisionMask level={level} mode={effective.visionMode} polygons={visionPolygons} explored={explored} />}
+        {/* Spell fx below the vision mask: players never see effects in areas they cannot see. */}
         <MapFxLayer zoneId={zone.id} levelId={level.id} />
+        {asPlayer && <VisionMask level={level} mode={effective.visionMode} polygons={visionPolygons} explored={explored} />}
         <CombinedLayer listening={false}>
           <PingLayer zoneId={zone.id} levelId={level.id} />
           {cast && reticle && <TargetReticle x={reticle.x} y={reticle.y} radius={castRadius} color={castColor} />}

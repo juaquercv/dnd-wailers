@@ -9,6 +9,7 @@ import {
   isOwnHeroToken,
   tokenHp,
   visibleAreas,
+  visionCellsFor,
   visionTokensFor,
 } from '../view';
 import { pointInAnyPolygon } from '../vision';
@@ -59,6 +60,18 @@ describe('vision sources and allowed zones', () => {
     const { state } = fixture();
     withVisibility(state, { sharedVision: true });
     expect(visionTokensFor(state, 'juan').map((t) => t.id).sort()).toEqual(['t_juan', 't_pat']);
+  });
+
+  it('keeps the own hidden hero as a source but never another player hidden hero', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { sharedVision: true, canSeeOtherZones: false });
+    state.tokens.t_pat!.hidden = true;
+    expect(visionTokensFor(state, 'juan').map((t) => t.id)).toEqual(['t_juan']);
+    expect(allowedZoneIds(state, zones, 'juan')).toEqual(['A']);
+    expect(visionTokensFor(state, 'patrick').map((t) => t.id).sort()).toEqual(['t_juan', 't_pat']);
+    withVisibility(state, { sharedVision: false });
+    state.tokens.t_juan!.hidden = true;
+    expect(visionTokensFor(state, 'juan').map((t) => t.id)).toEqual(['t_juan']);
   });
 
   it('recognises own hero tokens by owner or selected hero', () => {
@@ -120,6 +133,32 @@ describe('visibleAreas', () => {
     expect(pointInAnyPolygon({ x: 600, y: 500 }, polys)).toBe(false);
   });
 
+  it('lets a per-player radius override the hero visionCells, but not the global radius', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { visionMode: 'vision', sharedVision: false, visionRadius: 1 });
+    state.heroes.h_juan!.data.visionCells = 8;
+    // Global radius 1: the hero still sees 8 cells (400 px).
+    let polys = visibleAreas(state, zones, 'juan').lvl_A!;
+    expect(pointInAnyPolygon({ x: 850, y: 500 }, polys)).toBe(true);
+    expect(visionCellsFor(state, state.tokens.t_juan!, effectiveVisibility(state, 'juan'), 'juan')).toBe(8);
+
+    // Explicit radius for juan: wins over the hero visionCells.
+    state.visibility.perPlayer.juan = { visionRadius: 1 };
+    polys = visibleAreas(state, zones, 'juan').lvl_A!;
+    expect(pointInAnyPolygon({ x: 540, y: 500 }, polys)).toBe(true);
+    expect(pointInAnyPolygon({ x: 600, y: 500 }, polys)).toBe(false);
+    expect(visionCellsFor(state, state.tokens.t_juan!, effectiveVisibility(state, 'juan'), 'juan')).toBe(1);
+    expect(buildPlayerView(state, zones, 'juan').tokens.t_gob).toBeUndefined();
+
+    // The player view (own perPlayer entry only) computes the same areas as the server.
+    const view = buildPlayerView(state, zones, 'juan');
+    expect(visibleAreas(view, zones, 'juan')).toEqual(visibleAreas(state, zones, 'juan'));
+
+    // Another player's override does not change juan's vision.
+    state.visibility.perPlayer = { patrick: { visionRadius: 1 } };
+    expect(pointInAnyPolygon({ x: 850, y: 500 }, visibleAreas(state, zones, 'juan').lvl_A!)).toBe(true);
+  });
+
   it('respects walls and door states', () => {
     const { state, zones } = fixture();
     withVisibility(state, { visionMode: 'vision', sharedVision: false });
@@ -166,6 +205,31 @@ describe('buildPlayerView', () => {
     expect(Object.keys(buildPlayerView(state, zones, 'juan').tokens)).toContain('t_other');
     withVisibility(state, { canSeeOtherZones: false, sharedVision: false });
     expect(Object.keys(buildPlayerView(state, zones, 'juan').tokens).sort()).toEqual(['t_far', 't_gob', 't_item', 't_juan', 't_npc']);
+  });
+
+  it('keeps the own hero token when hidden, so the player still sees through it', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { visionMode: 'vision', sharedVision: false, visionRadius: 6, canSeeOtherZones: true });
+    state.tokens.t_juan!.hidden = true;
+    const view = buildPlayerView(state, zones, 'juan');
+    expect(view.tokens.t_juan).toBeDefined();
+    expect(view.tokens.t_gob).toBeDefined();
+    const areas = visibleAreas(view, zones, 'juan');
+    expect(areas.lvl_A).toHaveLength(1);
+    expect(areas).toEqual(visibleAreas(state, zones, 'juan'));
+    // Other players never receive it.
+    withVisibility(state, { visionMode: 'all', sharedVision: true });
+    expect(buildPlayerView(state, zones, 'patrick').tokens.t_juan).toBeUndefined();
+  });
+
+  it('with shared vision, a hidden hero of another player is neither sent nor a vision source', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { visionMode: 'vision', sharedVision: true, visionRadius: 6, canSeeOtherZones: true });
+    state.tokens.t_pat!.hidden = true;
+    const view = buildPlayerView(state, zones, 'juan');
+    expect(view.tokens.t_pat).toBeUndefined();
+    expect(visibleAreas(view, zones, 'juan')).toEqual(visibleAreas(state, zones, 'juan'));
+    expect(Object.keys(visibleAreas(state, zones, 'juan'))).toEqual(['lvl_A']);
   });
 
   it('in "vision" mode drops non-hero tokens outside the visible area but keeps heroes', () => {
@@ -308,6 +372,46 @@ describe('buildPlayerView', () => {
     withVisibility(state, { canSeeInitiative: true });
     view = buildPlayerView(state, zones, 'juan');
     expect(view.turn.order).toHaveLength(1);
+  });
+
+  it('anonymizes initiative entries of hidden creatures, in game and in the lobby', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { canSeeInitiative: true });
+    state.tokens.t_juan!.hidden = true;
+    state.turn = {
+      mode: 'manual',
+      order: [
+        { id: 'e1', type: 'npc', userId: null, heroId: null, tokenId: 't_hidden', name: 'Jefe secreto', imageUrl: '/boss.svg', initiative: 18 },
+        { id: 'e2', type: 'creature', userId: null, heroId: null, tokenId: 't_gob', name: 'Goblin', imageUrl: '/gob.svg', initiative: 12 },
+        { id: 'e3', type: 'player', userId: 'juan', heroId: 'h_juan', tokenId: 't_juan', name: 'Héroe juan', imageUrl: null, initiative: 10 },
+        { id: 'e4', type: 'custom', userId: null, heroId: null, tokenId: null, name: 'Trampa', imageUrl: null, initiative: 5 },
+      ],
+      currentIndex: 0,
+      round: 2,
+    };
+    const snapshot = JSON.stringify(state.turn);
+    for (const status of ['playing', 'lobby'] as const) {
+      state.status = status;
+      const view = buildPlayerView(state, zones, 'patrick');
+      expect(view.turn.currentIndex).toBe(0);
+      expect(view.turn.order.map((e) => e.id)).toEqual(['e1', 'e2', 'e3', 'e4']);
+      expect(view.turn.order[0]).toEqual({
+        id: 'e1',
+        type: 'creature',
+        userId: null,
+        heroId: null,
+        tokenId: 't_hidden',
+        name: 'Criatura desconocida',
+        imageUrl: null,
+        initiative: null,
+      });
+      expect(view.turn.order.slice(1)).toEqual(state.turn.order.slice(1));
+      expect(JSON.stringify(view.turn)).not.toContain('Jefe secreto');
+      expect(JSON.stringify(view.turn)).not.toContain('/boss.svg');
+    }
+    expect(JSON.stringify(state.turn)).toBe(snapshot);
+    // The DM keeps the full entry.
+    expect(buildPlayerView(state, zones, 'dm').turn.order[0]!.name).toBe('Jefe secreto');
   });
 
   it('keeps only the player own explored data, roll requests, trades and overrides', () => {

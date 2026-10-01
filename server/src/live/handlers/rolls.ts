@@ -140,7 +140,8 @@ function rollerResult(ctx: HandlerCtx, roller: Roller, meta: RollMeta): RollResu
 function rollAudience(state: LiveState, result: RollResult): Audience {
   switch (result.visibility) {
     case 'public': {
-      if (result.byDm) return { kind: 'all' };
+      // DM rolls and public rolls the DM asked for are for everyone («Todos verán el resultado»).
+      if (result.byDm || result.requestId) return { kind: 'all' };
       const userIds = Object.keys(state.players).filter(
         (uid) => uid !== state.hostUserId && (uid === result.rollerUserId || effectiveVisibility(state, uid).canSeeOthersRolls),
       );
@@ -244,6 +245,9 @@ async function rollRoller(
     target = { visibility: 'public', targetUserId: null };
   }
   const roller = findRoller(ctx, rollerId);
+  if (!ctx.isDm && (!roller.active || !roller.isTurnRoll)) {
+    throw new HandlerError('El DM ha retirado esa ruleta de las tiradas de turno');
+  }
   const result = rollerResult(ctx, roller, { label: roller.name, mode: 'normal', ...target, requestId: null });
   if (!ctx.isDm) {
     manager.mutate(ctx.session, (s) => {

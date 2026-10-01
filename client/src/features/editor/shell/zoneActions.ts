@@ -3,7 +3,6 @@ import type { Zone } from '@wailers/shared';
 import { toast, useConfirm } from '../../../components/ui';
 import { plural } from '../../../lib/format';
 import { useEditorStore } from '../editorStore';
-import { saveCampaign } from './campaignSave';
 import { descendantIds } from './zoneTree';
 
 export interface ZoneActions {
@@ -52,11 +51,11 @@ export function useZoneActions(): ZoneActions {
         });
         if (!ok) return false;
         try {
-          await state.deleteZone(zone.id);
           const spawn = useEditorStore.getState().campaign?.spawn;
+          // The server also removes the zone's overview pins and the spawn inside it; the store reloads the campaign.
+          await state.deleteZone(zone.id);
           if (spawn && (spawn.zoneId === zone.id || subs.has(spawn.zoneId))) {
-            void saveCampaign({ spawn: null });
-            toast.info('El punto de aparición estaba en la zona eliminada: colócalo de nuevo con la herramienta Spawn (S).');
+            toast.info('El punto de aparición estaba en la zona eliminada: colócalo de nuevo con la herramienta «Punto de aparición» (S).');
           }
           toast.success(`Zona «${zone.name}» eliminada`);
           return true;

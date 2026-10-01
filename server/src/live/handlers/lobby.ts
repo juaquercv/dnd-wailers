@@ -1,10 +1,10 @@
 import type { HeroSheet, LiveState, SpawnPoint } from '@wailers/shared';
 import { prisma } from '../../db';
-import { entryToDTO } from '../../services/serializers';
+import { entryInclude, entryToDTO } from '../../services/serializers';
 import { heroSheetFromEntry } from '../runtime';
 import type { SessionManager } from '../SessionManager';
-import { HandlerError, type AppSocket, type HandlerCtx, type LiveSession } from '../types';
-import { removeTurnEntries } from './turns';
+import { HandlerError, type AppSocket, type HandlerCtx, type LiveSession, type MutateOptions } from '../types';
+import { announceTurnStart, landAfterRemoval, removeTurnEntries, turnPointer, type TurnLanding } from './turns';
 
 /*
  * Lobby: hero selection (also for late joiners while playing), ready flag and kicking players.
@@ -44,7 +44,7 @@ async function loadHeroSheet(ctx: HandlerCtx, heroId: string): Promise<{ sheet: 
     if (live.ownerId !== ctx.userId) throw new HandlerError('Ese héroe no es tuyo');
     return { sheet: live, adapted: false };
   }
-  const row = await prisma.libraryEntry.findUnique({ where: { id: heroId } });
+  const row = await prisma.libraryEntry.findUnique({ where: { id: heroId }, include: entryInclude(null) });
   if (!row || row.kind !== 'hero') throw new HandlerError('Ese héroe no existe');
   if (row.ownerId !== ctx.userId) throw new HandlerError('Ese héroe no es tuyo');
   const entry = entryToDTO(row);
@@ -62,15 +62,25 @@ async function selectHero(manager: SessionManager, ctx: HandlerCtx, heroIdRaw: u
 
   if (heroIdRaw === null) {
     if (!session.state.players[userId]?.heroId) return null;
-    manager.mutate(session, (state) => {
-      const player = state.players[userId];
-      if (!player?.heroId) return;
-      const previous = player.heroId;
-      player.heroId = null;
-      player.ready = false;
-      removeTurnEntries(state, (e) => e.type === 'player' && e.userId === userId);
-      releaseHeroIfUnused(manager, session, state, previous);
-    });
+    const opts: MutateOptions = {};
+    const out: { landing: TurnLanding | null } = { landing: null };
+    manager.mutate(
+      session,
+      (state) => {
+        const player = state.players[userId];
+        if (!player?.heroId) return;
+        const before = turnPointer(state);
+        const previous = player.heroId;
+        player.heroId = null;
+        player.ready = false;
+        removeTurnEntries(state, (e) => e.type === 'player' && e.userId === userId);
+        releaseHeroIfUnused(manager, session, state, previous);
+        // Leaving the game during their own turn passes it to the next entry.
+        out.landing = landAfterRemoval(session, state, opts, before);
+      },
+      opts,
+    );
+    if (out.landing) announceTurnStart(manager, session, out.landing);
     manager.broadcastSessionsList();
     return null;
   }
@@ -149,11 +159,14 @@ function kick(manager: SessionManager, ctx: HandlerCtx, targetRaw: unknown): nul
   const player = session.state.players[target];
   if (!player) throw new HandlerError('Ese jugador no está en la partida');
 
+  const opts: MutateOptions = { log: { type: 'system', text: `«${player.name}» ha sido expulsado de la partida` }, persistNow: true };
+  const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     session,
     (state) => {
       const p = state.players[target];
       if (!p) return;
+      const before = turnPointer(state);
       delete state.players[target];
       if (p.heroId) releaseHeroIfUnused(manager, session, state, p.heroId);
       for (const [id, token] of Object.entries(state.tokens)) {
@@ -174,11 +187,14 @@ function kick(manager: SessionManager, ctx: HandlerCtx, targetRaw: unknown): nul
         const targets = state.projection.targets.filter((id) => id !== target);
         state.projection = targets.length > 0 ? { ...state.projection, targets } : null;
       }
+      // Kicked during their own turn: the next entry starts its turn.
+      out.landing = landAfterRemoval(session, state, opts, before);
     },
-    { log: { type: 'system', text: `«${player.name}» ha sido expulsado de la partida` }, persistNow: true },
+    opts,
   );
   manager.emitEvent(session, { type: 'kicked', reason: KICKED_REASON }, { kind: 'users', userIds: [target] });
   manager.removeSockets(session, (userId) => userId === target);
+  if (out.landing) announceTurnStart(manager, session, out.landing);
   manager.broadcastSessionsList();
   return null;
 }

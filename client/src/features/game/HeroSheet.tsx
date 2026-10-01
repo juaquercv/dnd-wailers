@@ -447,56 +447,59 @@ function NotesEditor({ heroId, value, editable }: { heroId: string; value: strin
 // ---------------------------------------------------------------------------
 
 function ResourcesBlock({ hero, rules, resEdit, manage }: { hero: HeroSheetData; rules: RuleSystem; resEdit: boolean; manage: boolean }) {
-  const confirm = useConfirm();
   const mode = rules.magic.mode;
-  const res = hero.data.resources;
-  if (mode === 'none') return null;
-
-  if (mode === 'mana') {
-    return (
-      <Block icon={<Sparkles />} title={rules.magic.manaName || 'Recurso'} tone="arcane">
-        <ManaBar
-          showLabel={false}
-          name={rules.magic.manaName || 'Recurso'}
-          current={res.mana.current}
-          max={res.mana.max}
-          onDelta={resEdit ? (delta) => void send('hero:mana', { heroId: hero.id, delta }) : undefined}
-          onMaxDelta={manage ? (delta) => void adjustHero(hero.id, 'maxMana', delta) : undefined}
-        />
-      </Block>
-    );
-  }
-
-  if (mode === 'slots') {
-    const recalc = async () => {
-      const ok = await confirm({
-        title: 'Ajustar espacios al nivel',
-        message: `Se recalculan los espacios máximos de ${hero.name} según la tabla de la campaña para el nivel ${hero.level}. Los espacios gastados se conservan.`,
-        confirmLabel: 'Ajustar',
-      });
-      if (!ok) return;
-      const slots = slotsForLevel(rules, hero.level).map((s) => {
-        const prev = res.slots.find((p) => p.level === s.level);
-        return { ...s, used: Math.min(prev?.used ?? 0, s.max) };
-      });
-      void send('hero:update', { heroId: hero.id, patch: { resources: { ...res, slots } } }, { success: 'Espacios ajustados' });
-    };
-    return (
-      <Block
-        icon={<Sparkles />}
-        title="Espacios de conjuro"
-        tone="arcane"
-        actions={manage ? <IconButton icon={<RefreshCw />} title="Ajustar al nivel del héroe" size="xs" onClick={() => void recalc()} /> : undefined}
-      >
-        <SlotPips slots={res.slots} onUse={resEdit ? (level, delta) => void send('hero:slot', { heroId: hero.id, level, delta }) : undefined} />
-      </Block>
-    );
-  }
-
-  return <UsesBlock hero={hero} resEdit={resEdit} manage={manage} />;
+  // Limited uses (Furia, Canalizar divinidad…) are class features: they live next to mana / slots too.
+  const canAddUses = manage && mode !== 'none';
+  const showUses = mode === 'uses' || hero.data.resources.uses.length > 0 || canAddUses;
+  return (
+    <>
+      {mode === 'mana' && (
+        <Block icon={<Sparkles />} title={rules.magic.manaName || 'Recurso'} tone="arcane">
+          <ManaBar
+            showLabel={false}
+            name={rules.magic.manaName || 'Recurso'}
+            current={hero.data.resources.mana.current}
+            max={hero.data.resources.mana.max}
+            onDelta={resEdit ? (delta) => void send('hero:mana', { heroId: hero.id, delta }) : undefined}
+            onMaxDelta={manage ? (delta) => void adjustHero(hero.id, 'maxMana', delta) : undefined}
+          />
+        </Block>
+      )}
+      {mode === 'slots' && <SlotsBlock hero={hero} rules={rules} resEdit={resEdit} manage={manage} />}
+      {showUses && <UsesBlock hero={hero} resEdit={resEdit} manage={manage} canAdd={canAddUses} />}
+    </>
+  );
 }
 
-function UsesBlock({ hero, resEdit, manage }: { hero: HeroSheetData; resEdit: boolean; manage: boolean }) {
+function SlotsBlock({ hero, rules, resEdit, manage }: { hero: HeroSheetData; rules: RuleSystem; resEdit: boolean; manage: boolean }) {
+  const confirm = useConfirm();
+  const res = hero.data.resources;
+  const recalc = async () => {
+    const ok = await confirm({
+      title: 'Ajustar espacios al nivel',
+      message: `Se recalculan los espacios máximos de ${hero.name} según la tabla de la campaña para el nivel ${hero.level}. Los espacios gastados se conservan.`,
+      confirmLabel: 'Ajustar',
+    });
+    if (!ok) return;
+    const slots = slotsForLevel(rules, hero.level).map((s) => {
+      const prev = res.slots.find((p) => p.level === s.level);
+      return { ...s, used: Math.min(prev?.used ?? 0, s.max) };
+    });
+    void send('hero:update', { heroId: hero.id, patch: { resources: { ...res, slots } } }, { success: 'Espacios ajustados' });
+  };
+  return (
+    <Block
+      icon={<Sparkles />}
+      title="Espacios de conjuro"
+      tone="arcane"
+      actions={manage ? <IconButton icon={<RefreshCw />} title="Ajustar al nivel del héroe" size="xs" onClick={() => void recalc()} /> : undefined}
+    >
+      <SlotPips slots={res.slots} onUse={resEdit ? (level, delta) => void send('hero:slot', { heroId: hero.id, level, delta }) : undefined} />
+    </Block>
+  );
+}
+
+function UsesBlock({ hero, resEdit, manage, canAdd }: { hero: HeroSheetData; resEdit: boolean; manage: boolean; canAdd: boolean }) {
   const confirm = useConfirm();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -526,7 +529,7 @@ function UsesBlock({ hero, resEdit, manage }: { hero: HeroSheetData; resEdit: bo
       icon={<Sparkles />}
       title="Usos limitados"
       tone="arcane"
-      actions={manage && !adding ? <IconButton icon={<Plus />} title="Añadir uso limitado" size="xs" onClick={() => setAdding(true)} /> : undefined}
+      actions={canAdd && !adding ? <IconButton icon={<Plus />} title="Añadir uso limitado" size="xs" onClick={() => setAdding(true)} /> : undefined}
     >
       <UsePips
         uses={res.uses}

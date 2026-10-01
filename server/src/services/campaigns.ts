@@ -712,6 +712,37 @@ function spawnAtDefault(zoneId: string, content: Pick<ZoneContent, 'levels' | 'd
   return { zoneId, levelId: level.id, ...levelCenter(level) };
 }
 
+type TransitionDestination = Pick<ZoneContent, 'levels' | 'defaultLevelId'>;
+
+/**
+ * Transitions must lead somewhere. Links to zones outside the campaign (e.g. a deleted zone brought back
+ * by a stale editor copy) are removed, and links to a missing level go to the zone's default level center.
+ * `self` is the zone being written, checked against its new levels (it may not be stored yet).
+ */
+async function sanitizeTransitionTargets(
+  tx: Db,
+  campaignId: string,
+  levels: ZoneLevel[],
+  self: { id: string } & TransitionDestination,
+): Promise<ZoneLevel[]> {
+  const otherIds = new Set<string>();
+  for (const level of levels) {
+    for (const el of level.elements) {
+      if (el.type === 'transition' && el.target && el.target.zoneId !== self.id) otherIds.add(el.target.zoneId);
+    }
+  }
+  const destinations = new Map<string, TransitionDestination>([[self.id, self]]);
+  if (otherIds.size > 0) {
+    const rows = await tx.zone.findMany({ where: { campaignId, id: { in: [...otherIds] } } });
+    for (const row of rows) destinations.set(row.id, zoneToDTO(row));
+  }
+  return rewriteTransitionTargets(levels, (target) => {
+    const zone = destinations.get(target.zoneId);
+    if (!zone) return null;
+    return zone.levels.some((l) => l.id === target.levelId) ? target : spawnAtDefault(target.zoneId, zone);
+  }).levels;
+}
+
 /** Pins of zones outside the campaign are dropped, links need both pins. */
 function cleanOverview(overview: OverviewMap, zoneIds: ReadonlySet<string>): OverviewMap {
   const pins = overview.pins.filter((p) => typeof p.zoneId === 'string' && zoneIds.has(p.zoneId));
@@ -1213,6 +1244,11 @@ export async function createZone(campaignId: string, userId: string, raw: unknow
         return known.has(target.zoneId) ? target : null;
       }).levels;
     }
+    content.levels = await sanitizeTransitionTargets(tx, campaignId, content.levels, {
+      id: zoneId,
+      levels: content.levels,
+      defaultLevelId: content.defaultLevelId,
+    });
 
     const finalContent: ZoneContent = {
       ...content,
@@ -1300,8 +1336,12 @@ export async function updateZone(zoneId: string, raw: unknown): Promise<Zone> {
     let finalLevels = current.levels;
     let finalDefault = current.defaultLevelId;
     if (levelsInput) {
-      finalLevels = levelsInput;
       finalDefault = pickDefaultLevel(levelsInput, input.defaultLevelId, current.defaultLevelId);
+      finalLevels = await sanitizeTransitionTargets(tx, campaignId, levelsInput, {
+        id: zoneId,
+        levels: levelsInput,
+        defaultLevelId: finalDefault,
+      });
       data.levels = toJson(finalLevels);
       data.defaultLevelId = finalDefault;
     } else if (input.defaultLevelId !== undefined && input.defaultLevelId !== current.defaultLevelId) {

@@ -77,6 +77,8 @@ export function SavedFiltersMenu({ kind, filters, onApply }: SavedFiltersMenuPro
   };
 
   const remove = async (sf: SavedFilterDTO) => {
+    // Close the popover first: it is a body portal above the dialog layer and would swallow Esc.
+    setOpen(false);
     const ok = await confirm({
       title: `Eliminar «${sf.name}»`,
       message: 'El filtro guardado desaparecerá de tu lista. Los elementos de la biblioteca no se modifican.',

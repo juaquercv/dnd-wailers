@@ -11,7 +11,15 @@ import {
 } from '@wailers/shared';
 import { isPlainObject } from '../../services/serializers';
 import type { SessionManager } from '../SessionManager';
-import { HandlerError, type AppSocket, type HandlerCtx, type LiveSession, type LogInput, type MutateOptions } from '../types';
+import {
+  HandlerError,
+  type AppSocket,
+  type HandlerCtx,
+  type LiveSession,
+  type LogInput,
+  type MutateOptions,
+  type SessionManagerApi,
+} from '../types';
 
 /*
  * Turn order (DM): manual/random modes, secure initiative draw, navigation with turn start
@@ -121,7 +129,23 @@ function isHiddenEntry(state: LiveState, entry: TurnEntry): boolean {
   return entry.tokenId ? state.tokens[entry.tokenId]?.hidden === true : false;
 }
 
-interface Landing {
+/** Active turn rollers of the campaign (offered to a player at the start of their turn). */
+function turnRollersOf(session: LiveSession): Roller[] {
+  return session.campaign.rollers.filter((r) => r.active && r.isTurnRoll);
+}
+
+/** Player whose turn an entry is (null for creatures, NPCs, custom entries and players who left). */
+function turnUserOf(state: LiveState, entry: TurnEntry): string | null {
+  return entry.type === 'player' && entry.userId && state.players[entry.userId] ? entry.userId : null;
+}
+
+/** Initiative/turn news reach every player only when all of them may see the turn order. */
+function turnLogVisibility(state: LiveState): 'all' | 'dm' {
+  return Object.keys(state.players).every((uid) => effectiveVisibility(state, uid).canSeeInitiative) ? 'all' : 'dm';
+}
+
+/** A turn that just started, to be announced with announceTurnStart once the mutation is applied. */
+export interface TurnLanding {
   entry: TurnEntry;
   round: number;
   turnUserId: string | null;
@@ -129,18 +153,28 @@ interface Landing {
   hidden: boolean;
 }
 
+/** Position of the turn pointer, taken before entries are removed (see landAfterRemoval). */
+export interface TurnPointer {
+  ids: string[];
+  index: number;
+}
+
+export function turnPointer(state: LiveState): TurnPointer {
+  return { ids: state.turn.order.map((e) => e.id), index: state.turn.currentIndex };
+}
+
 /**
  * Inside mutate: the current entry starts its turn. Sets the turn offer (active turn rollers for a
  * player entry) and, when the campaign enables it, regenerates that hero's mana. Only while playing.
  */
-function applyLanding(manager: SessionManager, session: LiveSession, state: LiveState, opts: MutateOptions): Landing | null {
+export function landCurrentTurn(session: LiveSession, state: LiveState, opts: MutateOptions): TurnLanding | null {
   const entry = state.turn.order[state.turn.currentIndex];
   if (!entry || state.status !== 'playing') {
     state.turnOffer = null;
     return null;
   }
-  const turnUserId = entry.type === 'player' && entry.userId && state.players[entry.userId] ? entry.userId : null;
-  const offered = turnUserId ? manager.turnRollers(session) : [];
+  const turnUserId = turnUserOf(state, entry);
+  const offered = turnUserId ? turnRollersOf(session) : [];
   state.turnOffer = turnUserId && offered.length > 0 ? { userId: turnUserId, rollerIds: offered.map((r) => r.id) } : null;
 
   let regenText = '';
@@ -163,14 +197,65 @@ function applyLanding(manager: SessionManager, session: LiveSession, state: Live
   appendLog(opts, {
     type: 'turn',
     text: `Turno de ${entry.name} (ronda ${state.turn.round})${regenText}`,
-    visibility: hidden ? 'dm' : 'all',
+    visibility: hidden ? 'dm' : turnLogVisibility(state),
     data: { entryId: entry.id, round: state.turn.round },
   });
   return { entry: structuredClone(entry), round: state.turn.round, turnUserId, offered, hidden };
 }
 
+/**
+ * Inside mutate, after turn entries were removed: when the entry that had the turn is gone, the
+ * entry now current starts its turn (a new round when the pointer wrapped to the top).
+ */
+export function landAfterRemoval(session: LiveSession, state: LiveState, opts: MutateOptions, before: TurnPointer): TurnLanding | null {
+  const previousId = before.ids[before.index];
+  const order = state.turn.order;
+  if (!previousId || state.status !== 'playing' || order.length === 0) return null;
+  const survivors = new Set(order.map((e) => e.id));
+  if (survivors.has(previousId)) return null;
+  const survivorsBefore = before.ids.slice(0, before.index).filter((id) => survivors.has(id)).length;
+  if (survivorsBefore >= order.length) state.turn.round += 1;
+  return landCurrentTurn(session, state, opts);
+}
+
+/**
+ * The same turn announced again (a resumed game): no second mana regeneration or log line, and the
+ * player keeps only the turn rollers still pending from before the pause.
+ */
+function reannounceCurrentTurn(session: LiveSession, state: LiveState): TurnLanding | null {
+  const entry = state.turn.order[state.turn.currentIndex];
+  if (!entry || state.status !== 'playing') {
+    state.turnOffer = null;
+    return null;
+  }
+  const turnUserId = turnUserOf(state, entry);
+  const pending = turnUserId && state.turnOffer?.userId === turnUserId ? state.turnOffer.rollerIds : [];
+  const offered = turnRollersOf(session).filter((r) => pending.includes(r.id));
+  state.turnOffer = turnUserId && offered.length > 0 ? { userId: turnUserId, rollerIds: offered.map((r) => r.id) } : null;
+  return { entry: structuredClone(entry), round: state.turn.round, turnUserId, offered, hidden: isHiddenEntry(state, entry) };
+}
+
+/**
+ * Inside the session:start mutation (status already 'playing', hero tokens placed): every player
+ * with a hero gets an entry (players who picked a hero after a sync are appended). A first start
+ * begins at the top of the order in round 1; a resumed game keeps its turn. The current entry is
+ * returned to be announced with announceTurnStart.
+ */
+export function startTurns(session: LiveSession, state: LiveState, opts: MutateOptions, firstStart: boolean): TurnLanding | null {
+  const previousId = state.turn.order[state.turn.currentIndex]?.id ?? null;
+  syncPlayerEntries(state);
+  if (firstStart) {
+    state.turn.currentIndex = 0;
+    state.turn.round = 1;
+    return landCurrentTurn(session, state, opts);
+  }
+  const current = state.turn.order[state.turn.currentIndex];
+  if (!current || current.id !== previousId) return landCurrentTurn(session, state, opts);
+  return reannounceCurrentTurn(session, state);
+}
+
 /** turnStart for everyone; only the player whose turn it is receives the offered rollers. */
-function announceLanding(manager: SessionManager, session: LiveSession, landing: Landing): void {
+export function announceTurnStart(manager: SessionManagerApi, session: LiveSession, landing: TurnLanding): void {
   const state = session.state;
   const base = { type: 'turnStart' as const, entry: landing.entry, round: landing.round, offeredRollers: [] as Roller[] };
   const others: string[] = [];
@@ -228,7 +313,7 @@ function initiativeOf(value: unknown): number | null {
 function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1): null {
   if (ctx.session.state.turn.order.length === 0) throw new HandlerError(EMPTY_ORDER);
   const opts: MutateOptions = {};
-  const out: { landing: Landing | null } = { landing: null };
+  const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     ctx.session,
     (state) => {
@@ -244,11 +329,11 @@ function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1): null 
         state.turn.round = Math.max(1, state.turn.round - 1);
       }
       state.turn.currentIndex = index;
-      out.landing = applyLanding(manager, ctx.session, state, opts);
+      out.landing = landCurrentTurn(ctx.session, state, opts);
     },
     opts,
   );
-  if (out.landing) announceLanding(manager, ctx.session, out.landing);
+  if (out.landing) announceTurnStart(manager, ctx.session, out.landing);
   return null;
 }
 
@@ -256,7 +341,7 @@ function randomize(manager: SessionManager, ctx: HandlerCtx): null {
   const session = ctx.session;
   if (session.state.turn.order.length === 0) throw new HandlerError(EMPTY_ORDER);
   const opts: MutateOptions = {};
-  const out: { draws: InitiativeDraw[]; order: string[]; hiddenIds: Set<string>; landing: Landing | null } = {
+  const out: { draws: InitiativeDraw[]; order: string[]; hiddenIds: Set<string>; landing: TurnLanding | null } = {
     draws: [],
     order: [],
     hiddenIds: new Set(),
@@ -269,7 +354,7 @@ function randomize(manager: SessionManager, ctx: HandlerCtx): null {
         const natural = secureRandomInt(20) + 1;
         const bonusRaw = entry.type === 'player' ? (heroForEntry(state, entry)?.data.initiativeBonus ?? 0) : 0;
         const bonus = Number.isFinite(bonusRaw) ? Math.round(bonusRaw) : 0;
-        return { entry, total: natural + bonus, tiebreak: secureRandomInt(1_000_000) };
+        return { entry, natural, bonus, total: natural + bonus, tiebreak: secureRandomInt(1_000_000) };
       });
       rolled.sort((a, b) => b.total - a.total || b.tiebreak - a.tiebreak);
       for (const r of rolled) r.entry.initiative = r.total;
@@ -279,40 +364,39 @@ function randomize(manager: SessionManager, ctx: HandlerCtx): null {
       state.turn.round = 1;
 
       for (const entry of state.turn.order) if (isHiddenEntry(state, entry)) out.hiddenIds.add(entry.id);
-      out.draws = rolled.map((r) => ({ entryId: r.entry.id, name: r.entry.name, imageUrl: r.entry.imageUrl, roll: r.total }));
+      out.draws = rolled.map((r) => ({ entryId: r.entry.id, name: r.entry.name, imageUrl: r.entry.imageUrl, roll: r.total, natural: r.natural, bonus: r.bonus }));
       out.order = state.turn.order.map((e) => e.id);
 
       const describe = (draws: InitiativeDraw[]): string => draws.map((d) => `${d.name} (${d.roll})`).join(', ');
       const publicDraws = out.draws.filter((d) => !out.hiddenIds.has(d.entryId));
-      if (out.hiddenIds.size > 0) {
+      const shared = turnLogVisibility(state) === 'all';
+      if (out.hiddenIds.size > 0 || !shared) {
         appendLog(opts, { type: 'turn', visibility: 'dm', text: `Iniciativa sorteada: ${describe(out.draws)}`, data: { draws: out.draws } });
       }
-      if (publicDraws.length > 0) {
+      if (shared && publicDraws.length > 0) {
         appendLog(opts, { type: 'turn', text: `Iniciativa sorteada: ${describe(publicDraws)}`, data: { draws: publicDraws } });
       }
-      out.landing = applyLanding(manager, session, state, opts);
+      out.landing = landCurrentTurn(session, state, opts);
     },
     opts,
   );
 
-  if (out.hiddenIds.size === 0) {
-    manager.emitEvent(session, { type: 'initiativeDraw', draws: out.draws, order: out.order });
-  } else {
-    manager.emitEvent(session, { type: 'initiativeDraw', draws: out.draws, order: out.order }, { kind: 'dm' });
-    const players = Object.keys(session.state.players);
-    if (players.length > 0) {
-      manager.emitEvent(
-        session,
-        {
-          type: 'initiativeDraw',
-          draws: out.draws.filter((d) => !out.hiddenIds.has(d.entryId)),
-          order: out.order.filter((id) => !out.hiddenIds.has(id)),
-        },
-        { kind: 'users', userIds: players },
-      );
-    }
+  // The DM sees the whole draw; players only when they may see the order, and never hidden entries.
+  manager.emitEvent(session, { type: 'initiativeDraw', draws: out.draws, order: out.order }, { kind: 'dm' });
+  const state = session.state;
+  const viewers = Object.keys(state.players).filter((uid) => uid !== state.hostUserId && effectiveVisibility(state, uid).canSeeInitiative);
+  if (viewers.length > 0) {
+    manager.emitEvent(
+      session,
+      {
+        type: 'initiativeDraw',
+        draws: out.draws.filter((d) => !out.hiddenIds.has(d.entryId)),
+        order: out.order.filter((id) => !out.hiddenIds.has(id)),
+      },
+      { kind: 'users', userIds: viewers },
+    );
   }
-  if (out.landing) announceLanding(manager, session, out.landing);
+  if (out.landing) announceTurnStart(manager, session, out.landing);
   return null;
 }
 
@@ -320,18 +404,18 @@ function setCurrent(manager: SessionManager, ctx: HandlerCtx, entryIdRaw: unknow
   const entryId = entryIdOf(entryIdRaw);
   if (!ctx.session.state.turn.order.some((e) => e.id === entryId)) throw new HandlerError(UNKNOWN_ENTRY);
   const opts: MutateOptions = {};
-  const out: { landing: Landing | null } = { landing: null };
+  const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     ctx.session,
     (state) => {
       const index = state.turn.order.findIndex((e) => e.id === entryId);
       if (index < 0) throw new HandlerError(UNKNOWN_ENTRY);
       state.turn.currentIndex = index;
-      out.landing = applyLanding(manager, ctx.session, state, opts);
+      out.landing = landCurrentTurn(ctx.session, state, opts);
     },
     opts,
   );
-  if (out.landing) announceLanding(manager, ctx.session, out.landing);
+  if (out.landing) announceTurnStart(manager, ctx.session, out.landing);
   return null;
 }
 
@@ -442,9 +526,19 @@ export function registerTurnHandlers(socket: AppSocket, manager: SessionManager)
     (ctx, payload) => {
       const entryId = entryIdOf(payload.entryId);
       if (!ctx.session.state.turn.order.some((e) => e.id === entryId)) throw new HandlerError(UNKNOWN_ENTRY);
-      manager.mutate(ctx.session, (state) => {
-        if (removeTurnEntries(state, (e) => e.id === entryId) === 0) throw new HandlerError(UNKNOWN_ENTRY);
-      });
+      const opts: MutateOptions = {};
+      const out: { landing: TurnLanding | null } = { landing: null };
+      manager.mutate(
+        ctx.session,
+        (state) => {
+          const before = turnPointer(state);
+          if (removeTurnEntries(state, (e) => e.id === entryId) === 0) throw new HandlerError(UNKNOWN_ENTRY);
+          // Removing the entry that had the turn (e.g. a defeated creature) passes it to the next one.
+          out.landing = landAfterRemoval(ctx.session, state, opts, before);
+        },
+        opts,
+      );
+      if (out.landing) announceTurnStart(manager, ctx.session, out.landing);
       return null;
     },
     dmOnly,
@@ -456,7 +550,18 @@ export function registerTurnHandlers(socket: AppSocket, manager: SessionManager)
     socket,
     'turn:syncPlayers',
     (ctx) => {
-      manager.mutate(ctx.session, (state) => syncPlayerEntries(state));
+      const opts: MutateOptions = {};
+      const out: { landing: TurnLanding | null } = { landing: null };
+      manager.mutate(
+        ctx.session,
+        (state) => {
+          const before = turnPointer(state);
+          syncPlayerEntries(state);
+          out.landing = landAfterRemoval(ctx.session, state, opts, before);
+        },
+        opts,
+      );
+      if (out.landing) announceTurnStart(manager, ctx.session, out.landing);
       return null;
     },
     dmOnly,

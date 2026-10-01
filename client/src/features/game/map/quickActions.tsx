@@ -63,12 +63,12 @@ function partyHeroes(): { heroId: string; name: string }[] {
 export function buildQuickActions(entry: LibraryEntry): QuickAction[] {
   if (isKind(entry, 'creature')) {
     return [
-      { id: 'spawn', label: 'Spawnear en el centro de la vista', icon: <MapPin />, run: () => void spawnAtCenter(entry) },
-      { id: 'spawn-hidden', label: 'Spawnear oculto', icon: <EyeOff />, run: () => void spawnAtCenter(entry, { hidden: true }) },
+      { id: 'spawn', label: 'Colocar en el centro de la vista', icon: <MapPin />, run: () => void spawnAtCenter(entry) },
+      { id: 'spawn-hidden', label: 'Colocar oculto', icon: <EyeOff />, run: () => void spawnAtCenter(entry, { hidden: true }) },
       { id: 'spawn-dramatic', label: 'Aparición dramática', icon: <Flame />, run: () => void spawnAtCenter(entry, { dramatic: true }) },
       {
         id: 'spawn-initiative',
-        label: 'Spawnear y añadir a la iniciativa',
+        label: 'Colocar y añadir a la iniciativa',
         icon: <Swords />,
         run: () => void spawnAtCenter(entry, { initiative: true }),
       },

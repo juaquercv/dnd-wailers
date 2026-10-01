@@ -5,6 +5,7 @@ import {
   type LightSource,
   type Point,
   type SceneElement,
+  type SpawnPoint,
   type Wall,
 } from '@wailers/shared';
 import { setStageCursor, type ElementPatch, type MapMouseEvent, type MapPoint, type MapStageHandle } from '../../../map';
@@ -12,6 +13,7 @@ import { useContextMenu } from '../../../components/ui/ContextMenu';
 import { toast } from '../../../components/ui/toast';
 import { isEditableTarget } from '../../../lib/hotkeys';
 import { useEditorStore, type EditorTool, type SelectionItem } from '../editorStore';
+import { saveCampaign } from '../shell/campaignSave';
 import { resetCanvasUi, setCanvasDraft, setCanvasPointer, useCanvasUi, type PolyTool } from './canvasUiStore';
 import { buildCanvasMenu, buildElementMenu, hiddenPatch, isInlineEditable } from './elementMenu';
 import {
@@ -198,6 +200,16 @@ function syncedName(current: string, defaultName: string, previous: string, next
   if (name && name !== defaultName && name !== nameFromContent(previous)) return {};
   const derived = nameFromContent(next) || defaultName;
   return derived === current ? {} : { name: derived };
+}
+
+/**
+ * Saves the campaign spawn through the campaign save wrapper (save indicator, unsaved-work warning). The store
+ * saves the spawn's zone first, so a just-created level exists on the server. Resolves true when saved.
+ */
+async function commitSpawn(spawn: SpawnPoint | null): Promise<boolean> {
+  const ok = await saveCampaign({ spawn });
+  if (!ok) toast.error('No se pudo guardar el punto de aparición', { description: store().saveError ?? undefined });
+  return ok;
 }
 
 function roundPatch(patch: ElementPatch): ElementPatch {
@@ -671,8 +683,10 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
       const s = store();
       if (!scene || !s.campaign) return;
       const pos = roundPoint(p);
-      void s.updateCampaign({ spawn: { zoneId: scene.zone.id, levelId: scene.level.id, x: pos.x, y: pos.y } });
-      toast.success('Punto de aparición fijado', { description: `${scene.zone.name} · ${scene.level.name}` });
+      const where = `${scene.zone.name} · ${scene.level.name}`;
+      void commitSpawn({ zoneId: scene.zone.id, levelId: scene.level.id, x: pos.x, y: pos.y }).then((ok) => {
+        if (ok) toast.success('Punto de aparición fijado', { description: where });
+      });
     };
 
     const placeWithTool = (tool: EditorTool, world: Point, evt: MouseEvent) => {
@@ -1108,9 +1122,11 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
         const s = store();
         if (s.tool !== 'erase' || !s.campaign?.spawn) return;
         const previous = s.campaign.spawn;
-        void s.updateCampaign({ spawn: null });
-        toast.info('Punto de aparición eliminado', {
-          action: { label: 'Deshacer', onClick: () => void store().updateCampaign({ spawn: previous }) },
+        void commitSpawn(null).then((ok) => {
+          if (!ok) return;
+          toast.info('Punto de aparición eliminado', {
+            action: { label: 'Deshacer', onClick: () => void commitSpawn(previous) },
+          });
         });
       },
 
@@ -1120,7 +1136,7 @@ export function useCanvasController(mapRef: RefObject<MapStageHandle>): CanvasCo
         if (!spawn) return;
         const p = roundPoint(place({ x, y }, 'cell', altRef.current));
         if (p.x === spawn.x && p.y === spawn.y) return;
-        void s.updateCampaign({ spawn: { ...spawn, x: p.x, y: p.y } });
+        void commitSpawn({ ...spawn, x: p.x, y: p.y });
       },
 
       snapSpawn(p, altKey) {

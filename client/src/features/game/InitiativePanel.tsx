@@ -32,7 +32,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { tokenHp, type HeroSheet, type LiveState, type Token, type TurnEntry } from '@wailers/shared';
+import { tokenHp, type HeroSheet, type LiveState, type SessionZone, type Token, type TurnEntry } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { Button } from '../../components/ui/Button';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/ContextMenu';
@@ -42,6 +42,7 @@ import { Kbd } from '../../components/ui/Kbd';
 import { isEditableTarget } from '../../lib/hotkeys';
 import { emitUiEvent } from '../../lib/uiEvents';
 import { useSessionStore } from '../../stores/session';
+import { isTurnEntryMasked } from './map/fog';
 import { send } from './panels/actions';
 import { heroTokenOf, usePanelContext, type PanelContext } from './panels/context';
 import { HpBar, type HpInfo } from './panels/HpBar';
@@ -67,7 +68,7 @@ type PromptState =
   | { kind: 'initiative'; entry: TurnEntry }
   | { kind: 'hp'; token: Token };
 
-function buildView(state: LiveState, entry: TurnEntry, playerPerspective: boolean): EntryView {
+function buildView(state: LiveState, entry: TurnEntry, playerPerspective: boolean, zonesById: Record<string, SessionZone>): EntryView {
   if (entry.type === 'player' || entry.heroId) {
     const hero = entry.heroId ? state.heroes[entry.heroId] ?? null : null;
     const token = hero ? heroTokenOf(state, hero.id) : null;
@@ -91,8 +92,9 @@ function buildView(state: LiveState, entry: TurnEntry, playerPerspective: boolea
       masked: false,
     };
   }
-  const token = entry.tokenId ? state.tokens[entry.tokenId] ?? null : null;
-  const masked = playerPerspective && !!entry.tokenId && !token;
+  // Players never learn about creatures they cannot see: hidden, out of sight or under unrevealed fog.
+  const masked = playerPerspective && isTurnEntryMasked(state, entry, zonesById);
+  const token = !masked && entry.tokenId ? state.tokens[entry.tokenId] ?? null : null;
   return {
     entry,
     name: masked ? 'Criatura desconocida' : entry.name,
@@ -111,6 +113,7 @@ export function InitiativePanel() {
   const ctx = usePanelContext();
   const { state, effective } = ctx;
   const viewZoneId = useSessionStore((s) => s.viewZone?.zoneId ?? null);
+  const zonesById = useSessionStore((s) => s.zonesById);
   const menu = useContextMenu();
   const [localOrder, setLocalOrder] = useState<string[] | null>(null);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
@@ -126,8 +129,11 @@ export function InitiativePanel() {
     if (!state) return [];
     const byId = new Map(state.turn.order.map((e) => [e.id, e]));
     const ids = localOrder ?? state.turn.order.map((e) => e.id);
-    return ids.map((id) => byId.get(id)).filter((e): e is TurnEntry => !!e).map((e) => buildView(state, e, playerPerspective));
-  }, [state, localOrder, playerPerspective]);
+    return ids
+      .map((id) => byId.get(id))
+      .filter((e): e is TurnEntry => !!e)
+      .map((e) => buildView(state, e, playerPerspective, zonesById));
+  }, [state, localOrder, playerPerspective, zonesById]);
 
   const currentId = state ? state.turn.order[state.turn.currentIndex]?.id ?? null : null;
 

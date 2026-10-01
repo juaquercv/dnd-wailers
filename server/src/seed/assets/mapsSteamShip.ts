@@ -256,8 +256,9 @@ export function buildAirshipDeck(): string {
 
   // Shadow of the envelope overhead and the cables that hold it.
   const env = L.envelope;
-  const envShadow = doc.def('envelopeShadow', radialGradient('envelopeShadow', [[0, '#000000', 0.42], [0.82, '#000000', 0.36], [1, '#000000', 0]]));
-  doc.add(ellipse(env.cx + 40, env.cy + 60, env.rx * 1.04, env.ry * 1.08, { fill: envShadow }));
+  // Sun from the north-west: the envelope's shadow falls south-east, leaving the port rail and the stern in the light.
+  const envShadow = doc.def('envelopeShadow', radialGradient('envelopeShadow', [[0, '#000000', 0.34], [0.9, '#000000', 0.3], [1, '#000000', 0]]));
+  doc.add(ellipse(env.cx + 150, env.cy + 175, env.rx, env.ry, { fill: envShadow }));
   doc.add(ellipse(env.cx, env.cy, env.rx, env.ry, { fill: 'none', stroke: '#f3ead6', strokeWidth: 2, strokeDasharray: '18 14', opacity: 0.25 }));
   doc.add(vignette(doc, L.width, L.height, 0.3, '#14202a'));
   return doc.render();

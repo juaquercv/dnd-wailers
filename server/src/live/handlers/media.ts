@@ -95,8 +95,8 @@ async function audioPlay(manager: SessionManagerApi, ctx: HandlerCtx, payload: {
     ctx.session,
     (s) => {
       s.audio[channel] = sound ? { soundId: sound.id, url: sound.url, name: sound.name } : null;
-      // Leaving zone mode keeps the other channel of the DM's zone playing instead of cutting it.
-      if (wasZoneMode && s.audio[other] === null) s.audio[other] = otherSeed;
+      // Leaving zone mode keeps the other channel of the DM's zone playing (never an older manual track).
+      if (wasZoneMode) s.audio[other] = otherSeed;
       s.audio.mode = 'manual';
     },
     {
@@ -119,9 +119,10 @@ function audioMode(manager: SessionManagerApi, ctx: HandlerCtx, payload: { mode:
     ctx.session,
     (s) => {
       s.audio.mode = mode;
+      // Manual mode starts from what the DM is hearing now: the tracks of the zone on the DM's screen.
       if (seeds) {
-        s.audio.music ??= seeds.music;
-        s.audio.ambience ??= seeds.ambience;
+        s.audio.music = seeds.music;
+        s.audio.ambience = seeds.ambience;
       }
     },
     {

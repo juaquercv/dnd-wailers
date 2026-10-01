@@ -111,7 +111,7 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
       <div className="mx-auto w-full max-w-4xl space-y-6 px-4 pb-16 pt-6 sm:px-6">
         <header>
           <h2 className="title-epic text-2xl">Ajustes de la campaña</h2>
-          <p className="mt-1 text-sm text-parchment-300">Nombre, portada, punto de inicio y lo que verán los jugadores al empezar.</p>
+          <p className="mt-1 text-sm text-parchment-300">Nombre, portada, punto de aparición y lo que verán los jugadores al empezar.</p>
         </header>
 
         <SettingsSection icon={<Settings2 />} title="General" description="Así aparece la campaña en la lista y al hostear una partida.">
@@ -258,7 +258,7 @@ function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones:
   const zone = spawn ? zones.find((z) => z.id === spawn.zoneId) : undefined;
   const level = zone && spawn ? zone.levels.find((l) => l.id === spawn.levelId) : undefined;
 
-  /** Opens a zone in the canvas with the Spawn tool ready. */
+  /** Opens a zone in the canvas with the «Punto de aparición» tool ready. */
   const placeSpawn = () => {
     const target = zone ?? zones.find((z) => z.id === currentZoneId) ?? zones[0];
     if (!target) return;
@@ -267,8 +267,8 @@ function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones:
   };
 
   const placeButton = zones.length > 0 && (
-    <Button size="sm" icon={<Flag />} onClick={placeSpawn}>
-      Colocar con la herramienta Spawn
+    <Button size="sm" icon={<Flag />} onClick={placeSpawn} title="Herramienta «Punto de aparición» (S)">
+      Colocar en el mapa
     </Button>
   );
 
@@ -277,7 +277,7 @@ function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones:
     body = (
       <div className="space-y-3">
         <InfoNote icon={<TriangleAlert />} tone="warning">
-          No hay punto de inicio. Coloca el punto de spawn con la herramienta Spawn (S).
+          La campaña todavía no tiene punto de aparición. Colócalo en una zona con la herramienta «Punto de aparición» (S).
         </InfoNote>
         {placeButton}
       </div>
@@ -286,13 +286,13 @@ function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones:
     body = (
       <div className="space-y-3">
         <InfoNote icon={<TriangleAlert />} tone="warning">
-          El punto de inicio apunta a {zone ? 'un piso' : 'una zona'} que ya no existe. Coloca el punto de spawn con la herramienta Spawn
-          (S).
+          El punto de aparición está en {zone ? 'un piso' : 'una zona'} que ya no existe. Colócalo de nuevo con la herramienta «Punto de
+          aparición» (S).
         </InfoNote>
         <div className="flex flex-wrap gap-2">
           {placeButton}
           <Button size="sm" variant="ghost" icon={<X />} onClick={onClear}>
-            Quitar punto de inicio
+            Quitar punto de aparición
           </Button>
         </div>
       </div>
@@ -326,7 +326,7 @@ function SpawnSection({ campaign, zones, onClear }: { campaign: Campaign; zones:
   return (
     <SettingsSection
       icon={<Flag />}
-      title="Punto de inicio"
+      title="Punto de aparición"
       description="Donde aparecen las fichas de los héroes al empezar una partida nueva."
     >
       {body}

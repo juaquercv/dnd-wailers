@@ -9,10 +9,12 @@ import { levelLabel, sortedLevels, ZONE_TYPE_ICONS, zoneTree, zoneTypeLabel } fr
 /**
  * Zone / level switcher of the game top bar.
  * DM: any zone (tree with sub-zones) and any level. Players: current zone, levels where the party
- * stands, and other zones only when allowed (canSeeOtherZones).
+ * stands, and other zones when allowed (canSeeOtherZones) or, with shared vision, the zones where other
+ * heroes of the party stand.
  */
 export function ZoneNavigator({ className }: { className?: string }) {
   const role = useSessionStore((s) => s.view?.role ?? null);
+  const campaignName = useSessionStore((s) => s.campaign?.name ?? null);
   const zones = useSessionStore((s) => s.zones);
   const zonesById = useSessionStore((s) => s.zonesById);
   const viewZone = useSessionStore((s) => s.viewZone);
@@ -24,8 +26,10 @@ export function ZoneNavigator({ className }: { className?: string }) {
 
   const isDm = role === 'dm';
   const zone = viewZone ? zonesById[viewZone.zoneId] ?? null : null;
-  const canPickZone = isDm || !!effective?.canSeeOtherZones;
-  const allLevels = isDm || !!effective?.canSeeOtherZones;
+  const seeOtherZones = isDm || !!effective?.canSeeOtherZones;
+  // Shared vision: players may look at the zones where other heroes of the party stand.
+  const canPickZone = seeOtherZones || !!effective?.sharedVision;
+  const allLevels = seeOtherZones;
 
   const heroCounts = useMemo(() => {
     const byZone = new Map<string, number>();
@@ -41,15 +45,25 @@ export function ZoneNavigator({ className }: { className?: string }) {
     return { byZone, byLevel };
   }, [state]);
 
+  const currentZoneId = viewZone?.zoneId ?? null;
+  const pickable = useMemo(
+    () => (seeOtherZones ? zones : zones.filter((z) => z.id === currentZoneId || (heroCounts.byZone.get(z.id) ?? 0) > 0)),
+    [seeOtherZones, zones, currentZoneId, heroCounts],
+  );
+
   const tree = useMemo(() => {
-    const items = zoneTree(zones);
+    const items = zoneTree(pickable);
     const q = normalizeText(query.trim());
     if (!q) return items;
     return items.filter(({ zone: z }) => normalizeText(z.name).includes(q));
-  }, [zones, query]);
+  }, [pickable, query]);
 
   if (!zone || !viewZone) {
-    return <span className={clsx('truncate text-sm text-parchment-400', className)}>{isDm ? 'Sin zona' : 'Explorando…'}</span>;
+    return (
+      <span className={clsx('truncate font-display text-sm tracking-wide text-parchment-300', className)}>
+        {isDm ? 'Sin zona' : campaignName ?? 'Explorando…'}
+      </span>
+    );
   }
 
   const levels = sortedLevels(zone.levels).filter(
@@ -66,7 +80,7 @@ export function ZoneNavigator({ className }: { className?: string }) {
 
   return (
     <div className={clsx('flex min-w-0 items-center gap-2', className)}>
-      {canPickZone && zones.length > 1 ? (
+      {canPickZone && pickable.length > 1 ? (
         <button
           ref={anchorRef}
           type="button"
@@ -121,7 +135,7 @@ export function ZoneNavigator({ className }: { className?: string }) {
       )}
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef} width={300}>
-        {zones.length > 6 && (
+        {pickable.length > 6 && (
           <div className="relative mb-1.5">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-parchment-400" aria-hidden />
             <input

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-/** Per-browser user preferences, persisted in localStorage. */
+/** User preferences, persisted in localStorage per claimed user (browser-wide copy before choosing a user). */
 export interface Volumes {
   master: number;
   music: number;
@@ -32,6 +32,8 @@ interface SettingsState extends SettingsData {
 }
 
 const STORAGE_KEY = 'wailers.settings';
+/** Key in use: `wailers.settings.<userId>` once a user is claimed, so users sharing a browser keep their own volumes. */
+let storageKey = STORAGE_KEY;
 
 function prefersReducedMotion(): boolean {
   try {
@@ -58,7 +60,8 @@ function clamp01(v: unknown, fallback: number): number {
 function load(): SettingsData {
   const base = defaults();
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    // A user without own preferences yet starts from this browser's shared ones.
+    const raw = localStorage.getItem(storageKey) ?? (storageKey !== STORAGE_KEY ? localStorage.getItem(STORAGE_KEY) : null);
     if (!raw) return base;
     const p: unknown = JSON.parse(raw);
     if (!p || typeof p !== 'object') return base;
@@ -84,7 +87,7 @@ function load(): SettingsData {
 
 function save(data: SettingsData): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(storageKey, JSON.stringify(data));
   } catch {
     /* storage full or unavailable: preferences stay in memory */
   }
@@ -129,10 +132,18 @@ useSettingsStore.subscribe((state, prev) => {
   if (state.reducedMotion !== prev.reducedMotion) applyReducedMotion(state.reducedMotion);
 });
 
-// Keep tabs in sync.
+/** Switch to the preferences of the claimed user (null = browser-wide ones). Called by the auth store. */
+export function setSettingsUser(userId: string | null): void {
+  const key = userId ? `${STORAGE_KEY}.${userId}` : STORAGE_KEY;
+  if (key === storageKey) return;
+  storageKey = key;
+  useSettingsStore.setState(load());
+}
+
+// Keep tabs of the same user in sync.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEY) useSettingsStore.setState(load());
+    if (e.key === storageKey) useSettingsStore.setState(load());
   });
 }
 

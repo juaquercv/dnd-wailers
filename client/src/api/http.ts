@@ -49,9 +49,9 @@ export class ApiRequestError extends Error {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: Method, path: string, body?: unknown, token: string | null = authToken): Promise<T> {
   const headers: Record<string, string> = {};
-  if (authToken) headers['x-user-token'] = authToken;
+  if (token) headers['x-user-token'] = token;
   let payload: BodyInit | undefined;
   if (body instanceof FormData) {
     payload = body;
@@ -103,7 +103,8 @@ export const api = {
 
   auth: {
     claim: (body: ClaimRequest) => request<ClaimResponse>('POST', '/auth/claim', body),
-    release: () => request<Ok>('POST', '/auth/release'),
+    /** Frees the user of `token` (defaults to the current one). */
+    release: (token?: string) => request<Ok>('POST', '/auth/release', undefined, token ?? authToken),
     me: () => request<UserDTO>('GET', '/auth/me'),
   },
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { CornerDownLeft, History, Search, SearchX } from 'lucide-react';
-import { ENTRY_KINDS, ENTRY_KIND_LABELS, type EntryKind, type LibraryEntry, type LibraryQuery } from '@wailers/shared';
+import { ENTRY_KINDS, ENTRY_KIND_LABELS, fuzzyScore, type EntryKind, type LibraryEntry, type LibraryQuery } from '@wailers/shared';
 import { api } from '../../api/http';
 import { Kbd } from '../../components/ui/Kbd';
 import { Modal } from '../../components/ui/Modal';
@@ -26,6 +26,8 @@ export interface QuickSearchProps {
 }
 
 const TOTAL = 12;
+/** One ranked page across kinds; wide enough that a few entries of other kinds rarely crowd it out. */
+const MIXED_PAGE = 24;
 
 /** Ctrl+K palette: instant fuzzy search across kinds; ↑/↓ select, Intro runs, Tab cycles actions, Esc closes. */
 export function QuickSearch(props: QuickSearchProps) {
@@ -33,17 +35,51 @@ export function QuickSearch(props: QuickSearchProps) {
   return <Palette {...props} />;
 }
 
-async function runSearch(kinds: EntryKind[], q: string): Promise<LibraryEntry[]> {
-  const text = q.trim();
+function usedAtMs(entry: LibraryEntry): number {
+  const t = entry.lastUsedAt ? Date.parse(entry.lastUsedAt) : NaN;
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * Results ranked across kinds (relevance, or most recent use for an empty query): one request without
+ * `kind` keeps the server order, entries of other kinds are dropped. When those filled the page, the
+ * allowed kinds are topped up per kind; the server order does not depend on `kind`, so the extra
+ * entries rank below everything already on the page and are appended.
+ */
+async function runSearch(kinds: EntryKind[], text: string): Promise<LibraryEntry[]> {
   const base: LibraryQuery = text ? { q: text, sort: 'relevance' } : { recentOnly: true, sort: 'recent', order: 'desc' };
-  const all = kinds.length === ENTRY_KINDS.length;
-  if (all || kinds.length === 1) {
-    const res = await api.library.search({ ...base, ...(all ? {} : { kind: kinds[0] }), page: 1, pageSize: TOTAL });
+  if (kinds.length === 1) {
+    const res = await api.library.search({ ...base, kind: kinds[0], page: 1, pageSize: TOTAL });
     return res.items ?? [];
   }
-  const per = Math.max(4, Math.ceil(TOTAL / kinds.length) + 1);
-  const pages = await Promise.all(kinds.map((kind) => api.library.search({ ...base, kind, page: 1, pageSize: per }).catch(() => null)));
-  return pages.flatMap((p) => p?.items ?? []);
+  const res = await api.library.search({ ...base, page: 1, pageSize: MIXED_PAGE });
+  const items = res.items ?? [];
+  const ranked = items.filter((i) => kinds.includes(i.kind));
+  if (ranked.length >= TOTAL || res.total <= items.length) return ranked.slice(0, TOTAL);
+
+  const missing = TOTAL - ranked.length;
+  const seen = new Set(ranked.map((i) => i.id));
+  const pages = await Promise.all(
+    kinds.map((kind) => {
+      const have = ranked.filter((i) => i.kind === kind).length;
+      return api.library.search({ ...base, kind, page: 1, pageSize: have + missing }).catch(() => null);
+    }),
+  );
+  const extra = pages.flatMap((p) => p?.items ?? []).filter((i) => !seen.has(i.id));
+  const score = (i: LibraryEntry) => (text ? fuzzyScore(text, i.name) : usedAtMs(i));
+  extra.sort((a, b) => score(b) - score(a));
+  return [...ranked, ...extra].slice(0, TOTAL);
+}
+
+/** Group by kind (order of first appearance = rank), so the first row is always the best result. */
+function groupByKind(results: LibraryEntry[]): { kind: EntryKind; items: LibraryEntry[] }[] {
+  const map = new Map<EntryKind, LibraryEntry[]>();
+  for (const r of results) {
+    const list = map.get(r.kind) ?? [];
+    list.push(r);
+    map.set(r.kind, list);
+  }
+  return [...map.entries()].map(([kind, items]) => ({ kind, items }));
 }
 
 function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickSearchProps) {
@@ -51,6 +87,8 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
   const allowed = useMemo(() => allowedKey.split(',') as EntryKind[], [allowedKey]);
   const [q, setQ] = useState('');
   const [results, setResults] = useState<LibraryEntry[]>([]);
+  /** Trimmed query the shown results belong to (null until the first answer). */
+  const [resultsQuery, setResultsQuery] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
@@ -58,52 +96,8 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
-
-  useEffect(() => {
-    const my = ++seq.current;
-    setLoading(true);
-    const timer = setTimeout(
-      () => {
-        runSearch(allowed, q)
-          .then((items) => {
-            if (my !== seq.current) return;
-            setResults(items.filter((i) => allowed.includes(i.kind)));
-            setError(null);
-            setSelected(0);
-            setActionIndex(0);
-          })
-          .catch((err: unknown) => {
-            if (my !== seq.current) return;
-            setResults([]);
-            setError(err instanceof Error ? err.message : 'No se pudo buscar');
-          })
-          .finally(() => {
-            if (my === seq.current) setLoading(false);
-          });
-      },
-      q ? 120 : 0,
-    );
-    return () => clearTimeout(timer);
-  }, [q, allowed]);
-
-  // Group by kind (order of first appearance = relevance), flatten for keyboard navigation.
-  const groups = useMemo(() => {
-    const map = new Map<EntryKind, LibraryEntry[]>();
-    for (const r of results) {
-      const list = map.get(r.kind) ?? [];
-      list.push(r);
-      map.set(r.kind, list);
-    }
-    return [...map.entries()].map(([kind, items]) => ({ kind, items }));
-  }, [results]);
-  const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
-  const current = flat[selected] ?? null;
-  const currentActions = useMemo(() => (current ? actionsFor(current) : []), [current, actionsFor]);
-
-  useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${selected}"]`);
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [selected]);
+  /** Intro pressed before the results for this query arrived: run the first result when they do. */
+  const pendingEnter = useRef<string | null>(null);
 
   const runAction = (entry: LibraryEntry, action: QuickAction | undefined) => {
     if (!action) return;
@@ -111,6 +105,58 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
     onClose();
     action.run();
   };
+  const latest = useRef({ actionsFor, runAction });
+  latest.current = { actionsFor, runAction };
+
+  useEffect(() => {
+    const my = ++seq.current;
+    const key = q.trim();
+    setLoading(true);
+    const timer = setTimeout(
+      () => {
+        runSearch(allowed, key)
+          .then((items) => {
+            if (my !== seq.current) return;
+            const ranked = items.filter((i) => allowed.includes(i.kind));
+            setResults(ranked);
+            setResultsQuery(key);
+            setError(null);
+            setSelected(0);
+            setActionIndex(0);
+            if (pendingEnter.current === key) {
+              pendingEnter.current = null;
+              const first = groupByKind(ranked)[0]?.items[0];
+              if (first) latest.current.runAction(first, latest.current.actionsFor(first)[0]);
+            }
+          })
+          .catch((err: unknown) => {
+            if (my !== seq.current) return;
+            if (pendingEnter.current === key) pendingEnter.current = null;
+            setResults([]);
+            setResultsQuery(key);
+            setError(err instanceof Error ? err.message : 'No se pudo buscar');
+          })
+          .finally(() => {
+            if (my === seq.current) setLoading(false);
+          });
+      },
+      key ? 120 : 0,
+    );
+    return () => clearTimeout(timer);
+  }, [q, allowed]);
+
+  // Grouped by kind in rank order, flattened for keyboard navigation.
+  const groups = useMemo(() => groupByKind(results), [results]);
+  const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  const current = flat[selected] ?? null;
+  const currentActions = useMemo(() => (current ? actionsFor(current) : []), [current, actionsFor]);
+  const stale = resultsQuery !== q.trim();
+  const shownQuery = resultsQuery ?? '';
+
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${selected}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -121,6 +167,12 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
       setActionIndex(0);
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      if (e.nativeEvent.isComposing) return;
+      // The list still shows an older query: wait for this one instead of acting on the wrong entry.
+      if (stale) {
+        pendingEnter.current = q.trim();
+        return;
+      }
       if (current) runAction(current, currentActions[actionIndex] ?? currentActions[0]);
     } else if (e.key === 'Tab' || (e.key === 'ArrowRight' && (e.currentTarget.selectionStart ?? 0) >= q.length)) {
       if (currentActions.length === 0) return;
@@ -152,7 +204,10 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
           <input
             ref={inputRef}
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              pendingEnter.current = null;
+              setQ(e.target.value);
+            }}
             onKeyDown={onKeyDown}
             placeholder={placeholder ?? 'Buscar en la biblioteca…'}
             aria-label="Búsqueda rápida"
@@ -163,8 +218,12 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
           <Kbd>Esc</Kbd>
         </div>
 
-        <div ref={listRef} className="scroll-thin min-h-[8rem] flex-1 overflow-y-auto p-2">
-          {!q && flat.length > 0 && (
+        <div
+          ref={listRef}
+          aria-busy={stale}
+          className={clsx('scroll-thin min-h-[8rem] flex-1 overflow-y-auto p-2 transition-opacity', stale && flat.length > 0 && 'opacity-50')}
+        >
+          {!shownQuery && flat.length > 0 && (
             <div className="flex items-center gap-1.5 px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-parchment-400">
               <History className="h-3 w-3" /> Usados recientemente
             </div>
@@ -182,7 +241,7 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
           ) : (
             groups.map((g) => (
               <div key={g.kind} className="mb-1.5">
-                {(q || groups.length > 1) && (
+                {(shownQuery || groups.length > 1) && (
                   <div className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: KIND_ACCENT[g.kind] }}>
                     <KindIcon kind={g.kind} className="h-3 w-3" />
                     {ENTRY_KIND_LABELS[g.kind].plural}

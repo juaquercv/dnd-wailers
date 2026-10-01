@@ -135,7 +135,7 @@ function DmProjection({ projection }: { projection: Projection }) {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gold-400 opacity-60" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-gold-400" />
           </span>
-          <span className="min-w-0 flex-1 leading-tight">
+          <span className="min-w-0 flex-1 leading-tight" title={`Proyectando «${projection.title || 'una imagen'}» a ${targets}`}>
             <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-gold-400/90">Proyectando a {targets}</span>
             <span className="block truncate font-semibold text-gold-100">«{projection.title || 'una imagen'}»</span>
           </span>

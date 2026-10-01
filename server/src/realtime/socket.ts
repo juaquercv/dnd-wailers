@@ -1,23 +1,31 @@
 import type { Server as HttpServer } from 'node:http';
 import { Server } from 'socket.io';
-import type { ClientToServerEvents, ServerToClientEvents, SocketData } from '@wailers/shared';
+import type { AckResult, ClientToServerEvents, ServerToClientEvents, SocketData } from '@wailers/shared';
 import { claims } from '../auth/claims';
 import { registerLiveSocket } from '../live/index';
 import type { AppSocket, IO, SessionManagerApi } from '../live/types';
 
 /*
  * Socket.IO server: token authentication, presence (claims) and public broadcasts.
- * Anonymous sockets (no/unknown token) only receive `users:status` and `sessions:list`.
+ * Anonymous sockets (no/unknown token) only receive `users:status` and `sessions:list`; every event
+ * they send is answered at once with an error instead of letting the client wait for its timeout.
  */
 
 const REVOKED_UNKNOWN_TOKEN = 'Tu sesión de usuario caducó. Vuelve a elegir tu usuario.';
+const NOT_CLAIMED = 'Debes elegir un usuario';
+const RECLAIMING = 'Tu usuario se está reconectando. Inténtalo de nuevo en un momento.';
 /** Revoked sockets that did not reconnect anonymously by themselves are closed after this delay. */
 const FORCE_DISCONNECT_MS = 1500;
 
 let ioRef: IO | null = null;
 let managerRef: SessionManagerApi | null = null;
-/** Sockets that presented a token the server does not know (expired claim or server restart). */
-const staleTokenSockets = new WeakSet<AppSocket>();
+/** Token presented by sockets the server does not know (expired claim or server restart). */
+const staleTokens = new WeakMap<AppSocket, string>();
+/**
+ * Stale-token sockets by token. A client usually claims its user again with that same token; its
+ * socket is then reconnected so it authenticates (the client does not reconnect for an unchanged token).
+ */
+const awaitingClaim = new Map<string, Set<AppSocket>>();
 
 function anonymousData(): SocketData {
   return { userId: null, userName: null, token: null, sessionId: null };
@@ -50,6 +58,47 @@ async function sendSessionsList(socket: AppSocket): Promise<void> {
   }
 }
 
+/** Anonymous sockets run no handlers: answer every event so the client gets an error right away. */
+function answerAnonymous(socket: AppSocket, error: string): void {
+  socket.onAny((event: string, ...args: unknown[]) => {
+    const ack = args[args.length - 1];
+    if (typeof ack !== 'function') return;
+    // Like the live engine, leaving is always fine: an anonymous socket is in no session.
+    const res: AckResult<null> = event === 'session:leave' ? { ok: true, data: null } : { ok: false, error };
+    (ack as (res: AckResult<null>) => void)(res);
+  });
+}
+
+/** Closing the transport (not a namespace disconnect) makes the client reconnect with its credentials. */
+function reconnectTransport(socket: AppSocket): void {
+  if (socket.connected) socket.conn.close();
+}
+
+function awaitClaim(socket: AppSocket, token: string): void {
+  if (claims.userIdForToken(token)) {
+    reconnectTransport(socket);
+    return;
+  }
+  const waiting = awaitingClaim.get(token) ?? new Set<AppSocket>();
+  waiting.add(socket);
+  awaitingClaim.set(token, waiting);
+  socket.on('disconnect', () => {
+    const current = awaitingClaim.get(token);
+    if (!current) return;
+    current.delete(socket);
+    if (current.size === 0) awaitingClaim.delete(token);
+  });
+}
+
+/** Stale tokens that were claimed again: reconnect their sockets so they authenticate. */
+function reconnectReclaimed(): void {
+  for (const [token, sockets] of [...awaitingClaim]) {
+    if (!claims.userIdForToken(token)) continue;
+    awaitingClaim.delete(token);
+    for (const socket of sockets) reconnectTransport(socket);
+  }
+}
+
 function onConnection(socket: AppSocket): void {
   socket.emit('users:status', claims.statuses());
   void sendSessionsList(socket);
@@ -57,9 +106,13 @@ function onConnection(socket: AppSocket): void {
   const { userId, token } = socket.data;
   const valid = userId !== null && token !== null && claims.userIdForToken(token) === userId;
   if (!valid) {
-    if (userId !== null || staleTokenSockets.has(socket)) {
-      socket.data = anonymousData();
+    // A token known by the middleware but released since then is stale as well.
+    const staleToken = staleTokens.get(socket) ?? (userId !== null ? token : null);
+    socket.data = anonymousData();
+    answerAnonymous(socket, staleToken ? RECLAIMING : NOT_CLAIMED);
+    if (staleToken) {
       socket.emit('auth:revoked', REVOKED_UNKNOWN_TOKEN);
+      awaitClaim(socket, staleToken);
     }
     return;
   }
@@ -83,9 +136,7 @@ function revokeUser(io: IO, userId: string, reason: string): void {
     if (!socket) continue;
     void socket.leave(room);
     // Closing the transport (instead of a namespace disconnect) lets the client reconnect on its own.
-    const timer = setTimeout(() => {
-      if (socket.connected) socket.conn.close();
-    }, FORCE_DISCONNECT_MS);
+    const timer = setTimeout(() => reconnectTransport(socket), FORCE_DISCONNECT_MS);
     timer.unref();
   }
 }
@@ -108,7 +159,7 @@ export function createSocketServer(httpServer: HttpServer): IO {
       socket.data = { userId: user.id, userName: user.name, token, sessionId: null };
     } else {
       socket.data = anonymousData();
-      if (token) staleTokenSockets.add(socket);
+      if (token) staleTokens.set(socket, token);
     }
     next();
   });
@@ -117,6 +168,7 @@ export function createSocketServer(httpServer: HttpServer): IO {
 
   claims.onChange(() => {
     io.emit('users:status', claims.statuses());
+    reconnectReclaimed();
   });
   claims.onReleased((userId, reason) => revokeUser(io, userId, reason));
 

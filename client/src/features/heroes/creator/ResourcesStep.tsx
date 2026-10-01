@@ -6,7 +6,6 @@ import { Button } from '../../../components/ui/Button';
 import { NumberInput } from '../../../components/ui/NumberInput';
 import { Tabs } from '../../../components/ui/Tabs';
 import { TextInput } from '../../../components/ui/TextInput';
-import { Toggle } from '../../../components/ui/Toggle';
 import { formatGold } from '../../../lib/format';
 import { SectionTitle } from '../../library/common';
 import { EntryPickerModal } from '../../library/editor/fields';
@@ -159,14 +158,14 @@ export function ResourcesStep({ state, onChange, ctx, sheet, campaignId, issues 
             {mode === 'uses' ? (
               <Note>Esta campaña usa habilidades con usos limitados por descanso; el DM las añade en la ficha del héroe.</Note>
             ) : (
-              <Toggle
-                label={mode === 'mana' ? `Usa ${resourceName.toLowerCase()}` : 'Lanza conjuros'}
-                description="Desactívalo para personajes sin poderes ni artilugios especiales."
-                checked={state.usesMagic}
-                onChange={(usesMagic) => onChange({ usesMagic })}
-              />
+              <Note>
+                {ctx.fromCampaign
+                  ? `Las reglas de la campaña dan ${mode === 'mana' ? resourceName.toLowerCase() : 'espacios de conjuro'} a todos los héroes al entrar en la partida, también a los que no tienen poderes.`
+                  : `Con las reglas genéricas se usa ${resourceName.toLowerCase()}. Al entrar en la partida, cada campaña da a todos sus héroes su propio recurso mágico (${resourceName.toLowerCase()}, espacios de conjuro…), también a los que no tienen poderes.`}{' '}
+                Si el tuyo no tiene poderes, no le añadas {spellsLabel.toLowerCase()}; el DM puede ajustar o vaciar su recurso a mano durante la partida.
+              </Note>
             )}
-            {mode === 'mana' && state.usesMagic && (
+            {mode === 'mana' && (
               <div className="max-w-xs">
                 <NumberInput
                   label={`${resourceName} máximo`}
@@ -177,11 +176,15 @@ export function ResourcesStep({ state, onChange, ctx, sheet, campaignId, issues 
                   onChange={(manaMax) => onChange({ manaMax })}
                 />
                 <Suggestion value={state.manaMax} suggested={sheet.suggestedMana} onReset={() => onChange({ manaMax: null })}>
-                  Sugerido: {rules.magic.manaPerLevel} por nivel = {sheet.suggestedMana}
+                  {sheet.resources.mana.max === 0 && sheet.suggestedMana > 0
+                    ? ctx.fromCampaign
+                      ? `Con 0, la campaña le dará ${sheet.suggestedMana} al entrar en la partida`
+                      : 'Con 0, cada campaña le dará el que marquen sus reglas'
+                    : `Sugerido: ${rules.magic.manaPerLevel} por nivel = ${sheet.suggestedMana}`}
                 </Suggestion>
               </div>
             )}
-            {mode === 'slots' && state.usesMagic && (
+            {mode === 'slots' && (
               <div className="flex flex-wrap gap-2">
                 {sheet.resources.slots.length === 0 ? (
                   <p className="text-xs italic text-parchment-400">Sin espacios a este nivel según la tabla de la campaña.</p>
@@ -218,7 +221,7 @@ export function ResourcesStep({ state, onChange, ctx, sheet, campaignId, issues 
           <div className="mt-3">
             {state.spells.length === 0 ? (
               <div className="rounded-lg border border-dashed border-ink-500 bg-ink-950/30 px-3 py-5 text-center text-xs text-parchment-400">
-                Ninguno todavía. Pide consejo al DM sobre cuáles puede conocer tu héroe.
+                Ninguno todavía. Pide consejo al DM sobre cuáles puede conocer tu héroe, o déjalo vacío si no tiene poderes.
               </div>
             ) : (
               <ul className="flex flex-col gap-1.5">

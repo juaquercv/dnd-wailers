@@ -3,7 +3,8 @@ import type { ClaimRequest, UserDTO } from '@wailers/shared';
 import { api, ApiRequestError, setHttpToken } from '../api/http';
 import { getSocket, setSocketToken } from '../api/socket';
 import { toast } from '../components/ui/toast';
-import { useSessionStore } from './session';
+import { clearLastSessionId, useSessionStore } from './session';
+import { setSettingsUser } from './settings';
 
 /**
  * Passwordless user claims.
@@ -13,7 +14,6 @@ import { useSessionStore } from './session';
 export type AuthStatus = 'idle' | 'restoring' | 'ready' | 'anonymous';
 
 const CLAIM_KEY = 'wailers.claim';
-const LAST_SESSION_KEY = 'wailers.lastSessionId';
 
 interface StoredClaim {
   userId: string;
@@ -96,16 +96,16 @@ function removeKey(storage: Storage | undefined, key: string): void {
 }
 
 /** Drops stored claims; the localStorage copy only when it holds the same token (another tab may own a newer one). */
-function clearClaims(token: string | null, opts: { includeLastSession?: boolean } = {}): void {
+function clearClaims(token: string | null): void {
   removeKey(safeSession(), CLAIM_KEY);
   const local = readClaim(safeLocal());
   if (local && (token === null || local.token === token)) removeKey(safeLocal(), CLAIM_KEY);
-  if (opts.includeLastSession) removeKey(safeLocal(), LAST_SESSION_KEY);
 }
 
-function applyToken(token: string | null): void {
+/** `forceReconnect`: new socket handshake even when the token did not change. */
+function applyToken(token: string | null, forceReconnect = false): void {
   setHttpToken(token);
-  setSocketToken(token);
+  setSocketToken(token, forceReconnect);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,8 @@ function goToLogin(): void {
 
 let restorePromise: Promise<void> | null = null;
 let socketBound = false;
+/** True while logout() runs: its own release triggers `auth:revoked`, which must not re-claim the user. */
+let loggingOut = false;
 
 async function requestClaim(body: ClaimRequest): Promise<{ user: UserDTO; token: string }> {
   const res = await api.auth.claim(body);
@@ -195,31 +197,70 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    const { token } = get();
-    const session = useSessionStore.getState();
-    if (session.sessionId) await session.leave().catch(() => undefined);
-    if (token) await api.auth.release().catch(() => undefined);
-    clearClaims(token, { includeLastSession: true });
-    applyToken(null);
-    set({ user: null, token: null, status: 'anonymous', claimingUserId: null });
+    const { token, user } = get();
+    loggingOut = true;
+    try {
+      const session = useSessionStore.getState();
+      if (session.sessionId) await session.leave().catch(() => undefined);
+      if (token) await api.auth.release(token).catch(() => undefined);
+      clearClaims(token);
+      if (user) clearLastSessionId(user.id);
+      applyToken(null);
+      set({ user: null, token: null, status: 'anonymous', claimingUserId: null });
+    } finally {
+      loggingOut = false;
+    }
     goToLogin();
   },
 }));
 
-let revoking = false;
+// Each claimed user keeps their own preferences (volumes…), even with several users in one browser.
+useAuthStore.subscribe((state, prev) => {
+  if (state.user?.id !== prev.user?.id) setSettingsUser(state.user?.id ?? null);
+});
 
-/** Silent re-claim after `auth:revoked` (e.g. server restart); otherwise back to login. */
+let revoking = false;
+/** Recent silent re-claims: a server that keeps forgetting the token must not cause an endless loop. */
+let reclaimTimes: number[] = [];
+const RECLAIM_WINDOW_MS = 30_000;
+const MAX_RECLAIMS_PER_WINDOW = 3;
+
+function isCurrentClaim(userId: string, token: string): boolean {
+  const s = useAuthStore.getState();
+  return !loggingOut && s.status === 'ready' && s.user?.id === userId && s.token === token;
+}
+
+/**
+ * Silent re-claim after `auth:revoked` (server restart, claim expired while offline); otherwise back to login.
+ * The server keeps treating the current socket as anonymous, so it always reconnects afterwards.
+ */
 async function handleRevoked(): Promise<void> {
   const { user, token, status } = useAuthStore.getState();
-  if (revoking || status !== 'ready' || !user || !token) return;
+  if (revoking || loggingOut || status !== 'ready' || !user || !token) return;
   revoking = true;
   try {
-    const res = await requestClaim({ userId: user.id, token, resumeOnly: true });
-    writeClaim({ userId: res.user.id, token: res.token });
-    applyToken(res.token);
-    useAuthStore.setState({ user: res.user, token: res.token, status: 'ready' });
-  } catch {
-    clearClaims(token, { includeLastSession: true });
+    const now = Date.now();
+    reclaimTimes = reclaimTimes.filter((t) => now - t < RECLAIM_WINDOW_MS);
+    let res: { user: UserDTO; token: string } | null = null;
+    if (reclaimTimes.length < MAX_RECLAIMS_PER_WINDOW) {
+      reclaimTimes.push(now);
+      res = await requestClaim({ userId: user.id, token, resumeOnly: true }).catch(() => null);
+    }
+    if (!isCurrentClaim(user.id, token)) {
+      // Logged out (or another user was chosen) meanwhile: give back the claim just taken.
+      const latest = useAuthStore.getState();
+      const keptHere = !loggingOut && latest.status === 'ready' && latest.token === res?.token;
+      if (res && !keptHere) void api.auth.release(res.token).catch(() => undefined);
+      return;
+    }
+    if (res) {
+      writeClaim({ userId: res.user.id, token: res.token });
+      applyToken(res.token, true);
+      useAuthStore.setState({ user: res.user, token: res.token, status: 'ready' });
+      return;
+    }
+    clearClaims(token);
+    useSessionStore.getState().reset();
     applyToken(null);
     useAuthStore.setState({ user: null, token: null, status: 'anonymous', claimingUserId: null });
     toast.warning('Tu usuario fue liberado. Vuelve a elegir tu aventurero.');

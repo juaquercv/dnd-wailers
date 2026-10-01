@@ -651,18 +651,17 @@ export async function loadEntry<K extends EntryKind>(
 export async function markEntryUsed(entryId: string, campaignId: string, userId: string): Promise<void> {
   const now = new Date();
   try {
-    await prisma.$transaction([
-      prisma.entryUsage.upsert({
-        where: { entryId_campaignId: { entryId, campaignId } },
-        create: { entryId, campaignId, lastUsedAt: now },
-        update: { lastUsedAt: now },
-      }),
-      prisma.recentUse.upsert({
-        where: { userId_entryId: { userId, entryId } },
-        create: { userId, entryId, usedAt: now },
-        update: { usedAt: now },
-      }),
-    ]);
+    // Sequential, recentUse first: same order as services/library.ts (avoids deadlocks).
+    await prisma.recentUse.upsert({
+      where: { userId_entryId: { userId, entryId } },
+      create: { userId, entryId, usedAt: now },
+      update: { usedAt: now },
+    });
+    await prisma.entryUsage.upsert({
+      where: { entryId_campaignId: { entryId, campaignId } },
+      create: { entryId, campaignId, lastUsedAt: now },
+      update: { lastUsedAt: now },
+    });
   } catch (err) {
     console.error('[live] No se pudo registrar el uso del elemento', entryId, err);
   }
@@ -742,8 +741,27 @@ export function sanitizeInventoryItem(raw: unknown): InventoryItem {
   return item;
 }
 
-/** Two stacks can merge when they describe the same thing and neither is equipped. */
-export function canStack(a: InventoryItem, b: InventoryItem): boolean {
+/**
+ * Ids (among `entryIds`) of library items flagged as stackable. Items of other library entries
+ * (weapons, artifacts…) never merge into stacks; custom items (no entry) are not listed here.
+ */
+export async function stackableEntryIds(entryIds: Iterable<string | null | undefined>): Promise<Set<string>> {
+  const ids = [...new Set([...entryIds].filter((id): id is string => typeof id === 'string' && id !== ''))];
+  const out = new Set<string>();
+  if (ids.length === 0) return out;
+  const rows = await prisma.libraryEntry.findMany({ where: { id: { in: ids }, kind: 'item' }, select: { id: true, data: true } });
+  for (const row of rows) {
+    if (isPlainObject(row.data) && row.data.stackable === true) out.add(row.id);
+  }
+  return out;
+}
+
+/**
+ * Two stacks can merge when they describe the same thing and neither is equipped. Items of a
+ * library entry merge only when that entry is stackable (`stackable` from stackableEntryIds).
+ */
+export function canStack(a: InventoryItem, b: InventoryItem, stackable: ReadonlySet<string>): boolean {
+  if (a.entryId !== null && !stackable.has(a.entryId)) return false;
   return (
     a.entryId === b.entryId &&
     a.name === b.name &&
@@ -756,9 +774,9 @@ export function canStack(a: InventoryItem, b: InventoryItem): boolean {
   );
 }
 
-/** Add `item` to a list, merging with a compatible stack. Returns the resulting stack. */
-export function addItemTo(list: InventoryItem[], item: InventoryItem): InventoryItem {
-  const target = list.find((it) => it.id !== item.id && canStack(it, item));
+/** Add `item` to a list, merging with a compatible stack (see canStack). Returns the resulting stack. */
+export function addItemTo(list: InventoryItem[], item: InventoryItem, stackable: ReadonlySet<string>): InventoryItem {
+  const target = list.find((it) => it.id !== item.id && canStack(it, item, stackable));
   if (target) {
     target.quantity = Math.min(target.quantity + item.quantity, 999999);
     return target;
@@ -866,4 +884,41 @@ export function playerSeesPoint(session: LiveSession, userId: string, zoneId: st
   if (entry.mode === 'none' || !entry.allowed.has(zoneId)) return false;
   if (entry.mode === 'all') return true;
   return pointInAnyPolygon(p, entry.areas[levelId] ?? []);
+}
+
+/** Whether a player currently receives a token on the map (same rules as buildPlayerView). */
+export function playerSeesToken(
+  session: LiveSession,
+  userId: string,
+  token: Pick<Token, 'kind' | 'hidden' | 'zoneId' | 'levelId' | 'x' | 'y'>,
+): boolean {
+  if (token.hidden) return false;
+  if (token.kind === 'hero') return playerSeesZone(session, userId, token.zoneId);
+  return playerSeesPoint(session, userId, token.zoneId, token.levelId, token);
+}
+
+/**
+ * Visibility of a log line about something only some players may know: 'all' when there are players
+ * and every one of them passes `canSee`, else 'dm' (a line reaches every player or only the DM).
+ */
+export function visibilityForPlayers(state: LiveState, canSee: (userId: string) => boolean): 'all' | 'dm' {
+  const ids = playerIds(state);
+  return ids.length > 0 && ids.every(canSee) ? 'all' : 'dm';
+}
+
+/** Log visibility for news about a non-hero token: every player must see it on the map (and pass `extra`). */
+export function tokenNewsVisibility(
+  session: LiveSession,
+  token: Pick<Token, 'kind' | 'hidden' | 'zoneId' | 'levelId' | 'x' | 'y'>,
+  extra?: (userId: string) => boolean,
+): 'all' | 'dm' {
+  return visibilityForPlayers(session.state, (uid) => playerSeesToken(session, uid, token) && (extra ? extra(uid) : true));
+}
+
+/** Whether every player except `except` may see other heroes' inventories (and so does the session default). */
+export function inventoriesArePublic(state: LiveState, except: ReadonlyArray<string | null>): boolean {
+  if (!state.visibility.global.canSeeOthersInventory) return false;
+  return playerIds(state)
+    .filter((uid) => !except.includes(uid))
+    .every((uid) => effectiveVisibility(state, uid).canSeeOthersInventory);
 }

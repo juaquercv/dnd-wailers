@@ -37,7 +37,7 @@ export { LightingOverlay } from './LightingOverlay';
 export type { LightingOverlayProps, TokenLight } from './LightingOverlay';
 
 export { LevelStack } from './LevelStack';
-export type { LevelStackProps } from './LevelStack';
+export type { LevelStackProps, LevelStackViewer } from './LevelStack';
 
 export { PingLayer } from './PingLayer';
 export type { PingLayerProps } from './PingLayer';

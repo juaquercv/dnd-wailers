@@ -20,7 +20,9 @@ import {
   type LibraryEntry,
   type LiveState,
   type LogEntry,
+  type OverviewMap,
   type Roller,
+  type RuleSystem,
   type SessionEvent,
   type SessionSummary,
   type SessionView,
@@ -154,16 +156,45 @@ export class RunningSession implements LiveSession {
   }
 }
 
+/** Roll log data of a roll the DM asked for (RollResult.requestId set). */
+export function isRequestedRollData(data: unknown): boolean {
+  return isPlainObject(data) && typeof data.requestId === 'string' && data.requestId !== '';
+}
+
 /** Whether `userId` may receive a log line of this session (same rules for live emission and REST). */
-export function canSeeLog(state: LiveState, entry: Pick<LogEntry, 'type' | 'visibility' | 'actorUserId' | 'targetUserId'>, userId: string): boolean {
+export function canSeeLog(
+  state: LiveState,
+  entry: Pick<LogEntry, 'type' | 'visibility' | 'actorUserId' | 'targetUserId'> & { data?: unknown },
+  userId: string,
+): boolean {
   if (userId === state.hostUserId) return true;
   if (!state.players[userId]) return false;
   if (entry.visibility === 'dm') return false;
   if (entry.visibility === 'user') return entry.targetUserId === userId || entry.actorUserId === userId;
   if (entry.type === 'roll' && entry.actorUserId && entry.actorUserId !== userId && entry.actorUserId !== state.hostUserId) {
+    // A public roll the DM asked for is for everyone, like the DM's own public rolls.
+    if (isRequestedRollData(entry.data)) return true;
     return effectiveVisibility(state, userId).canSeeOthersRolls;
   }
   return true;
+}
+
+/** Overview map for players: secret links («Paso secreto») are the DM's. */
+function overviewForPlayers(overview: OverviewMap): OverviewMap {
+  return { ...overview, links: overview.links.filter((link) => link.style !== 'secret') };
+}
+
+/** Game data of a hero sheet the DM manages during a game (everything except the player's notes). */
+function heroGameData(data: LiveState['heroes'][string]['data']): Omit<LiveState['heroes'][string]['data'], 'notes'> {
+  const { notes: _notes, ...rest } = data;
+  return rest;
+}
+
+/** JSON with object keys sorted: documents read back from the database may list keys in another order. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    isPlainObject(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v,
+  );
 }
 
 /** 'session:leave' from a socket that is not in a session any more: nothing to do, answered as success. */
@@ -265,9 +296,29 @@ export class SessionManager implements SessionManagerApi {
     const sounds = await this.getSounds();
     const { campaign, entries } = await loadCampaignRuntime(row.campaignId, sounds);
     const state = parseLiveState(row);
+    await this.refreshHeroesFromLibrary(state, campaign.rules);
     const session = new RunningSession(row.id, state, campaign, entries);
+    this.syncHeroMirrors(session.state);
     this.sessions.set(session.id, session);
     return session;
+  }
+
+  /**
+   * The hero sheets of a stored snapshot may be older than the library (the hero kept playing in other
+   * sessions or campaigns meanwhile). Every live change is written back, so the library copy wins.
+   */
+  private async refreshHeroesFromLibrary(state: LiveState, rules: RuleSystem): Promise<void> {
+    const ids = Object.keys(state.heroes);
+    if (ids.length === 0) return;
+    // Write-backs still in flight (e.g. of this very session, just unloaded) land first.
+    await Promise.all([...this.heroWrites]);
+    const rows = await prisma.libraryEntry.findMany({ where: { id: { in: ids }, kind: 'hero' }, include: entryInclude(null) });
+    for (const row of rows) {
+      const stored = state.heroes[row.id];
+      if (!stored) continue;
+      const fresh = heroSheetFromEntry(entryToDTO(row), rules);
+      state.heroes[row.id] = { ...fresh, ownerId: fresh.ownerId || stored.ownerId };
+    }
   }
 
   private async getSounds(): Promise<Map<string, SoundRef>> {
@@ -298,11 +349,6 @@ export class SessionManager implements SessionManagerApi {
 
   zone(session: LiveSession, zoneId: string): Zone | undefined {
     return session.campaign.zones.find((z) => z.id === zoneId);
-  }
-
-  /** Active turn rollers offered to a player at the start of their turn. */
-  turnRollers(session: LiveSession): Roller[] {
-    return session.campaign.rollers.filter((r) => r.active && r.isTurnRoll);
   }
 
   // ---------------------------------------------------------------------------
@@ -385,7 +431,7 @@ export class SessionManager implements SessionManagerApi {
     const zoneIds = new Set<string>();
     for (const t of visionTokensFor(state, userId)) {
       zoneIds.add(t.zoneId);
-      parts.push(`${t.id}:${t.zoneId}:${t.levelId}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.facing)}:${visionCellsFor(state, t, eff)}`);
+      parts.push(`${t.id}:${t.zoneId}:${t.levelId}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.facing)}:${visionCellsFor(state, t, eff, userId)}`);
     }
     for (const zoneId of zoneIds) {
       const zone = session.campaign.zones.find((z) => z.id === zoneId);
@@ -519,7 +565,7 @@ export class SessionManager implements SessionManagerApi {
       build: () => ({
         campaign: { id: campaign.id, name: campaign.name, rules: campaign.rules, spawn: campaign.spawn },
         zones: visible.map((z) => this.filteredZone(session, z)),
-        overview: eff.canSeeOverview ? campaign.overview : null,
+        overview: eff.canSeeOverview ? overviewForPlayers(campaign.overview) : null,
       }),
     };
   }
@@ -1119,17 +1165,35 @@ export class SessionManager implements SessionManagerApi {
   }
 
   private onRollersChanged(campaignId: string, rollers: Roller[]): void {
+    const offerable = new Set(rollers.filter((r) => r.active && r.isTurnRoll).map((r) => r.id));
     for (const session of this.sessionsOfCampaign(campaignId)) {
       session.campaign.rollers = [...rollers];
       this.io.to(`session:${session.id}:dm`).emit('session:rollers', session.campaign.rollers);
+      // A pending turn offer keeps only rollers that still exist and are still active turn rollers.
+      const offer = session.state.turnOffer;
+      if (offer && offer.rollerIds.some((id) => !offerable.has(id))) {
+        this.mutate(session, (state) => {
+          const current = state.turnOffer;
+          if (!current) return;
+          const rollerIds = current.rollerIds.filter((id) => offerable.has(id));
+          state.turnOffer = rollerIds.length > 0 ? { ...current, rollerIds } : null;
+        });
+      }
     }
   }
 
   private onHeroChanged(hero: LibraryEntry<'hero'>): void {
     const echo = this.writeBackEcho;
+    // A write-back of another live session carries that game's progress; anything else is a library edit.
+    const fromLiveSession = echo !== null && echo.heroId === hero.id;
     for (const session of [...this.sessions.values()]) {
-      if (echo && echo.heroId === hero.id && echo.sessionId === session.id) continue;
+      if (fromLiveSession && echo.sessionId === session.id) continue;
       if (!session.state.heroes[hero.id]) continue;
+      const status = session.state.status;
+      if (!fromLiveSession && (status === 'playing' || status === 'paused')) {
+        this.applyLibraryEditInGame(session, hero);
+        continue;
+      }
       // The library edit supersedes unsaved live changes of this hero.
       const key = `${session.id}:${hero.id}`;
       const pending = this.heroTimers.get(key);
@@ -1148,6 +1212,47 @@ export class SessionManager implements SessionManagerApi {
         sheet.ownerId = next.ownerId || sheet.ownerId;
         sheet.data = next.data;
       });
+    }
+  }
+
+  /**
+   * A library edit of a hero who is in a game: only the descriptive fields are taken (name, portrait,
+   * categories, notes). HP, gold, XP, level, inventory, stats and resources stay as the DM left them in
+   * the game, and that live sheet is written back so the library matches it again (a player cannot
+   * give themselves gold, and an editor opened before the game cannot wipe its progress).
+   */
+  private applyLibraryEditInGame(session: RunningSession, hero: LibraryEntry<'hero'>): void {
+    const live = session.state.heroes[hero.id];
+    if (!live) return;
+    const next = heroSheetFromEntry(hero, session.campaign.rules);
+    const kept = next.level !== live.level || stableJson(heroGameData(next.data)) !== stableJson(heroGameData(live.data));
+    this.mutate(
+      session,
+      (state) => {
+        const sheet = state.heroes[hero.id];
+        if (!sheet) return;
+        sheet.name = next.name;
+        sheet.imageUrl = next.imageUrl;
+        sheet.categoryIds = next.categoryIds;
+        sheet.ownerId = next.ownerId || sheet.ownerId;
+        sheet.data.notes = next.data.notes;
+      },
+      { heroes: kept ? [hero.id] : [] },
+    );
+    if (!kept) return;
+    const playerId =
+      Object.values(session.state.players).find((p) => p.heroId === hero.id)?.userId ??
+      (session.state.players[live.ownerId] ? live.ownerId : null);
+    if (playerId) {
+      this.emitEvent(
+        session,
+        {
+          type: 'toast',
+          level: 'warning',
+          text: `«${next.name}» está en una partida: el DM gestiona sus PV, XP, monedas, inventario y estadísticas. Solo se han aplicado el nombre, el retrato y las notas.`,
+        },
+        { kind: 'users', userIds: [playerId] },
+      );
     }
   }
 

@@ -3,8 +3,8 @@ import { claims } from '../../auth/claims';
 import { isPlainObject } from '../../services/serializers';
 import { DEFAULT_PLAYER_COLOR, resolveSpawn } from '../runtime';
 import type { SessionManager } from '../SessionManager';
-import { HandlerError, type AppSocket, type HandlerCtx, type LogInput } from '../types';
-import { syncPlayerEntries } from './turns';
+import { HandlerError, type AppSocket, type HandlerCtx, type LogInput, type MutateOptions } from '../types';
+import { announceTurnStart, startTurns, type TurnLanding } from './turns';
 
 /*
  * Session lifecycle: join/leave (presence), start, save, pause, end and session options.
@@ -75,6 +75,14 @@ function start(manager: SessionManager, ctx: HandlerCtx): null {
 
   const rules = session.campaign.rules;
   const adaptedHeroes: string[] = [];
+  const firstStart = session.state.startedAt === null;
+  const opts: MutateOptions = {
+    persistNow: true,
+    zones: true,
+    heroes: adaptedHeroes,
+    log: { type: 'system', text: '¡La aventura comienza!' },
+  };
+  const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     session,
     (state) => {
@@ -100,16 +108,13 @@ function start(manager: SessionManager, ctx: HandlerCtx): null {
       for (const token of Object.values(state.tokens)) {
         if (token.kind === 'hero') manager.ensureZoneInstantiated(session, state, token.zoneId);
       }
-      if (state.turn.order.length === 0) syncPlayerEntries(state);
       state.dmView ??= { zoneId: spawn.zoneId, levelId: spawn.levelId };
+      // Every player with a hero takes part; the current entry starts its turn (first start: top of round 1).
+      out.landing = startTurns(session, state, opts, firstStart);
     },
-    {
-      persistNow: true,
-      zones: true,
-      heroes: adaptedHeroes,
-      log: { type: 'system', text: '¡La aventura comienza!' },
-    },
+    opts,
   );
+  if (out.landing) announceTurnStart(manager, session, out.landing);
   manager.broadcastSessionsList();
   return null;
 }

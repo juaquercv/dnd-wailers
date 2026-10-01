@@ -1,12 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Volume2 } from 'lucide-react';
 import { toast } from '../../components/ui/toast';
 import { useSessionEvent } from '../../lib/eventBus';
-import { audioEngine, STOP_FADE_MS, useAudioEngineState, type AudioErrorInfo } from './audioEngine';
-import { useSessionAudio } from './useSessionAudio';
+import { useSessionStore } from '../../stores/session';
+import { audioEngine, STOP_FADE_MS, useAudioEngineState, type AudioErrorInfo, type LoopChannel } from './audioEngine';
+import { useSessionAudio, type SessionTrack } from './useSessionAudio';
 
 const ERROR_TOAST_COOLDOWN_MS = 30_000;
+/** How long a new loop waits for its library volume before starting at the default one. */
+const VOLUME_WAIT_MS = 1500;
 
 const CHANNEL_NOUN: Record<AudioErrorInfo['channel'], string> = {
   music: 'la música',
@@ -25,18 +28,8 @@ function errorMessage(info: AudioErrorInfo): string {
  */
 export function AudioController() {
   const info = useSessionAudio();
-  const musicUrl = info.active ? info.music?.url ?? null : null;
-  const musicLabel = info.music?.name ?? null;
-  const ambienceUrl = info.active ? info.ambience?.url ?? null : null;
-  const ambienceLabel = info.ambience?.name ?? null;
-
-  useEffect(() => {
-    audioEngine.setTrack('music', musicUrl, { label: musicLabel });
-  }, [musicUrl, musicLabel]);
-
-  useEffect(() => {
-    audioEngine.setTrack('ambience', ambienceUrl, { label: ambienceLabel });
-  }, [ambienceUrl, ambienceLabel]);
+  useLoopChannel('music', info.active ? info.music : null);
+  useLoopChannel('ambience', info.active ? info.ambience : null);
 
   useEffect(() => {
     audioEngine.setDmMaster(info.master);
@@ -63,10 +56,48 @@ export function AudioController() {
   return <AudioUnlockPill />;
 }
 
-/** Floating pill shown while the browser blocks audio until the user interacts with the page. */
+/**
+ * Drives one looping channel with the sound's own library volume. A new track waits (briefly) until
+ * that volume is known, so a quiet loop never starts at full volume and then drops.
+ */
+function useLoopChannel(channel: LoopChannel, track: SessionTrack | null): void {
+  const url = track?.url ?? null;
+  const label = track?.name ?? null;
+  const volume = track?.volume ?? null;
+  const resolving = !!url && !!track?.resolving;
+  const [waitedFor, setWaitedFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!resolving || !url) return;
+    const timer = setTimeout(() => setWaitedFor(url), VOLUME_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [resolving, url]);
+
+  useEffect(() => {
+    if (resolving && waitedFor !== url) return;
+    audioEngine.setTrack(channel, url, { label, volume: volume ?? undefined });
+  }, [channel, url, label, volume, resolving, waitedFor]);
+}
+
+/** The local user has roll prompt cards (DM request or turn offer) at the bottom of the screen. */
+function useHasRollPrompts(): boolean {
+  return useSessionStore((s) => {
+    const view = s.view;
+    const me = view?.meUserId;
+    if (!view || !me) return false;
+    return view.state.turnOffer?.userId === me || view.state.rollRequests.some((r) => r.targetUserId === me);
+  });
+}
+
+/**
+ * Floating pill shown while the browser blocks audio until the user interacts with the page. It hides
+ * while roll prompts occupy the same spot: clicking one of them is a gesture that unlocks audio too, and
+ * the pill must never swallow the click meant for "Lanzar".
+ */
 function AudioUnlockPill() {
   const { locked } = useAudioEngineState();
-  if (!locked || typeof document === 'undefined') return null;
+  const hasRollPrompts = useHasRollPrompts();
+  if (!locked || hasRollPrompts || typeof document === 'undefined') return null;
   return createPortal(
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-90 flex justify-center px-4">
       <button

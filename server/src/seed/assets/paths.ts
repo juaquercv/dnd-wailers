@@ -3,7 +3,7 @@ export const SEED_DIR = 'seed';
 export const SEED_URL_PREFIX = '/uploads/seed';
 
 /** Bump to force regeneration of every asset file on the next boot. */
-export const ASSETS_VERSION = '1';
+export const ASSETS_VERSION = '2';
 
 export function seedUrl(file: string): string {
   return `${SEED_URL_PREFIX}/${file}`;

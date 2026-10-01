@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { CircleAlert, CircleCheck, CircleX, Info, TriangleAlert, X } from 'lucide-react';
@@ -45,10 +45,13 @@ function getSnapshot(): ToastItem[] {
 }
 
 function push(level: ToastLevel, text: string, opts: ToastOptions = {}): number {
-  const existing = toasts.find((t) => t.level === level && t.text === text && t.description === opts.description);
+  // Toasts with an action (e.g. "Deshacer") are never merged: each one acts on its own event.
+  const existing = opts.action
+    ? undefined
+    : toasts.find((t) => !t.action && t.level === level && t.text === text && t.description === opts.description);
   if (existing) {
     // Same message again: bump the counter and restart its timer.
-    toasts = toasts.map((t) => (t.id === existing.id ? { ...t, count: t.count + 1, createdAt: Date.now() } : t));
+    toasts = toasts.map((t) => (t.id === existing.id ? { ...t, ...opts, count: t.count + 1, createdAt: Date.now() } : t));
     emit();
     return existing.id;
   }
@@ -193,14 +196,78 @@ function ToastCard({ item }: { item: ToastItem }) {
   );
 }
 
-/** Mount once near the root: stacked toasts bottom-right. */
+/** Element of the game table that toasts must stay inside (the right sidebar holds the chat and dice controls). */
+const GAME_VIEWPORT_ID = 'game-viewport';
+const ANCHOR_MARGIN = 12;
+
+interface ToastAnchor {
+  top: number;
+  right: number;
+}
+
+/** Top-right corner of the game viewport while it is on screen (null elsewhere). Only tracked while toasts show. */
+function useGameViewportAnchor(active: boolean): ToastAnchor | null {
+  const [anchor, setAnchor] = useState<ToastAnchor | null>(null);
+
+  useLayoutEffect(() => {
+    if (!active || typeof document === 'undefined') return;
+    let el: HTMLElement | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+
+    const measure = () => {
+      if (!el || !el.isConnected) {
+        setAnchor(null);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const next = {
+        top: Math.round(rect.top) + ANCHOR_MARGIN,
+        right: Math.max(0, Math.round(window.innerWidth - rect.right)) + ANCHOR_MARGIN,
+      };
+      setAnchor((prev) => (prev && prev.top === next.top && prev.right === next.right ? prev : next));
+    };
+    const track = () => {
+      const next = document.getElementById(GAME_VIEWPORT_ID);
+      if (next === el) return;
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+      el = next;
+      if (el && typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(measure);
+        resizeObserver.observe(el);
+      }
+      measure();
+    };
+
+    track();
+    const mutationObserver = new MutationObserver(track);
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('resize', measure);
+    return () => {
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', measure);
+      setAnchor(null);
+    };
+  }, [active]);
+
+  return anchor;
+}
+
+/** Mount once near the root: stacked toasts bottom-right (top-right of the map during a game). */
 export function Toaster() {
   const items = useToasts();
+  const anchor = useGameViewportAnchor(items.length > 0);
   if (typeof document === 'undefined') return null;
+  const style: CSSProperties | undefined = anchor ? { top: anchor.top, right: anchor.right } : undefined;
   return createPortal(
     <div
       aria-live="polite"
-      className="pointer-events-none fixed bottom-4 right-4 z-100 flex flex-col items-end gap-2"
+      style={style}
+      className={clsx(
+        'pointer-events-none fixed z-100 flex flex-col items-end gap-2',
+        !anchor && 'bottom-4 right-4',
+      )}
     >
       {items.map((t) => (
         <ToastCard key={t.id} item={t} />

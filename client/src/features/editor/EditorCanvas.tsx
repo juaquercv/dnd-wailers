@@ -126,7 +126,7 @@ export function EditorCanvas() {
           onViewChange={controller.onViewChange}
         >
           <CombinedLayer listening={false}>
-            <LevelStack zone={zone} currentLevelId={level.id} viewOffset={NO_OFFSET} />
+            <LevelStack zone={zone} currentLevelId={level.id} viewOffset={NO_OFFSET} viewer="dm" />
             <LevelBackground level={backgroundLevel} />
             <GridLayer level={level} />
           </CombinedLayer>

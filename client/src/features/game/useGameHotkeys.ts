@@ -67,7 +67,8 @@ export function useGameHotkeys({ onQuickSearch, enabled = true }: GameHotkeysOpt
         if (!isDm || keyboardBusy()) return;
         const tokens = selectedTokens();
         if (tokens.length === 0) return;
-        void removeTokens(tokens, tokens.length > 1);
+        // Same confirmation as the context menu: Delete/Backspace are easy to hit and removals cannot be undone.
+        void removeTokens(tokens, true);
       },
       h: () => {
         if (!isDm || keyboardBusy()) return;
@@ -84,9 +85,7 @@ export function useGameHotkeys({ onQuickSearch, enabled = true }: GameHotkeysOpt
       },
       p: () => {
         if (keyboardBusy()) return;
-        const ui = useGameUi.getState();
-        ui.togglePingMode();
-        if (useGameUi.getState().pingMode) toast.info('Modo ping: haz clic en el mapa para señalar (P o Esc para salir)');
+        useGameUi.getState().togglePingMode();
       },
       'r, shift+r': (e) => {
         if (keyboardBusy()) return;

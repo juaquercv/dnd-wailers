@@ -169,6 +169,8 @@ export function EdgeNavigator() {
       return [{ dir, Icon, className, label: neighbor.name, title, emphasis: false, run: () => void travelDm(dir, neighborId) }];
     }
     if (!effective.canMoveOwnToken) return [];
+    // Players leave a zone through its edges only from the zone's main level (server rule).
+    if (level.id !== zone.defaultLevelId) return [];
     const near = ownTokens.find((t) => distanceToEdge(t, dir, level) <= NEAR_EDGE_CELLS * cell);
     if (!near) return [];
     const name = neighbor?.name ?? remote[neighborId]?.name ?? 'Zona contigua';

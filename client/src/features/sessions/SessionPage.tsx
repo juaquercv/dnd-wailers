@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { CircleX, Crown, DoorOpen, Flag, Hourglass, Pause, Play, RefreshCw, Swords, UserX, WifiOff } from 'lucide-react';
 import { APP_NAME } from '@wailers/shared';
@@ -300,17 +301,26 @@ export default function SessionPage() {
 
   return (
     <div className="relative h-full min-h-0">
-      {showReconnect && (
-        <div
-          role="status"
-          aria-live="assertive"
-          className="pointer-events-none fixed left-1/2 top-2 z-90 flex -translate-x-1/2 animate-slide-up items-center gap-2.5 rounded-full border border-gold-500/60 bg-ink-950/95 px-4 py-2 text-sm font-semibold text-gold-200 shadow-glow-gold backdrop-blur"
-        >
-          <WifiOff className="h-4 w-4 text-gold-400" aria-hidden />
-          Reconectando…
-          <Spinner size="xs" label="Reconectando con el servidor" />
-        </div>
-      )}
+      {/*
+       * Portaled to <body>: #root is an isolated stacking context, so an in-tree banner would sit
+       * below every portaled modal / drawer. The flex wrapper centres it (the slide-up animation
+       * owns `transform`, which would cancel a translate-based centring).
+       */}
+      {showReconnect &&
+        createPortal(
+          <div className="pointer-events-none fixed inset-x-0 top-2 z-90 flex justify-center px-4">
+            <div
+              role="status"
+              aria-live="assertive"
+              className="flex animate-slide-up items-center gap-2.5 rounded-full border border-gold-500/60 bg-ink-950/95 px-4 py-2 text-sm font-semibold text-gold-200 shadow-glow-gold backdrop-blur"
+            >
+              <WifiOff className="h-4 w-4 text-gold-400" aria-hidden />
+              Reconectando…
+              <Spinner size="xs" label="Reconectando con el servidor" />
+            </div>
+          </div>,
+          document.body,
+        )}
 
       <div key={screenKey} className="h-full min-h-0 animate-fade-in">
         {showClosed && closedStatus ? (

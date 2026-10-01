@@ -2,6 +2,7 @@ import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Backpack,
   Copy,
+  Crown,
   Dices,
   Eye,
   EyeOff,
@@ -52,6 +53,7 @@ import {
   playerForToken,
   removeTokens,
   requestRoll,
+  revealWithEntrance,
   rotateTokens,
   send,
   setHidden,
@@ -206,6 +208,12 @@ function dmItems(
       shortcut: 'H',
       onClick: () => void setHidden(targets, !allHidden),
     },
+  );
+  if (n === 1 && token.hidden && (token.kind === 'creature' || token.kind === 'npc')) {
+    // The big boss moment in one click: reveal + cinematic entrance (with a roar when available).
+    items.push({ label: 'Mostrar con entrada dramática', icon: <Crown />, onClick: () => void revealWithEntrance(token) });
+  }
+  items.push(
     {
       label: allLit ? 'Apagar antorcha' : 'Encender antorcha',
       icon: <Flame />,

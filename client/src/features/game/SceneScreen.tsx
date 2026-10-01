@@ -7,10 +7,12 @@ import { useDisplayState, useSessionStore } from '../../stores/session';
  * vignette and the zone / campaign title.
  */
 export function SceneScreen() {
-  const { effective } = useDisplayState();
+  const { effective, isPreview } = useDisplayState();
   const campaignName = useSessionStore((s) => s.campaign?.name ?? null);
   const sessionName = useSessionStore((s) => s.view?.state.name ?? null);
-  const zoneName = useSessionStore((s) => (s.viewZone ? s.zonesById[s.viewZone.zoneId]?.name ?? null : null));
+  const viewedZoneName = useSessionStore((s) => (s.viewZone ? s.zonesById[s.viewZone.zoneId]?.name ?? null : null));
+  // Players with vision "Nada" receive no zones: the DM preview must not reveal the DM's zone either.
+  const zoneName = isPreview ? null : viewedZoneName;
   const imageUrl = effective?.sceneImageUrl ?? null;
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);

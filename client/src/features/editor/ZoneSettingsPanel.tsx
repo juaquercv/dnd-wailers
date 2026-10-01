@@ -1,4 +1,4 @@
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { CloudSun, Compass, Flag, Grid3x3, Info, Map as MapIcon, NotebookPen, Tag, Trash2 } from 'lucide-react';
 import {
@@ -132,6 +132,44 @@ function NeighborCompass({ zone, zones }: { zone: Zone; zones: Zone[] }) {
   );
 }
 
+/** Zone name: the text being typed stays local, so an empty name is never stored nor autosaved. */
+function ZoneNameField({ zone }: { zone: Zone }) {
+  const updateZone = useEditorStore((s) => s.updateZone);
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const rename = (raw: string) => {
+    const name = raw.trim();
+    if (!name || name === zone.name) return;
+    updateZone(
+      zone.id,
+      (d) => {
+        d.name = name;
+      },
+      { coalesceKey: `zone-name:${zone.id}` },
+    );
+  };
+
+  return (
+    <TextInput
+      label="Nombre"
+      size="sm"
+      required
+      value={draft ?? zone.name}
+      maxLength={80}
+      error={draft !== null && !draft.trim() ? 'La zona necesita un nombre' : undefined}
+      onFocus={() => setDraft(zone.name)}
+      onValueChange={(v) => {
+        setDraft(v);
+        rename(v);
+      }}
+      onBlur={() => setDraft(null)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+    />
+  );
+}
+
 function SpawnInfo({ zone }: { zone: Zone }) {
   const spawn = useEditorStore((s) => s.campaign?.spawn ?? null);
   const zones = useEditorStore((s) => s.zones);
@@ -169,12 +207,20 @@ function SpawnInfo({ zone }: { zone: Zone }) {
           ) : (
             <>La campaña todavía no tiene punto de aparición.</>
           )}
-          <span className="mt-1 block text-[11px] text-parchment-400">Usa la herramienta Spawn (S) para colocarlo.</span>
+          <span className="mt-1 block text-[11px] text-parchment-400">
+            Usa la herramienta «Punto de aparición» (S) para colocarlo.
+          </span>
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <Button size="sm" variant={tool === 'spawn' ? 'primary' : 'secondary'} icon={<Flag />} onClick={() => setTool('spawn')}>
-          Herramienta Spawn
+        <Button
+          size="sm"
+          variant={tool === 'spawn' ? 'primary' : 'secondary'}
+          icon={<Flag />}
+          onClick={() => setTool('spawn')}
+          title="Herramienta «Punto de aparición» (S)"
+        >
+          Colocar en el mapa
         </Button>
         {spawn && !here && spawnZone && (
           <Button size="sm" variant="ghost" icon={<MapIcon />} onClick={() => selectZone(spawnZone.id, spawn.levelId)}>
@@ -188,8 +234,10 @@ function SpawnInfo({ zone }: { zone: Zone }) {
             icon={<Trash2 />}
             className="hover:text-blood-300"
             onClick={() => {
-              void saveCampaign({ spawn: null });
-              toast.info('Punto de aparición eliminado');
+              void saveCampaign({ spawn: null }).then((ok) => {
+                if (ok) toast.info('Punto de aparición eliminado');
+                else toast.error('No se pudo quitar el punto de aparición', { description: useEditorStore.getState().saveError ?? undefined });
+              });
             }}
           >
             Quitar
@@ -255,23 +303,7 @@ export function ZoneSettingsPanel() {
   return (
     <div className="flex flex-col">
       <PanelSection id="zone-identity" title="Zona" icon={<MapIcon />}>
-        <TextInput
-          label="Nombre"
-          size="sm"
-          value={zone.name}
-          maxLength={80}
-          onValueChange={(v) =>
-            patch((d) => {
-              d.name = v;
-            }, 'zone-name')
-          }
-          onBlur={() => {
-            if (!zone.name.trim())
-              patch((d) => {
-                d.name = 'Zona sin nombre';
-              });
-          }}
-        />
+        <ZoneNameField key={zone.id} zone={zone} />
         <FieldGrid>
           <Select<ZoneType>
             label="Tipo"

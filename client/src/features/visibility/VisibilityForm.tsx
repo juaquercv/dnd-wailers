@@ -186,6 +186,13 @@ export function VisibilityForm({ value, base, onChange, allowInherit = false }: 
           />,
           clsx(!visionMatters && 'opacity-60'),
         )}
+        {visionMatters && (
+          <p className="-mt-1 text-xs leading-snug text-parchment-400">
+            {allowInherit
+              ? 'Si personalizas este radio, se impone a la visión propia del héroe.'
+              : 'Los héroes con visión propia (p. ej. visión en la oscuridad) usan su valor; personaliza el radio del jugador para imponerlo.'}
+          </p>
+        )}
         {row(
           'visionCone',
           <Slider

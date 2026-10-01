@@ -62,7 +62,7 @@ function StageHeader({ roll, rollerColor, verb, extra }: { roll: RollResult; rol
         <span className="h-2 w-2 shrink-0 rounded-full shadow-[0_0_8px_currentColor]" style={{ backgroundColor: rollerColor ?? '#e9c063', color: rollerColor ?? '#e9c063' }} />
         <span className="truncate">
           {roll.rollerName}
-          {roll.byDm ? ' (DM)' : ''} {verb}
+          {roll.byDm && roll.rollerName.trim().toUpperCase() !== 'DM' ? ' (DM)' : ''} {verb}
         </span>
       </div>
       <div className="mt-1 truncate font-display text-2xl font-bold leading-tight text-parchment-50 [text-shadow:0_2px_10px_rgba(0,0,0,0.8)] sm:text-[1.7rem]">

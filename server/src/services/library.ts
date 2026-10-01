@@ -880,15 +880,16 @@ export async function markEntryUsed(entryId: string, userId: string, campaignId?
   if (!exists) throw notFound(MESSAGES.entryNotFound);
   if (campaignId) await assertCampaignExists(campaignId, MESSAGES.campaignNotFound, 'missing');
   const now = new Date();
-  const writes: Prisma.PrismaPromise<unknown>[] = [
-    prisma.recentUse.upsert({
-      where: { userId_entryId: { userId, entryId } },
-      create: { userId, entryId, usedAt: now },
-      update: { usedAt: now },
-    }),
+  const writes: (() => Prisma.PrismaPromise<unknown>)[] = [
+    () =>
+      prisma.recentUse.upsert({
+        where: { userId_entryId: { userId, entryId } },
+        create: { userId, entryId, usedAt: now },
+        update: { usedAt: now },
+      }),
   ];
   if (campaignId) {
-    writes.push(
+    writes.push(() =>
       prisma.entryUsage.upsert({
         where: { entryId_campaignId: { entryId, campaignId } },
         create: { entryId, campaignId, lastUsedAt: now },
@@ -896,7 +897,16 @@ export async function markEntryUsed(entryId: string, userId: string, campaignId?
       }),
     );
   }
-  await prisma.$transaction(writes);
+  // Sequential (no transaction) and in the same order as live/helpers.ts to avoid deadlocks.
+  // A concurrent upsert of the same row can still race on create: retry once with a fresh query.
+  for (const write of writes) {
+    try {
+      await write();
+    } catch {
+      await new Promise((r) => setTimeout(r, 50));
+      await write();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

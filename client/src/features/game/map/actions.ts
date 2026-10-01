@@ -1,4 +1,5 @@
 import {
+  normalizeText,
   type C2SEvent,
   type C2SPayloads,
   type C2SResult,
@@ -15,7 +16,9 @@ import {
 import { emitAck } from '../../../api/socket';
 import { askConfirm } from '../../../components/ui/ConfirmDialog';
 import { toast } from '../../../components/ui/toast';
+import { formatCr } from '../../../lib/format';
 import { useSessionStore } from '../../../stores/session';
+import { searchSounds } from '../../audio/soundLibrary';
 import { gameCamera } from './camera';
 import { findFreeSpots, normalizeFacing } from './geometry';
 import { useGameUi } from './gameUi';
@@ -150,6 +153,36 @@ export function setStatus(tokens: Token[], status: string, on: boolean): Promise
 
 export function setHidden(tokens: Token[], hidden: boolean): Promise<number> {
   return sendMany('token:update', tokens.map((t) => ({ tokenId: t.id, patch: { hidden } })), 'No se pudo cambiar la visibilidad');
+}
+
+/** URL of the first library sound effect named like a roar ("rugido"), or null. */
+async function roarSoundUrl(): Promise<string | null> {
+  try {
+    const needle = normalizeText('rugido');
+    const sounds = await searchSounds('effect', 'rugido');
+    return sounds.find((s) => s.data.url && normalizeText(s.name).includes(needle))?.data.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Shows a hidden creature to the players with the cinematic boss entrance (with a roar when the
+ * library has one). Only the reveal and the visual effect: nothing else changes.
+ */
+export async function revealWithEntrance(token: Token): Promise<void> {
+  const soundUrl = await roarSoundUrl();
+  const shown = await setHidden([token], false);
+  if (shown === 0) return;
+  const cr = token.stats?.cr ?? null;
+  const fx: FxEvent = {
+    kind: 'boss',
+    name: token.name,
+    subtitle: cr !== null ? `Desafío ${formatCr(cr)}` : null,
+    imageUrl: token.imageUrl,
+    soundUrl,
+  };
+  await send('fx:trigger', { fx }, 'No se pudo lanzar la entrada dramática');
 }
 
 /** H: hide everything if something is visible, otherwise show everything. */

@@ -15,10 +15,11 @@ import {
   type VisibilitySettings,
 } from '@wailers/shared';
 import { api } from '../api/http';
-import { emitAck, getSocket } from '../api/socket';
+import { emitAck, getSocket, getSocketToken } from '../api/socket';
 import { sessionBus } from '../lib/eventBus';
 
 const LOG_LIMIT = 500;
+/** Legacy browser-wide key; the last session is now remembered per user (`<key>.<userId>`). */
 const LAST_SESSION_KEY = 'wailers.lastSessionId';
 
 export interface ViewZone {
@@ -49,6 +50,8 @@ interface SessionStoreState {
 
   join: (sessionId: string) => Promise<void>;
   leave: () => Promise<void>;
+  /** Forget the session locally without telling the server (e.g. the user claim was lost). */
+  reset: () => void;
   /** Show a zone (level defaults to the zone default). The DM also reports it with view:dm. */
   setViewZone: (zoneId: string, levelId?: string) => void;
   setViewAs: (userId: string | null) => void;
@@ -59,6 +62,10 @@ interface SessionStoreState {
 }
 
 let listenersBound = false;
+/** Every join/rejoin gets a number; results of older attempts (stale socket, superseded join) are ignored. */
+let joinAttempt = 0;
+/** A first join was cut short by `auth:revoked`: it is retried on the next authenticated 'connect'. */
+let joinInterruptedByAuth = false;
 
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
   sessionId: null,
@@ -78,36 +85,32 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   join: async (sessionId) => {
     bindSocketListeners();
+    const attempt = ++joinAttempt;
     set({ sessionId, status: 'joining', error: null });
     try {
       const view = await emitAck('session:join', { sessionId });
-      try {
-        localStorage.setItem(LAST_SESSION_KEY, sessionId);
-      } catch {
-        /* ignore */
-      }
+      if (attempt !== joinAttempt) return;
+      rememberLastSession(view.meUserId, sessionId);
       set({ view, status: 'joined' });
       applyAutoViewZone();
-      const log = await api.sessions.log(sessionId, { limit: 200 }).catch(() => [] as LogEntry[]);
-      set((s) => ({ log: mergeLog(log, s.log) }));
-      if (view.role === 'dm') {
-        const rollers = await api.campaigns.rollers(view.state.campaignId).catch(() => [] as Roller[]);
-        set({ rollers });
-      }
+      await loadSessionExtras(sessionId, view, attempt);
     } catch (err) {
+      if (attempt !== joinAttempt) return;
       set({ status: 'error', error: err instanceof Error ? err.message : String(err) });
       throw err;
     }
   },
 
   leave: async () => {
-    const { sessionId } = get();
+    const { sessionId, view } = get();
+    joinAttempt++;
     if (sessionId) await emitAck('session:leave', {}).catch(() => undefined);
-    try {
-      localStorage.removeItem(LAST_SESSION_KEY);
-    } catch {
-      /* ignore */
-    }
+    if (view && sessionId) forgetLastSession(view.meUserId, sessionId);
+    get().reset();
+  },
+
+  reset: () => {
+    joinAttempt++;
     set({
       sessionId: null,
       status: 'idle',
@@ -142,12 +145,56 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   setRollers: (rollers) => set({ rollers }),
 }));
 
-export function getLastSessionId(): string | null {
+function lastSessionKey(userId: string): string {
+  return `${LAST_SESSION_KEY}.${userId}`;
+}
+
+function rememberLastSession(userId: string, sessionId: string): void {
   try {
-    return localStorage.getItem(LAST_SESSION_KEY);
+    localStorage.setItem(lastSessionKey(userId), sessionId);
+    localStorage.removeItem(LAST_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Drops the user's "last session" when it still points to `sessionId`. */
+function forgetLastSession(userId: string, sessionId: string): void {
+  try {
+    if (localStorage.getItem(lastSessionKey(userId)) === sessionId) localStorage.removeItem(lastSessionKey(userId));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Last session this user joined in this browser (shown as "Partida en curso" in the main menu). */
+export function getLastSessionId(userId?: string | null): string | null {
+  if (!userId) return null;
+  try {
+    return localStorage.getItem(lastSessionKey(userId));
   } catch {
     return null;
   }
+}
+
+export function clearLastSessionId(userId: string): void {
+  try {
+    localStorage.removeItem(lastSessionKey(userId));
+    localStorage.removeItem(LAST_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Log (and the DM's rollers) fetched over REST after every (re)join: events sent while offline are not replayed. */
+async function loadSessionExtras(sessionId: string, view: SessionView, attempt: number): Promise<void> {
+  const current = () => attempt === joinAttempt && useSessionStore.getState().sessionId === sessionId;
+  const log = await api.sessions.log(sessionId, { limit: 200 }).catch(() => null);
+  if (!current()) return;
+  if (log) useSessionStore.setState((s) => ({ log: mergeLog(log, s.log) }));
+  if (view.role !== 'dm') return;
+  const rollers = await api.campaigns.rollers(view.state.campaignId).catch(() => null);
+  if (rollers && current()) useSessionStore.setState({ rollers });
 }
 
 function mergeLog(a: LogEntry[], b: LogEntry[]): LogEntry[] {
@@ -175,7 +222,9 @@ function applyAutoViewZone(): void {
     const prevOwn = lastOwnTokenPos;
     const ownChanged = !prevOwn || prevOwn.zoneId !== own.zoneId || prevOwn.levelId !== own.levelId;
     lastOwnTokenPos = { zoneId: own.zoneId, levelId: own.levelId };
-    if (tokenMoved && (ownChanged || !view.effective.canSeeOtherZones || !current || !s.zonesById[current.zoneId])) {
+    // With shared vision the player may look at a party member's zone/level (the server only sends allowed zones).
+    const mayBrowse = view.effective.canSeeOtherZones || view.effective.sharedVision;
+    if (tokenMoved && (ownChanged || !mayBrowse || !current || !s.zonesById[current.zoneId])) {
       useSessionStore.setState({ viewZone: { zoneId: own.zoneId, levelId: own.levelId } });
     }
     return;
@@ -192,18 +241,48 @@ function bindSocketListeners(): void {
   listenersBound = true;
   const socket = getSocket();
 
+  // The server forgot this socket's user (restart, claim expired offline): the (re)join in flight fails.
+  // The auth store re-claims the user and reconnects; the next 'connect' joins again.
+  socket.on('auth:revoked', () => {
+    const { sessionId, status } = useSessionStore.getState();
+    if (!sessionId || (status !== 'joined' && status !== 'joining')) return;
+    joinAttempt++;
+    if (status === 'joining') joinInterruptedByAuth = true;
+  });
+
   socket.on('connect', () => {
     useSessionStore.setState({ socketConnected: true });
     const { sessionId, status } = useSessionStore.getState();
+    const interrupted = joinInterruptedByAuth;
+    joinInterruptedByAuth = false;
     // Rejoin after a reconnection (server restart, network hiccup, reload handled by SessionPage).
-    if (sessionId && status === 'joined') {
-      emitAck('session:join', { sessionId })
-        .then((view) => {
-          useSessionStore.setState({ view });
-          applyAutoViewZone();
-        })
-        .catch((err: Error) => useSessionStore.setState({ status: 'error', error: err.message }));
+    // Anonymous sockets cannot join; the auth store reconnects with credentials after re-claiming the user.
+    if (!sessionId || !getSocketToken()) return;
+    if (status === 'joining' && interrupted) {
+      useSessionStore
+        .getState()
+        .join(sessionId)
+        .catch(() => undefined);
+      return;
     }
+    if (status !== 'joined') return;
+    const attempt = ++joinAttempt;
+    const stillCurrent = () => {
+      const s = useSessionStore.getState();
+      return attempt === joinAttempt && s.sessionId === sessionId && s.status === 'joined';
+    };
+    emitAck('session:join', { sessionId })
+      .then((view) => {
+        if (!stillCurrent()) return;
+        useSessionStore.setState({ view });
+        applyAutoViewZone();
+        void loadSessionExtras(sessionId, view, attempt);
+      })
+      .catch((err: Error) => {
+        // A socket that dropped (or was replaced) meanwhile retries on its next 'connect'.
+        if (!stillCurrent() || !socket.connected) return;
+        useSessionStore.setState({ status: 'error', error: err.message });
+      });
   });
   socket.on('disconnect', () => useSessionStore.setState({ socketConnected: false }));
   if (socket.connected) useSessionStore.setState({ socketConnected: true });
@@ -232,11 +311,8 @@ function bindSocketListeners(): void {
 
   socket.on('session:event', (event) => {
     if (event.type === 'kicked' || event.type === 'sessionEnded') {
-      try {
-        localStorage.removeItem(LAST_SESSION_KEY);
-      } catch {
-        /* ignore */
-      }
+      const s = useSessionStore.getState();
+      if (s.view && s.sessionId) forgetLastSession(s.view.meUserId, s.sessionId);
     }
     sessionBus.publish(event);
   });

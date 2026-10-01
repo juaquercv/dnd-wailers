@@ -18,6 +18,7 @@ import {
   clamp,
   heroPlayerId,
   idList,
+  inventoriesArePublic,
   isHeroOwner,
   itemLabel,
   joinNames,
@@ -26,6 +27,7 @@ import {
   markEntryUsed,
   oneOf,
   plainObject,
+  playerSeesToken,
   quantityValue,
   reqBool,
   reqId,
@@ -37,11 +39,13 @@ import {
   round2,
   sanitizeInventoryItem,
   sanitizeItemPatch,
+  stackableEntryIds,
   statusLabel,
   statusValue,
   syncHeroTokens,
   takeItem,
   urlOrNull,
+  visibilityForPlayers,
 } from '../helpers';
 import { HandlerError, type HandlerCtx, type HandlerModule, type LogInput, type SessionManagerApi } from '../types';
 
@@ -57,10 +61,10 @@ function heroNames(state: LiveState, ids: string[]): string[] {
   return ids.map((id) => state.heroes[id]?.name ?? id);
 }
 
-/** Inventory/gold news are private unless players may see other inventories. */
+/** Inventory/gold news are private (the hero's player) unless every other player may see other inventories. */
 function privateVisibility(state: LiveState, hero: HeroSheet): Pick<LogInput, 'visibility' | 'targetUserId'> {
-  if (state.visibility.global.canSeeOthersInventory) return { visibility: 'all' };
   const playerId = heroPlayerId(state, hero);
+  if (inventoriesArePublic(state, [playerId])) return { visibility: 'all' };
   return playerId ? { visibility: 'user', targetUserId: playerId } : { visibility: 'dm' };
 }
 
@@ -76,6 +80,11 @@ function requireResourceRights(ctx: HandlerCtx, hero: HeroSheet): void {
 function currencyShort(ctx: HandlerCtx): string {
   const currency = ctx.session.campaign.rules.currency;
   return currency.short || currency.name || 'po';
+}
+
+/** Campaign currency name for field labels (e.g. «Coronas de latón»). */
+function currencyLabel(ctx: HandlerCtx): string {
+  return ctx.session.campaign.rules.currency.name.trim() || 'oro';
 }
 
 function manaName(ctx: HandlerCtx): string {
@@ -139,7 +148,7 @@ interface HeroPatch {
   };
 }
 
-function sanitizeHeroPatch(raw: Record<string, unknown>, maxLevel: number): HeroPatch {
+function sanitizeHeroPatch(raw: Record<string, unknown>, maxLevel: number, goldLabel: string): HeroPatch {
   const out: HeroPatch = { data: {} };
   const d = out.data;
   if (raw.name !== undefined) out.name = reqText(raw.name, 'nombre', 80, 1);
@@ -163,7 +172,7 @@ function sanitizeHeroPatch(raw: Record<string, unknown>, maxLevel: number): Hero
   if (raw.speed !== undefined) d.speed = reqText(raw.speed, 'velocidad', 80);
   if (raw.initiativeBonus !== undefined) d.initiativeBonus = reqInt(raw.initiativeBonus, 'iniciativa', -50, 50);
   if (raw.xp !== undefined) d.xp = reqInt(raw.xp, 'XP', 0, MAX_VALUE);
-  if (raw.gold !== undefined) d.gold = round2(clamp(reqNum(raw.gold, 'oro'), 0, MAX_VALUE));
+  if (raw.gold !== undefined) d.gold = round2(clamp(reqNum(raw.gold, goldLabel), 0, MAX_VALUE));
   if (raw.inventory !== undefined) {
     if (!Array.isArray(raw.inventory)) throw new HandlerError('Valor no válido para «inventario»');
     const items = raw.inventory.slice(0, 500).map(sanitizeInventoryItem);
@@ -256,7 +265,7 @@ function heroUpdate(
     const keys = Object.keys(raw).filter((k) => raw[k] !== undefined);
     if (keys.some((k) => k !== 'notes')) throw new HandlerError('Solo puedes editar las notas de tu héroe');
   }
-  const patch = sanitizeHeroPatch(raw, maxLevelOf(ctx));
+  const patch = sanitizeHeroPatch(raw, maxLevelOf(ctx), currencyLabel(ctx));
   const logs: LogInput[] = [];
   if (patch.level !== undefined && patch.level !== hero.level) {
     logs.push({
@@ -611,7 +620,8 @@ function addNewItem(list: InventoryItem[], built: { item: InventoryItem; stackab
     list.push(built.item);
     return;
   }
-  addItemTo(list, built.item);
+  // Custom items stack with identical custom stacks.
+  addItemTo(list, built.item, new Set());
 }
 
 async function inventoryAdd(
@@ -708,11 +718,16 @@ function containerName(c: Container): string {
   return c.kind === 'hero' ? c.hero.name : c.token.name;
 }
 
-function inventoryTransfer(
+async function inventoryTransfer(
   manager: SessionManagerApi,
   ctx: HandlerCtx,
   payload: { from: { heroId?: string; tokenId?: string }; to: { heroId?: string; tokenId?: string }; itemId: string; quantity?: number },
-): null {
+): Promise<null> {
+  // Whether the moved item may merge into a stack depends on its library entry (loaded first).
+  const peekSource = containerList(ctx.session.state, resolveContainer(ctx.session.state, payload.from, 'origen'));
+  const peekItem = peekSource?.find((it) => it.id === payload.itemId);
+  const stackable = await stackableEntryIds([peekItem?.entryId]);
+
   const state = ctx.session.state;
   const from = resolveContainer(state, payload.from, 'origen');
   const to = resolveContainer(state, payload.to, 'destino');
@@ -729,14 +744,35 @@ function inventoryTransfer(
 
   let log: LogInput;
   if (from.kind === 'hero' && to.kind === 'hero') {
-    log = { type: 'item', text: `${to.hero.name} recibe ${label} de ${from.hero.name}`, actorUserId: ctx.userId, visibility: 'all' };
+    const text = `${to.hero.name} recibe ${label} de ${from.hero.name}`;
+    const giver = heroPlayerId(state, from.hero);
+    const receiver = heroPlayerId(state, to.hero);
+    if (inventoriesArePublic(state, [giver, receiver])) {
+      log = { type: 'item', text, actorUserId: ctx.userId, visibility: 'all' };
+    } else if (giver && receiver && giver !== receiver) {
+      // Private to both players involved (like trades).
+      log = { type: 'item', text, actorUserId: giver, visibility: 'user', targetUserId: receiver };
+    } else if (giver ?? receiver) {
+      log = { type: 'item', text, actorUserId: ctx.userId, visibility: 'user', targetUserId: giver ?? receiver };
+    } else {
+      log = { type: 'item', text, actorUserId: ctx.userId, visibility: 'dm' };
+    }
   } else if (from.kind === 'token' && to.kind === 'hero') {
-    log = {
-      type: 'loot',
-      text: `${to.hero.name} recoge ${label} de ${from.token.name}`,
-      actorUserId: ctx.userId,
-      visibility: from.token.hidden ? 'dm' : 'all',
-    };
+    const text = `${to.hero.name} recoge ${label} de ${from.token.name}`;
+    const receiver = heroPlayerId(state, to.hero);
+    const source = from.token;
+    if (source.hidden) {
+      log = { type: 'loot', text, actorUserId: ctx.userId, visibility: 'dm' };
+    } else if (
+      inventoriesArePublic(state, [receiver]) &&
+      visibilityForPlayers(state, (uid) => uid === receiver || playerSeesToken(ctx.session, uid, source)) === 'all'
+    ) {
+      log = { type: 'loot', text, actorUserId: ctx.userId, visibility: 'all' };
+    } else {
+      log = receiver
+        ? { type: 'loot', text, actorUserId: ctx.userId, visibility: 'user', targetUserId: receiver }
+        : { type: 'loot', text, actorUserId: ctx.userId, visibility: 'dm' };
+    }
   } else if (from.kind === 'hero' && to.kind === 'token') {
     const playerId = heroPlayerId(state, from.hero);
     log = {
@@ -757,7 +793,7 @@ function inventoryTransfer(
       const dst = containerList(s, to);
       if (!src || !dst) return;
       const piece = takeItem(src, itemId, quantity);
-      if (piece) addItemTo(dst, piece);
+      if (piece) addItemTo(dst, piece, stackable);
     },
     { heroes: heroes.length > 0 ? heroes : undefined, log },
   );

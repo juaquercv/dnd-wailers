@@ -13,6 +13,9 @@ export function RequireAuth({ children }: { children?: ReactNode }) {
   const location = useLocation();
 
   if (status === 'idle' || status === 'restoring') return <FullScreenLoader label="Recuperando tu aventurero…" />;
-  if (status !== 'ready' || !user) return <Navigate to="/" replace state={{ from: location.pathname }} />;
+  if (status !== 'ready' || !user) {
+    // Keep query and hash: deep links such as /biblioteca/creature?id=… must survive the login screen.
+    return <Navigate to="/" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />;
+  }
   return <>{children ?? <Outlet />}</>;
 }

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createLiveState, effectiveVisibility, newId, type LiveState, type LogEntry, type LogType, type SessionSummary } from '@wailers/shared';
 import { prisma } from '../../db';
 import { getManager, type RunningSession, type SessionManager } from '../../live/index';
+import { canSeeLog } from '../../live/SessionManager';
 import { parseLiveState } from '../../live/persistence';
 import { HandlerError } from '../../live/types';
 import { campaignInclude, campaignToDTO, logToDTO, sessionInclude, toJson } from '../../services/serializers';
@@ -79,10 +80,8 @@ function logVisibilityFilter(state: LiveState, userId: string): Prisma.SessionLo
   const filters: Prisma.SessionLogWhereInput[] = [
     { OR: [{ visibility: 'all' }, { visibility: 'user', OR: [{ targetUserId: userId }, { actorUserId: userId }] }] },
   ];
-  if (!effectiveVisibility(state, userId).canSeeOthersRolls) {
-    // Public rolls of other players are hidden; rolls addressed to the caller ('user') stay visible.
-    filters.push({ NOT: { type: 'roll', visibility: 'all', actorUserId: { not: null, notIn: [userId, state.hostUserId] } } });
-  }
+  // Public rolls of other players (when canSeeOthersRolls is off) are post-filtered with canSeeLog,
+  // because rolls the DM requested stay visible and that depends on the JSON data.
   return filters;
 }
 
@@ -163,12 +162,15 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
 
     const and: Prisma.SessionLogWhereInput[] = [...logVisibilityFilter(state, userId)];
     if (type) and.push({ type });
+    const postFilter = userId !== state.hostUserId && !effectiveVisibility(state, userId).canSeeOthersRolls;
     const rows = await prisma.sessionLog.findMany({
       where: { sessionId: id, AND: and },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: limit,
+      take: postFilter ? Math.min(limit * 3, LOG_LIMIT_MAX * 3) : limit,
     });
-    return rows.reverse().map(logToDTO);
+    const entries = rows.map(logToDTO);
+    const visible = postFilter ? entries.filter((e) => canSeeLog(state, e, userId)).slice(0, limit) : entries;
+    return visible.reverse();
   });
 
   /** Every session of a campaign (saved/resumable included), newest first. */

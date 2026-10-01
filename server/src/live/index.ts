@@ -16,7 +16,7 @@ import type { AppSocket, HandlerModule, IO, SessionManagerApi } from './types';
  * and to the domain bus. realtime/socket.ts calls registerLiveSocket for every authenticated socket.
  */
 
-export { SessionManager, RunningSession, canSeeLog } from './SessionManager';
+export { SessionManager, RunningSession, canSeeLog, isRequestedRollData } from './SessionManager';
 
 let manager: SessionManager | null = null;
 

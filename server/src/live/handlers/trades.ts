@@ -10,6 +10,7 @@ import {
   reqId,
   reqNum,
   round2,
+  stackableEntryIds,
   takeItem,
   toast,
 } from '../helpers';
@@ -27,6 +28,17 @@ const PENDING: TradeOffer['status'][] = ['pending_target', 'pending_dm'];
 function currencyShort(ctx: HandlerCtx): string {
   const currency = ctx.session.campaign.rules.currency;
   return currency.short || currency.name || 'po';
+}
+
+/** Campaign currency name (e.g. «Coronas de latón»; «oro» when unnamed). */
+function currencyName(ctx: HandlerCtx): string {
+  return ctx.session.campaign.rules.currency.name.trim() || 'oro';
+}
+
+/** Currency name inside a sentence: «coronas de latón», «oro». */
+function currencyInText(ctx: HandlerCtx): string {
+  const name = currencyName(ctx);
+  return name.charAt(0).toLocaleLowerCase('es') + name.slice(1);
 }
 
 /** Keep the last MAX_TRADES offers, dropping finished ones first. */
@@ -92,8 +104,14 @@ function tradeLabels(from: HeroSheet, trade: TradeOffer, currency: string): stri
  * Execute an accepted trade (re-validated). On failure the trade is cancelled and a
  * HandlerError explains why. `actorUserId` is who triggered the execution.
  */
-function executeTrade(manager: SessionManagerApi, ctx: HandlerCtx, trade: TradeOffer): void {
+async function executeTrade(manager: SessionManagerApi, ctx: HandlerCtx, offered: TradeOffer): Promise<void> {
+  // Library items merge into an existing stack only when their entry is stackable (loaded first).
+  const giverItems = ctx.session.state.heroes[offered.fromHeroId]?.data.inventory ?? [];
+  const stackable = await stackableEntryIds(offered.items.map((req) => giverItems.find((it) => it.id === req.itemId)?.entryId));
   const state = ctx.session.state;
+  // The offer may have been answered, approved or withdrawn meanwhile.
+  const trade = state.trades.find((t) => t.id === offered.id);
+  if (!trade || !PENDING.includes(trade.status)) throw new HandlerError('Ese intercambio ya no está pendiente');
   const currency = currencyShort(ctx);
   const problem = tradeProblem(state, trade, currency);
   if (problem) {
@@ -136,7 +154,7 @@ function executeTrade(manager: SessionManagerApi, ctx: HandlerCtx, trade: TradeO
       if (!giver || !receiver || !t) return;
       for (const req of trade.items) {
         const piece = takeItem(giver.data.inventory, req.itemId, req.quantity);
-        if (piece) addItemTo(receiver.data.inventory, piece);
+        if (piece) addItemTo(receiver.data.inventory, piece, stackable);
       }
       if (trade.gold > 0) {
         giver.data.gold = round2(giver.data.gold - trade.gold);
@@ -175,10 +193,10 @@ function tradeOffer(
     if (item.quantity < req.quantity) throw new HandlerError(`Solo tienes ${itemLabel(item.name, item.quantity)}`);
   }
   const currency = currencyShort(ctx);
-  const gold = payload.gold === undefined || payload.gold === null ? 0 : round2(reqNum(payload.gold, 'oro'));
-  if (gold < 0) throw new HandlerError('La cantidad de oro no puede ser negativa');
+  const gold = payload.gold === undefined || payload.gold === null ? 0 : round2(reqNum(payload.gold, currencyName(ctx)));
+  if (gold < 0) throw new HandlerError(`La cantidad de ${currencyInText(ctx)} no puede ser negativa`);
   if (gold > fromHero.data.gold) throw new HandlerError(`No tienes tanto ${currency} (tienes ${fromHero.data.gold})`);
-  if (items.length === 0 && gold <= 0) throw new HandlerError('Añade algún objeto o algo de oro al intercambio');
+  if (items.length === 0 && gold <= 0) throw new HandlerError(`Añade algún objeto o una cantidad de ${currencyInText(ctx)} al intercambio`);
   const note = optText(payload.note, 'nota', 300) ?? '';
 
   const trade: TradeOffer = {
@@ -214,7 +232,7 @@ function tradeOffer(
   return null;
 }
 
-function tradeRespond(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tradeId: string; accept: boolean }): null {
+async function tradeRespond(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tradeId: string; accept: boolean }): Promise<null> {
   const state = ctx.session.state;
   const trade = requireTrade(state, payload.tradeId);
   if (trade.toUserId !== ctx.userId) throw new HandlerError('Ese intercambio no es para ti');
@@ -247,7 +265,7 @@ function tradeRespond(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tr
   if (state.options.tradeNeedsApproval) {
     const problem = tradeProblem(state, trade, currencyShort(ctx));
     if (problem) {
-      executeTrade(manager, ctx, trade);
+      await executeTrade(manager, ctx, trade);
       return null;
     }
     manager.mutate(
@@ -271,17 +289,17 @@ function tradeRespond(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tr
     return null;
   }
 
-  executeTrade(manager, ctx, trade);
+  await executeTrade(manager, ctx, trade);
   return null;
 }
 
-function tradeApprove(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tradeId: string; approve: boolean }): null {
+async function tradeApprove(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tradeId: string; approve: boolean }): Promise<null> {
   const state = ctx.session.state;
   const trade = requireTrade(state, payload.tradeId);
   if (trade.status !== 'pending_dm') throw new HandlerError('Ese intercambio no espera aprobación');
   if (typeof payload.approve !== 'boolean') throw new HandlerError('Valor no válido para «aprobar»');
   if (payload.approve) {
-    executeTrade(manager, ctx, trade);
+    await executeTrade(manager, ctx, trade);
     return null;
   }
   const fromName = state.heroes[trade.fromHeroId]?.name ?? playerName(ctx.session, trade.fromUserId);

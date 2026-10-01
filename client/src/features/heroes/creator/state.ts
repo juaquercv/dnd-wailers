@@ -74,7 +74,6 @@ export interface CreatorState {
   initiativeBonus: number | null;
   speed: string;
   gold: number;
-  usesMagic: boolean;
   /** null = suggested by the rules (per level). */
   manaMax: number | null;
   spells: HeroSpell[];
@@ -125,7 +124,6 @@ export function initialState(ctx: CreatorContext): CreatorState {
     initiativeBonus: null,
     speed: '9 m',
     gold: Math.max(0, ctx.rules.heroCreation.startingGold || 0),
-    usesMagic: ctx.rules.magic.mode !== 'none',
     manaMax: null,
     spells: [],
   };
@@ -249,7 +247,7 @@ export function derive(state: CreatorState, ctx: CreatorContext, classNode: Cate
   const mode = ctx.rules.magic.mode;
   const suggestedMana = base.mana.max;
   let resources: HeroResources;
-  if (!state.usesMagic || mode === 'none') {
+  if (mode === 'none') {
     resources = { mana: { current: 0, max: 0 }, slots: [], uses: [] };
   } else {
     const manaMax = mode === 'mana' ? Math.max(0, state.manaMax ?? suggestedMana) : 0;
@@ -268,7 +266,7 @@ export function derive(state: CreatorState, ctx: CreatorContext, classNode: Cate
     initiativeBonus,
     suggestedMana,
     resources,
-    showSpells: mode !== 'none' && state.usesMagic,
+    showSpells: mode !== 'none',
   };
 }
 

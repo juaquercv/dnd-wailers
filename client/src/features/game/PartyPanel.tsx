@@ -285,7 +285,7 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
           {mode === 'slots' && d.resources.slots.length > 0 && (
             <SlotPips compact slots={d.resources.slots} onUse={resEdit ? (level, delta) => void send('hero:slot', { heroId: hero.id, level, delta }) : undefined} />
           )}
-          {mode === 'uses' && d.resources.uses.length > 0 && (
+          {d.resources.uses.length > 0 && (
             <UsePips compact uses={d.resources.uses} onUse={resEdit ? (useId, delta) => void send('hero:use', { heroId: hero.id, useId, delta }) : undefined} />
           )}
 

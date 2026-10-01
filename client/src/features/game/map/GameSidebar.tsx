@@ -146,7 +146,7 @@ export function GameSidebar({ tabs, tab, open, overlay, onSelect, onClose, badge
         className={clsx(
           'flex min-h-0 flex-col border-l border-ink-600/80 bg-ink-900/95 backdrop-blur',
           overlay
-            ? 'absolute inset-y-0 right-full z-40 w-[min(23rem,calc(100vw-4rem))] shadow-modal'
+            ? 'absolute inset-y-0 right-full z-50 w-[min(23rem,calc(100vw-4rem))] shadow-modal'
             : 'relative w-[22rem] xl:w-[24rem]',
           open ? (overlay ? 'animate-slide-in-right' : '') : 'hidden',
         )}

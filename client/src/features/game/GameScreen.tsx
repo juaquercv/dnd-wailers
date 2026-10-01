@@ -22,6 +22,7 @@ import { resetGameUi, useGameUi, type GameSidebarTab } from './map/gameUi';
 import { InitiativeColumn } from './map/InitiativeColumn';
 import { buildQuickActions } from './map/quickActions';
 import { readPref, useMediaQuery, writePref } from './map/useMediaQuery';
+import { usePreviewZone } from './map/usePreviewZone';
 import { ViewportBanners } from './map/ViewportBanners';
 
 const QUICK_KINDS: EntryKind[] = ['creature', 'item', 'sound', 'spell'];
@@ -133,6 +134,14 @@ export function GameScreen() {
   // Leaving the table resets transient modes.
   useEffect(() => () => resetGameUi(), []);
 
+  // The previewed player left the session: back to the DM view.
+  const previewGone = useSessionStore((s) => !!s.viewAsUserId && !!s.view && !s.view.state.players[s.viewAsUserId]);
+  useEffect(() => {
+    if (previewGone) useSessionStore.getState().setViewAs(null);
+  }, [previewGone]);
+  // The preview shows the zone where the previewed player's hero stands.
+  usePreviewZone();
+
   // --- chat unread badge --------------------------------------------------------
   const chatVisible = sidebar.open && tab === 'chat';
   const chatVisibleRef = useRef(chatVisible);
@@ -209,7 +218,7 @@ export function GameScreen() {
           <ScanEye className="h-4 w-4 shrink-0 text-arcane-300" aria-hidden />
           <span className="min-w-0 truncate">
             Vista previa como <strong className="font-semibold text-parchment-50">{viewAsName ?? 'jugador'}</strong>
-            <span className="hidden text-arcane-200/80 sm:inline"> · ves exactamente lo que ve en su pantalla</span>
+            <span className="hidden text-arcane-200/80 sm:inline"> · ves la partida como la ve este jugador</span>
           </span>
           <button
             type="button"

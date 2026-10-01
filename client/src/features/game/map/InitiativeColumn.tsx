@@ -1,8 +1,9 @@
 import clsx from 'clsx';
 import { PanelLeftClose, Swords } from 'lucide-react';
 import { IconButton } from '../../../components/ui/IconButton';
-import { useDisplayState } from '../../../stores/session';
+import { useDisplayState, useSessionStore } from '../../../stores/session';
 import { InitiativePanel } from '../InitiativePanel';
+import { isTurnEntryMasked } from './fog';
 
 export interface InitiativeColumnProps {
   open: boolean;
@@ -13,10 +14,14 @@ export interface InitiativeColumnProps {
 
 /** Left column of the game screen with the turn order (collapsible to a slim rail). */
 export function InitiativeColumn({ open, overlay, onOpenChange }: InitiativeColumnProps) {
-  const { state } = useDisplayState();
+  const { state, isPreview } = useDisplayState();
+  const isDm = useSessionStore((s) => s.view?.role === 'dm');
+  const zonesById = useSessionStore((s) => s.zonesById);
   const round = state?.turn.round ?? 0;
   const entries = state?.turn.order.length ?? 0;
   const current = state ? state.turn.order[state.turn.currentIndex] ?? null : null;
+  // Same mask as the turn list: players never read the name of a creature they cannot see.
+  const currentName = current && state && (!isDm || isPreview) && isTurnEntryMasked(state, current, zonesById) ? 'Criatura desconocida' : current?.name ?? null;
 
   return (
     <div className="relative flex h-full shrink-0">
@@ -37,9 +42,9 @@ export function InitiativeColumn({ open, overlay, onOpenChange }: InitiativeColu
         {!open && entries > 0 && (
           <span
             className="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-parchment-400 [writing-mode:vertical-rl]"
-            title={current ? `Turno de ${current.name}` : undefined}
+            title={currentName ? `Turno de ${currentName}` : undefined}
           >
-            {current ? current.name : `${entries} en combate`}
+            {currentName ?? `${entries} en combate`}
           </span>
         )}
       </nav>
@@ -47,7 +52,8 @@ export function InitiativeColumn({ open, overlay, onOpenChange }: InitiativeColu
         aria-label="Orden de turnos"
         className={clsx(
           'flex min-h-0 flex-col border-r border-ink-600/80 bg-ink-900/95 backdrop-blur',
-          overlay ? 'absolute inset-y-0 left-full z-40 w-[min(19rem,calc(100vw-3rem))] shadow-modal' : 'relative w-64 xl:w-72',
+          // Overlay drawer above the viewport overlays (projection backdrop is z-40 inside the viewport).
+          overlay ? 'absolute inset-y-0 left-full z-50 w-[min(19rem,calc(100vw-3rem))] shadow-modal' : 'relative w-64 xl:w-72',
           open ? (overlay ? 'animate-fade-in' : '') : 'hidden',
         )}
       >

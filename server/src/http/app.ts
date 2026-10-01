@@ -145,7 +145,9 @@ function handleError(error: unknown, request: FastifyRequest, reply: FastifyRepl
 /** Builds the Fastify app: plugins, static files, SPA fallback, JSON errors and every /api route. */
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: 'info' },
+    // 'warn' by default: per-request info lines would flood the logs (healthchecks, polling).
+    // Startup messages are printed separately; set LOG_LEVEL=info to see every request.
+    logger: { level: process.env.LOG_LEVEL || 'warn' },
     bodyLimit: BODY_LIMIT,
   });
 

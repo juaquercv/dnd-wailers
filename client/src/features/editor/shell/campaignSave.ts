@@ -5,7 +5,7 @@ import { useEditorStore } from '../editorStore';
 /**
  * Thin wrapper around editorStore.updateCampaign that tracks whether a (debounced) campaign
  * save is still pending, so the save indicator can show "Guardando…" for campaign edits too.
- * Only the latest call's promise resolves (earlier debounced ones are superseded).
+ * Every call resolves once the debounced batch holding its patch has been sent (true when saved).
  */
 interface CampaignSaveState {
   pending: boolean;
@@ -15,11 +15,11 @@ export const useCampaignSaveStore = create<CampaignSaveState>(() => ({ pending: 
 
 let seq = 0;
 
-export async function saveCampaign(patch: UpdateCampaignRequest): Promise<void> {
+export async function saveCampaign(patch: UpdateCampaignRequest): Promise<boolean> {
   const mine = ++seq;
   useCampaignSaveStore.setState({ pending: true });
   try {
-    await useEditorStore.getState().updateCampaign(patch);
+    return await useEditorStore.getState().updateCampaign(patch);
   } finally {
     if (mine === seq) useCampaignSaveStore.setState({ pending: false });
   }
@@ -61,7 +61,7 @@ export async function retrySave(): Promise<boolean> {
   const campaign = store.getState().campaign;
   if (campaign) {
     store.setState({ saveState: 'saving' });
-    await saveCampaign(fullCampaignPatch(campaign));
+    if (!(await saveCampaign(fullCampaignPatch(campaign)))) return false;
   }
   const after = store.getState();
   if (after.saveState === 'error') return false;

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
-import type { InitiativeDraw } from '@wailers/shared';
+import { formatModifier, type InitiativeDraw, type LiveState } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { useSessionEvent } from '../../lib/eventBus';
 import { useSessionStore } from '../../stores/session';
@@ -10,12 +10,20 @@ import { uiSounds } from '../audio/uiSounds';
 import { DieSvg } from './DieShapes';
 import { useElapsed } from './diceHooks';
 import { hashString, ordinal, seededRandom } from './diceUtils';
+import { setInitiativeDrawShowing } from './initiativeDrawState';
 import './dice.css';
+
+/** The d20 face and the bonus behind a draw's total (`roll` = natural + bonus). */
+interface DrawDetail {
+  natural: number;
+  bonus: number;
+}
 
 interface DrawEvent {
   key: number;
   draws: InitiativeDraw[];
   order: string[];
+  details: Map<string, DrawDetail>;
 }
 
 const HOLD_AFTER_SORT_MS = 5000;
@@ -28,6 +36,10 @@ export function InitiativeDrawOverlay() {
 
   useEffect(() => setEvent(null), [sessionId]);
 
+  // Let other prompts (the "¡Tu turno!" banner) wait until the draw is gone.
+  useEffect(() => setInitiativeDrawShowing(event !== null), [event]);
+  useEffect(() => () => setInitiativeDrawShowing(false), []);
+
   // Hidden tabs cannot animate: skip the show (the turn order panel already has the result).
   useEffect(() => {
     const onVisibility = () => {
@@ -39,17 +51,69 @@ export function InitiativeDrawOverlay() {
 
   useSessionEvent('initiativeDraw', (e) => {
     if (e.draws.length === 0 || document.visibilityState === 'hidden') return;
-    setEvent({ key: Date.now(), draws: e.draws, order: e.order });
+    // Set synchronously: the server sends `turnStart` right after this event, in the same tick.
+    setInitiativeDrawShowing(true);
+    const state = useSessionStore.getState().view?.state ?? null;
+    const details = new Map<string, DrawDetail>();
+    for (const draw of e.draws) {
+      const detail = splitDraw(draw, state);
+      if (detail) details.set(draw.entryId, detail);
+    }
+    setEvent({ key: Date.now(), draws: e.draws, order: e.order, details });
   });
 
   if (!event || typeof document === 'undefined') return null;
   return createPortal(
-    <DrawScene key={event.key} draws={event.draws} order={event.order} reducedMotion={reducedMotion} onClose={() => setEvent(null)} />,
+    <DrawScene
+      key={event.key}
+      draws={event.draws}
+      order={event.order}
+      details={event.details}
+      reducedMotion={reducedMotion}
+      onClose={() => setEvent(null)}
+    />,
     document.body,
   );
 }
 
-function DrawScene({ draws, order, reducedMotion, onClose }: { draws: InitiativeDraw[]; order: string[]; reducedMotion: boolean; onClose: () => void }) {
+function isD20Face(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 20;
+}
+
+/**
+ * Splits a draw's total into the d20 face and the bonus. Uses `natural` when the event carries it;
+ * otherwise derives the bonus the way the server adds it (player entries: their hero's initiative
+ * bonus; everyone else: none). Null when the split cannot be known (e.g. the turn order is not
+ * visible to this player): the card then shows only the total.
+ */
+function splitDraw(draw: InitiativeDraw, state: LiveState | null): DrawDetail | null {
+  const sent = draw as InitiativeDraw & { natural?: unknown };
+  if (isD20Face(sent.natural)) return { natural: sent.natural, bonus: draw.roll - sent.natural };
+  const entry = state?.turn.order.find((e) => e.id === draw.entryId);
+  if (!state || !entry) return null;
+  let bonus = 0;
+  if (entry.type === 'player') {
+    const heroId = entry.heroId ?? (entry.userId ? (state.players[entry.userId]?.heroId ?? null) : null);
+    const raw = heroId ? (state.heroes[heroId]?.data.initiativeBonus ?? 0) : 0;
+    bonus = Number.isFinite(raw) ? Math.round(raw) : 0;
+  }
+  const natural = draw.roll - bonus;
+  return isD20Face(natural) ? { natural, bonus } : null;
+}
+
+function DrawScene({
+  draws,
+  order,
+  details,
+  reducedMotion,
+  onClose,
+}: {
+  draws: InitiativeDraw[];
+  order: string[];
+  details: Map<string, DrawDetail>;
+  reducedMotion: boolean;
+  onClose: () => void;
+}) {
   const n = draws.length;
   const landAt = (i: number) => (reducedMotion ? 150 + i * 40 : 950 + i * 320);
   const allLanded = landAt(n - 1);
@@ -164,9 +228,11 @@ function DrawScene({ draws, order, reducedMotion, onClose }: { draws: Initiative
         {draws.map((d, i) => {
           const landed = elapsed >= landAt(i);
           const rank = rankOf.get(d.entryId) ?? i;
-          const shown = landed ? d.roll : Math.floor(seededRandom((hashString(d.entryId) + tick * 7919) >>> 0)() * 20) + 1;
-          const natural20 = landed && d.roll === 20;
-          const natural1 = landed && d.roll === 1;
+          const detail = details.get(d.entryId) ?? null;
+          // The die shows the natural d20; without it the die is decorative and the total goes below.
+          const shown = landed ? (detail ? detail.natural : 'd20') : Math.floor(seededRandom((hashString(d.entryId) + tick * 7919) >>> 0)() * 20) + 1;
+          const natural20 = landed && detail?.natural === 20;
+          const natural1 = landed && detail?.natural === 1;
           return (
             <div
               key={d.entryId}
@@ -209,8 +275,20 @@ function DrawScene({ draws, order, reducedMotion, onClose }: { draws: Initiative
                 </div>
               </div>
               {landed && (
-                <div className={clsx('mt-1 text-[11px] font-semibold uppercase tracking-[0.16em]', natural20 ? 'text-gold-300' : natural1 ? 'text-blood-300' : 'text-parchment-400')}>
-                  {natural20 ? '¡20 natural!' : natural1 ? '1 natural' : `Saca ${d.roll}`}
+                <div className="mt-1 flex flex-col items-center leading-tight">
+                  <div
+                    className={clsx(
+                      'text-[11px] font-semibold uppercase tracking-[0.16em]',
+                      natural20 ? 'text-gold-300' : natural1 ? 'text-blood-300' : 'text-parchment-400',
+                    )}
+                  >
+                    {natural20 ? '¡20 natural!' : natural1 ? '1 natural' : detail && detail.bonus === 0 ? `Saca ${d.roll}` : `Total ${d.roll}`}
+                  </div>
+                  {detail && detail.bonus !== 0 && (
+                    <div className="mt-0.5 text-[11px] tabular-nums text-parchment-300" title="d20 + bonificación de iniciativa = total">
+                      {detail.natural} {formatModifier(detail.bonus)} = <span className="font-semibold text-parchment-50">{d.roll}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -12,14 +12,26 @@ export type AppClientSocket = Socket<ServerToClientEvents, ClientToServerEvents>
 let socket: AppClientSocket | null = null;
 let currentToken: string | null = null;
 
-/** Called by the auth store whenever the claim token changes. Reconnects with the new credentials. */
-export function setSocketToken(token: string | null): void {
-  if (token === currentToken) return;
+/**
+ * Called by the auth store whenever the claim token changes. Reconnects with the new credentials.
+ * `force` reconnects even with the same token (the server had forgotten it and treats the socket as anonymous).
+ */
+export function setSocketToken(token: string | null, force = false): void {
+  if (token === currentToken && !force) return;
   currentToken = token;
-  if (socket) {
-    socket.disconnect();
-    socket.connect();
-  }
+  reconnectSocket();
+}
+
+/** Token the socket authenticates with (null = anonymous). */
+export function getSocketToken(): string | null {
+  return currentToken;
+}
+
+/** New handshake with the current credentials. */
+export function reconnectSocket(): void {
+  if (!socket) return;
+  socket.disconnect();
+  socket.connect();
 }
 
 /** Singleton socket. Anonymous sockets (no token) still receive users:status and sessions:list. */

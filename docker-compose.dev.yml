@@ -1,0 +1,7 @@
+# Development only: exposes PostgreSQL on this machine (127.0.0.1:${DEV_DB_PORT:-5433}) so
+# `npm run dev` (scripts/dev.mjs) can use it. Start only the database with:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DEV_DB_PORT:-5433}:5432"

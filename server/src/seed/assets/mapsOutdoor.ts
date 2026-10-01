@@ -129,13 +129,13 @@ function cart(doc: SvgDoc, x: number, y: number, rot: number, load: string): str
 }
 
 // ---------------------------------------------------------------------------
-// Aldea de Brezoscuro
+// Village (library zone template)
 // ---------------------------------------------------------------------------
 
 export function buildVillage(): string {
   const L = VILLAGE;
   const rng = createRng('map-aldea');
-  const doc = new SvgDoc(L.width, L.height, 'Aldea de Brezoscuro');
+  const doc = new SvgDoc(L.width, L.height, 'Aldea');
   const grass = grassTexture(doc, rng, 'grassVillage', '#9cc26a', '#3f6b2a');
   doc.add(terrain(rng, L.width, L.height, { base: '#5f8a3c', blotches: ['#4d7330', '#729c48', '#86a656', '#456a2b', '#6b8a3a'], count: 140, texture: grass }));
 

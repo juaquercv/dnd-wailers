@@ -11,7 +11,7 @@ import { Kbd } from '../../components/ui/Kbd';
 import { useHotkeys } from '../../lib/hotkeys';
 import { formatRelative } from '../../lib/format';
 import { useAuthStore } from '../../stores/auth';
-import { getLastSessionId } from '../../stores/session';
+import { clearLastSessionId, getLastSessionId } from '../../stores/session';
 
 interface MenuCard {
   to: string;
@@ -135,37 +135,33 @@ function MenuCardLink({ card, index }: { card: MenuCard; index: number }) {
   );
 }
 
-function clearLastSession(): void {
-  try {
-    localStorage.removeItem('wailers.lastSessionId');
-  } catch {
-    /* ignore */
-  }
-}
-
 /** Main menu after choosing a user. */
 export default function MainMenu() {
   const user = useAuthStore((s) => s.user);
+  const userId = user?.id ?? null;
   const navigate = useNavigate();
   const [lastSession, setLastSession] = useState<SessionSummary | null>(null);
 
   useEffect(() => {
-    const id = getLastSessionId();
-    if (!id) return;
+    setLastSession(null);
+    const id = getLastSessionId(userId);
+    if (!userId || !id) return;
     let cancelled = false;
     api.sessions
       .listActive()
       .then((list) => {
         if (cancelled) return;
         const found = list.find((s) => s.id === id) ?? null;
-        if (found) setLastSession(found);
-        else clearLastSession();
+        // Only a table this user hosts or plays at.
+        const mine = found !== null && (found.hostUserId === userId || found.players.some((p) => p.userId === userId));
+        if (found && mine) setLastSession(found);
+        else clearLastSessionId(userId);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   useHotkeys({
     '1': () => navigate(CARDS[0]!.to),
@@ -212,7 +208,7 @@ export default function MainMenu() {
                 title="Descartar"
                 aria-label="Descartar aviso de partida"
                 onClick={() => {
-                  clearLastSession();
+                  if (userId) clearLastSessionId(userId);
                   setLastSession(null);
                 }}
               >

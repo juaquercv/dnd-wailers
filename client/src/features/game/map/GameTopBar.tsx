@@ -77,9 +77,9 @@ export function GameTopBar({ onQuickSearch, onShowToPlayers, onOverview }: GameT
 
   const save = async () => {
     setSaving(true);
-    const ok = await send('session:save', {}, 'No se pudo guardar la partida');
+    // The server confirms with its own «Partida guardada» toast event.
+    await send('session:save', {}, 'No se pudo guardar la partida');
     setSaving(false);
-    if (ok) toast.success('Partida guardada');
   };
 
   const pauseAndExit = async () => {

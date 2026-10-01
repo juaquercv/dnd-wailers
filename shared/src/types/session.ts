@@ -104,7 +104,7 @@ export interface Token {
   hpRatio: number | null;
   ac: number | null;
   statuses: string[];
-  /** Hidden from all players. */
+  /** Hidden from all players (a hero token stays visible to its own player). */
   hidden: boolean;
   /** Light carried by the token (torch). radius in px. */
   light: { radius: number; color: string } | null;
@@ -130,7 +130,10 @@ export const VISION_MODE_LABELS: Record<VisionMode, string> = {
 
 export interface VisibilitySettings {
   visionMode: VisionMode;
-  /** Vision radius in grid cells (hero visionCells overrides when set). */
+  /**
+   * Vision radius in grid cells. Hero visionCells overrides the global value when set; a radius set
+   * explicitly for a player (perPlayer) overrides both for that player's vision.
+   */
   visionRadius: number;
   /** Cone aperture in degrees (360 = full circle). Cone points to token.facing. */
   visionCone: number;
@@ -238,7 +241,7 @@ export interface LiveState {
  * What a client receives. For the DM `state` is complete.
  * For players `state` is filtered by buildPlayerView(): hidden/out-of-sight tokens removed,
  * enemy stats/HP stripped by permission, other inventories hidden, only own explored data,
- * only own roll requests and trades, initiative emptied if not allowed.
+ * only own roll requests and trades, initiative emptied if not allowed (hidden creatures anonymized).
  */
 export interface SessionView {
   role: 'dm' | 'player';
@@ -299,7 +302,12 @@ export interface InitiativeDraw {
   entryId: string;
   name: string;
   imageUrl: string | null;
+  /** Total = natural d20 + bonus. */
   roll: number;
+  /** Natural d20 face (1..20). */
+  natural?: number;
+  /** Initiative bonus added to the natural roll. */
+  bonus?: number;
 }
 
 /** Transient events (not part of state). */

@@ -1,0 +1,388 @@
+import { emptyItemData, type ItemData, type Rarity } from '@wailers/shared';
+import type { ItemSymbolKey } from '../assets/icons';
+import { itemIconFile, seedUrl } from '../assets/paths';
+import { cat } from './categories';
+import { entryId } from './ids';
+import { STEAM_ITEM_DEFS } from './itemsSteam';
+import { seedEntry, type SeedEntry } from './types';
+
+/** Seeded items. Every "Tipo de objeto" and every rarity is represented (in both item sets). */
+
+export interface ItemDef {
+  key: string;
+  name: string;
+  description: string;
+  symbol: ItemSymbolKey;
+  rarity: Rarity;
+  value: number;
+  weight: number;
+  categories: string[];
+  tags: string[];
+  data: Partial<ItemData>;
+  origin?: 'A' | 'B';
+  /** Seed version that introduced the item (default 1). */
+  since?: number;
+}
+
+const T = (...path: string[]): string => cat('item', 'Tipo de objeto', ...path);
+const MELEE = ['Arma', 'Cuerpo a cuerpo'];
+const RANGED = ['Arma', 'A distancia'];
+
+const FANTASY_ITEM_DEFS: ItemDef[] = [
+  {
+    key: 'espada-larga',
+    name: 'Espada larga',
+    description: 'Hoja recta de acero templado, equilibrada para usarse a una o dos manos. El arma favorita de caballeros y mercenarios.',
+    symbol: 'sword',
+    rarity: 'common',
+    value: 15,
+    weight: 1.5,
+    categories: [T(...MELEE, 'Espada')],
+    tags: ['arma', 'marcial', 'acero'],
+    data: { damage: '1d8 cortante (1d10 a dos manos)', effects: 'Versátil.' },
+  },
+  {
+    key: 'daga',
+    name: 'Daga',
+    description: 'Hoja corta y afilada, fácil de ocultar entre la ropa y de lanzar en el momento justo.',
+    symbol: 'dagger',
+    rarity: 'common',
+    value: 2,
+    weight: 0.5,
+    categories: [T(...MELEE, 'Daga'), T(...RANGED, 'Arrojadiza')],
+    tags: ['arma', 'sencilla', 'sigilo'],
+    data: { damage: '1d4 perforante', effects: 'Sutil, ligera, arrojadiza (6/18 m).', stackable: true },
+  },
+  {
+    key: 'hacha-batalla',
+    name: 'Hacha de batalla',
+    description: 'Pesada cabeza de hierro sobre un mango de fresno. Parte escudos y huesos por igual.',
+    symbol: 'battleAxe',
+    rarity: 'common',
+    value: 10,
+    weight: 2,
+    categories: [T(...MELEE, 'Hacha')],
+    tags: ['arma', 'marcial', 'enano'],
+    data: { damage: '1d8 cortante (1d10 a dos manos)', effects: 'Versátil.' },
+  },
+  {
+    key: 'maza',
+    name: 'Maza',
+    description: 'Maza de pestañas de hierro. Ideal contra esqueletos y armaduras.',
+    symbol: 'mace',
+    rarity: 'common',
+    value: 5,
+    weight: 2,
+    categories: [T(...MELEE, 'Maza')],
+    tags: ['arma', 'sencilla', 'contundente'],
+    data: { damage: '1d6 contundente' },
+  },
+  {
+    key: 'lanza',
+    name: 'Lanza',
+    description: 'Asta de madera con punta de hierro en forma de hoja. Sirve tanto para mantener a raya como para lanzar.',
+    symbol: 'spear',
+    rarity: 'common',
+    value: 1,
+    weight: 1.5,
+    categories: [T(...MELEE, 'Lanza'), T(...RANGED, 'Arrojadiza')],
+    tags: ['arma', 'sencilla', 'guardia'],
+    data: { damage: '1d6 perforante (1d8 a dos manos)', effects: 'Arrojadiza (6/18 m), versátil.' },
+  },
+  {
+    key: 'jabalina',
+    name: 'Jabalina',
+    description: 'Lanza ligera pensada para arrojarse. Los bárbaros las llevan por manojos.',
+    symbol: 'javelins',
+    rarity: 'common',
+    value: 0.5,
+    weight: 1,
+    categories: [T(...RANGED, 'Arrojadiza')],
+    tags: ['arma', 'sencilla', 'arrojadiza'],
+    data: { damage: '1d6 perforante', effects: 'Arrojadiza (9/36 m).', stackable: true },
+  },
+  {
+    key: 'arco-corto',
+    name: 'Arco corto',
+    description: 'Arco de tejo fácil de manejar incluso a caballo o entre los árboles.',
+    symbol: 'shortbow',
+    rarity: 'common',
+    value: 25,
+    weight: 1,
+    categories: [T(...RANGED, 'Arco')],
+    tags: ['arma', 'distancia', 'caza'],
+    data: { damage: '1d6 perforante', effects: 'Alcance 24/96 m. A dos manos. Necesita flechas.' },
+  },
+  {
+    key: 'ballesta-ligera',
+    name: 'Ballesta ligera',
+    description: 'Ballesta de manivela con estribo. Potente y precisa, aunque lenta de recargar.',
+    symbol: 'crossbow',
+    rarity: 'common',
+    value: 25,
+    weight: 2.5,
+    categories: [T(...RANGED, 'Ballesta')],
+    tags: ['arma', 'distancia', 'guardia'],
+    data: { damage: '1d8 perforante', effects: 'Alcance 24/96 m. Recarga. A dos manos.' },
+  },
+  {
+    key: 'flechas',
+    name: 'Flechas (20)',
+    description: 'Carcaj de cuero con veinte flechas de punta de hierro y plumas de ganso.',
+    symbol: 'arrows',
+    rarity: 'common',
+    value: 1,
+    weight: 0.5,
+    categories: [T('Munición')],
+    tags: ['municion', 'arco'],
+    data: { stackable: true, effects: 'Veinte flechas para arco.' },
+  },
+  {
+    key: 'armadura-cuero',
+    name: 'Armadura de cuero',
+    description: 'Peto y hombreras de cuero endurecido en aceite. Silenciosa y flexible.',
+    symbol: 'leatherArmor',
+    rarity: 'common',
+    value: 10,
+    weight: 5,
+    categories: [T('Armadura', 'Ligera')],
+    tags: ['armadura', 'ligera', 'sigilo'],
+    data: { armorClass: 11, effects: 'CA 11 + modificador de Destreza.', slots: 2 },
+  },
+  {
+    key: 'armadura-escamas',
+    name: 'Armadura de escamas',
+    description: 'Jubón de cuero cubierto de escamas metálicas solapadas.',
+    symbol: 'scaleArmor',
+    rarity: 'common',
+    value: 50,
+    weight: 20,
+    categories: [T('Armadura', 'Media')],
+    tags: ['armadura', 'media'],
+    data: { armorClass: 14, effects: 'CA 14 + Destreza (máx. 2). Desventaja en Sigilo.', slots: 3 },
+  },
+  {
+    key: 'cota-malla',
+    name: 'Cota de malla',
+    description: 'Miles de anillas de acero entrelazadas sobre un gambesón acolchado.',
+    symbol: 'chainmail',
+    rarity: 'common',
+    value: 75,
+    weight: 25,
+    categories: [T('Armadura', 'Pesada')],
+    tags: ['armadura', 'pesada', 'acero'],
+    data: { armorClass: 16, effects: 'CA 16. Requiere Fuerza 13. Desventaja en Sigilo.', slots: 3 },
+  },
+  {
+    key: 'armadura-placas',
+    name: 'Armadura de placas',
+    description: 'Armadura completa de placas articuladas, forjada a medida. Brilla como un espejo bajo el sol.',
+    symbol: 'plateArmor',
+    rarity: 'common',
+    value: 1500,
+    weight: 30,
+    categories: [T('Armadura', 'Pesada')],
+    tags: ['armadura', 'pesada', 'caballero'],
+    data: { armorClass: 18, effects: 'CA 18. Requiere Fuerza 15. Desventaja en Sigilo.', slots: 4 },
+  },
+  {
+    key: 'escudo-madera',
+    name: 'Escudo de madera',
+    description: 'Escudo redondo de tablas de roble con umbo y borde de hierro.',
+    symbol: 'woodenShield',
+    rarity: 'common',
+    value: 10,
+    weight: 3,
+    categories: [T('Escudo')],
+    tags: ['escudo', 'defensa'],
+    data: { armorClass: 2, effects: '+2 a la CA mientras se empuña.', slots: 2 },
+  },
+  {
+    key: 'pocion-curacion',
+    name: 'Poción de curación',
+    description: 'Líquido rojo que burbujea al agitarlo. Sabe a canela y hierro.',
+    symbol: 'potion',
+    rarity: 'common',
+    value: 50,
+    weight: 0.25,
+    categories: [T('Poción')],
+    tags: ['pocion', 'curacion', 'consumible'],
+    data: { magic: true, stackable: true, effects: 'Recupera 2d4 + 2 PV al beberla (acción).' },
+  },
+  {
+    key: 'pocion-curacion-mayor',
+    name: 'Poción de curación mayor',
+    description: 'Un elixir carmesí que brilla débilmente en la oscuridad.',
+    symbol: 'potionGreater',
+    rarity: 'uncommon',
+    value: 150,
+    weight: 0.25,
+    categories: [T('Poción')],
+    tags: ['pocion', 'curacion', 'consumible'],
+    data: { magic: true, stackable: true, effects: 'Recupera 4d4 + 4 PV al beberla (acción).' },
+  },
+  {
+    key: 'pergamino-bola-fuego',
+    name: 'Pergamino de Bola de Fuego',
+    description: 'Pergamino sellado con lacre rojo. Está tibio al tacto y huele a azufre.',
+    symbol: 'scroll',
+    rarity: 'uncommon',
+    value: 300,
+    weight: 0.1,
+    categories: [T('Pergamino')],
+    tags: ['pergamino', 'fuego', 'magia'],
+    data: { magic: true, charges: 1, effects: 'Lanza Bola de fuego (nivel 3, CD 15) una vez; después el pergamino se deshace en cenizas.' },
+  },
+  {
+    key: 'anillo-proteccion',
+    name: 'Anillo de protección',
+    description: 'Sencillo anillo de oro con un zafiro tallado. Un leve escudo invisible rodea a quien lo lleva.',
+    symbol: 'ring',
+    rarity: 'rare',
+    value: 3500,
+    weight: 0,
+    categories: [T('Anillo')],
+    tags: ['anillo', 'magia', 'defensa'],
+    data: { magic: true, attunement: true, effects: '+1 a la CA y a todas las tiradas de salvación.', slots: 0 },
+  },
+  {
+    key: 'amuleto-dragon',
+    name: 'Amuleto del Dragón',
+    description: 'Garra de oro que aferra un ojo de dragón petrificado. Late como un corazón cuando hay dragones cerca.',
+    symbol: 'amulet',
+    rarity: 'very_rare',
+    value: 8000,
+    weight: 0.1,
+    categories: [T('Amuleto')],
+    tags: ['amuleto', 'dragon', 'fuego', 'magia'],
+    data: { magic: true, attunement: true, charges: 1, effects: 'Resistencia al fuego. Una vez al día: aliento de fuego en cono de 4,5 m (6d6 de fuego, CD 16 Destreza para la mitad).', slots: 0 },
+  },
+  {
+    key: 'herramientas-ladron',
+    name: 'Herramientas de ladrón',
+    description: 'Estuche de cuero con ganzúas, una lima, un espejito y unas tijeras de punta fina.',
+    symbol: 'thievesTools',
+    rarity: 'common',
+    value: 25,
+    weight: 0.5,
+    categories: [T('Herramienta')],
+    tags: ['herramienta', 'sigilo', 'cerraduras'],
+    data: { effects: 'Permiten abrir cerraduras y desactivar trampas (competencia con herramientas de ladrón).' },
+  },
+  {
+    key: 'raciones',
+    name: 'Raciones (1 día)',
+    description: 'Carne seca, pan duro, queso curado y un puñado de frutos secos envueltos en tela.',
+    symbol: 'rations',
+    rarity: 'common',
+    value: 0.5,
+    weight: 1,
+    categories: [T('Consumible')],
+    tags: ['comida', 'viaje', 'consumible'],
+    data: { stackable: true, effects: 'Comida suficiente para un día de viaje.' },
+  },
+  {
+    key: 'gema-rubi',
+    name: 'Gema de rubí',
+    description: 'Rubí tallado del tamaño de un pulgar. Muy apreciado por joyeros... y por los dragones.',
+    symbol: 'ruby',
+    rarity: 'uncommon',
+    value: 500,
+    weight: 0,
+    categories: [T('Tesoro')],
+    tags: ['tesoro', 'gema', 'valioso'],
+    data: { stackable: true, slots: 0 },
+  },
+  {
+    key: 'llave-cripta',
+    name: 'Llave de la Cripta',
+    description: 'Llave de hierro negro con el ojo en forma de calavera. Abre la puerta sellada de la Cripta de Valdris.',
+    symbol: 'cryptKey',
+    rarity: 'common',
+    value: 0,
+    weight: 0.1,
+    categories: [T('Objeto de misión')],
+    tags: ['mision', 'llave', 'cripta', 'valdris'],
+    data: { effects: 'Abre la puerta sellada de la Cripta de Valdris. Está fría como el hielo.', slots: 0 },
+    origin: 'B',
+  },
+  {
+    key: 'escama-dragon',
+    name: 'Escama de dragón',
+    description: 'Escama carmesí, dura como el acero y tibia al tacto.',
+    symbol: 'dragonScale',
+    rarity: 'uncommon',
+    value: 100,
+    weight: 0.5,
+    categories: [T('Material')],
+    tags: ['material', 'dragon', 'forja'],
+    data: { stackable: true, effects: 'Un herrero hábil puede forjar con varias escamas una armadura resistente al fuego.' },
+  },
+  {
+    key: 'espada-flamigera',
+    name: 'Espada Flamígera',
+    description: 'Espada larga con runas de fuego grabadas en el acero. Al pronunciar su nombre, la hoja estalla en llamas.',
+    symbol: 'flamingSword',
+    rarity: 'rare',
+    value: 5000,
+    weight: 1.5,
+    categories: [T(...MELEE, 'Espada')],
+    tags: ['arma', 'fuego', 'magia', 'espada'],
+    data: { magic: true, attunement: true, damage: '1d8 cortante + 2d6 fuego', effects: 'Acción adicional: encender o apagar la hoja (luz brillante 12 m). Mientras arde, inflige 2d6 de fuego adicionales.' },
+  },
+  {
+    key: 'baston-archimago',
+    name: 'Bastón del Archimago',
+    description: 'Bastón de ébano coronado por un orbe de luz violeta. Susurra fórmulas olvidadas a quien sabe escuchar.',
+    symbol: 'archmageStaff',
+    rarity: 'legendary',
+    value: 50000,
+    weight: 2,
+    categories: [T(...MELEE)],
+    tags: ['baston', 'magia', 'arcano', 'mago'],
+    data: { magic: true, attunement: true, charges: 50, damage: '1d6 + 2 contundente', effects: '+2 a las tiradas de ataque con conjuros. 50 cargas para lanzar conjuros de nivel 1 a 9. Romperlo desata un estallido arcano devastador.' },
+  },
+  {
+    key: 'orbe-dragones',
+    name: 'Orbe de los Dragones',
+    description: 'Esfera de cristal donde arde el espíritu de un dragón ancestral. Su mirada se clava en el alma de quien la sostiene.',
+    symbol: 'dragonOrb',
+    rarity: 'artifact',
+    value: 250000,
+    weight: 1.5,
+    categories: [T('Tesoro'), T('Objeto de misión')],
+    tags: ['artefacto', 'dragon', 'mision', 'jefe-final'],
+    data: { magic: true, attunement: true, charges: 3, effects: 'Permite hablar con los dragones e intentar someterlos (CD 15 Carisma). Si el portador falla, el espíritu del orbe toma el control durante un día.' },
+  },
+];
+
+/** Fantasy items (seed v1) followed by the steampunk items of "Los Cielos de Latón" (seed v2). */
+export const ITEM_DEFS: ItemDef[] = [...FANTASY_ITEM_DEFS, ...STEAM_ITEM_DEFS.map((d) => ({ ...d, origin: 'A' as const, since: 2 }))];
+
+export function itemId(key: string): string {
+  return entryId('item', key);
+}
+
+export const ITEM_ENTRIES: SeedEntry<'item'>[] = ITEM_DEFS.map((d) =>
+  seedEntry<'item'>({
+    id: itemId(d.key),
+    kind: 'item',
+    name: d.name,
+    description: d.description,
+    imageUrl: seedUrl(itemIconFile(d.key)),
+    tags: d.tags,
+    categoryIds: d.categories,
+    origin: d.origin ?? null,
+    since: d.since ?? 1,
+    rarity: d.rarity,
+    value: d.value,
+    weight: d.weight,
+    data: { ...emptyItemData(), ...d.data },
+  }),
+);
+
+export function itemEntry(key: string): SeedEntry<'item'> {
+  const found = ITEM_ENTRIES.find((e) => e.id === itemId(key));
+  if (!found) throw new Error(`Objeto de semilla inexistente: ${key}`);
+  return found;
+}

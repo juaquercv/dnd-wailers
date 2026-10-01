@@ -1,11 +1,11 @@
 import {
   RARITY_INFO,
+  effectiveVisibility,
   isOwnHeroToken,
   newId,
   normalizeDeg,
   type FxEvent,
   type LibraryEntry,
-  type LiveState,
   type SessionEvent,
   type SpawnPoint,
   type Token,
@@ -40,6 +40,7 @@ import {
   numberedNames,
   optNum,
   playerIds,
+  playerSeesToken,
   playerSeesZone,
   playerSeesPoint,
   plainObject,
@@ -58,12 +59,22 @@ import {
   statusValue,
   syncHeroTokens,
   tokenCellsForEntry,
+  tokenNewsVisibility,
   urlOrNull,
+  visibilityForPlayers,
   zoneLabel,
   type Point,
 } from '../helpers';
-import { HandlerError, type HandlerCtx, type HandlerModule, type LogInput, type SessionManagerApi } from '../types';
-import { removeTurnEntries } from './turns';
+import {
+  HandlerError,
+  type HandlerCtx,
+  type HandlerModule,
+  type LiveSession,
+  type LogInput,
+  type MutateOptions,
+  type SessionManagerApi,
+} from '../types';
+import { announceTurnStart, landAfterRemoval, removeTurnEntries, turnPointer, type TurnLanding } from './turns';
 
 /*
  * Token handlers: spawning from the library, hero placement, movement (with drag previews),
@@ -73,11 +84,17 @@ import { removeTurnEntries } from './turns';
 
 const NO_MOVE = 'No puedes mover esta ficha';
 
-/** Log visibility for a non-hero token event: players only learn about it when they could see it anyway. */
-function tokenLogVisibility(state: LiveState, token: Token): 'all' | 'dm' {
+/**
+ * Log visibility for a token event: hero news are for the whole party; other tokens are only news
+ * for the players when every one of them currently sees the token (per-player settings and zones).
+ */
+function tokenLogVisibility(
+  session: LiveSession,
+  token: Pick<Token, 'kind' | 'hidden' | 'zoneId' | 'levelId' | 'x' | 'y'>,
+  extra?: (userId: string) => boolean,
+): 'all' | 'dm' {
   if (token.kind === 'hero') return 'all';
-  if (token.hidden) return 'dm';
-  return state.visibility.global.visionMode === 'all' ? 'all' : 'dm';
+  return tokenNewsVisibility(session, token, extra);
 }
 
 function canPlayerMoveToken(ctx: HandlerCtx, token: Token): boolean {
@@ -130,10 +147,14 @@ async function spawnTokens(
   if (!current) throw new HandlerError('Ese nivel ya no existe en la zona');
 
   const cells = tokenCellsForEntry(entry);
-  const state = ctx.session.state;
   const what = count === 1 ? entry.name : `${count} × ${entry.name}`;
-  const visibility: 'all' | 'dm' = hidden ? 'dm' : dramatic || state.visibility.global.visionMode === 'all' ? 'all' : 'dm';
   const ids: string[] = [];
+  const log: LogInput = {
+    type: 'system',
+    text: `${count === 1 ? 'Aparece' : 'Aparecen'} ${what}${hidden ? ' (oculto)' : ''} en ${zoneLabel(zone, current.level)}`,
+    actorUserId: ctx.userId,
+    visibility: 'dm',
+  };
 
   manager.mutate(
     ctx.session,
@@ -141,20 +162,19 @@ async function spawnTokens(
       manager.ensureZoneInstantiated(ctx.session, s, zone.id);
       const positions = freeCellsAround(s, zone.id, current.level, origin, count, cells);
       const names = numberedNames(s, entry.name, count);
+      const created: Token[] = [];
       positions.forEach((pos, i) => {
         const token = entryToToken(entry, { zoneId: zone.id, levelId: current.level.id, x: pos.x, y: pos.y }, { hidden, name: names[i], cells });
         s.tokens[token.id] = token;
         ids.push(token.id);
+        created.push(token);
       });
+      // A dramatic entrance is shown to everyone; otherwise only news when every player sees the new tokens.
+      if (!hidden) {
+        log.visibility = dramatic ? 'all' : visibilityForPlayers(s, (uid) => created.some((t) => playerSeesToken(ctx.session, uid, t)));
+      }
     },
-    {
-      log: {
-        type: 'system',
-        text: `${count === 1 ? 'Aparece' : 'Aparecen'} ${what}${hidden ? ' (oculto)' : ''} en ${zoneLabel(zone, current.level)}`,
-        actorUserId: ctx.userId,
-        visibility,
-      },
-    },
+    { log },
   );
 
   // A hidden dramatic entrance is only previewed by the DM: players must not learn about it yet.
@@ -315,7 +335,10 @@ function transferTokens(
   const fromLoc = getLevel(ctx.session, first.zoneId, first.levelId);
   const zone = requireZone(manager, ctx.session, payload.zoneId);
   if (zone.levels.length === 0) throw new HandlerError('Esa zona no tiene niveles');
-  const direction = fromLoc && fromLoc.zone.id !== zone.id ? neighborDirection(fromLoc.zone, zone.id) : null;
+  const neighbor = fromLoc && fromLoc.zone.id !== zone.id ? neighborDirection(fromLoc.zone, zone.id) : null;
+  // Neighbor edges join zones at their default (ground) level: from another level a player takes the stairs first.
+  const onGround = fromLoc !== null && fromLoc.level.id === defaultLevel(fromLoc.zone).id;
+  const direction = neighbor && (ctx.isDm || onGround) ? neighbor : null;
 
   // An empty level id (e.g. a player travelling to a zone they do not know yet) picks the level a
   // neighbor edge or a transition of the current level leads to, else the zone's default level.
@@ -539,13 +562,19 @@ function updateToken(
   }
 
   const logs: LogInput[] = [];
-  if (patch.hidden !== undefined && patch.hidden !== token.hidden) {
-    const revealVisibility: 'all' | 'dm' = state.visibility.global.visionMode === 'all' ? 'all' : 'dm';
-    logs.push(
-      patch.hidden
-        ? { type: 'system', text: `${token.name} queda oculto para los jugadores`, actorUserId: ctx.userId, visibility: 'dm' }
-        : { type: 'system', text: `Aparece ${patch.name ?? token.name}`, actorUserId: ctx.userId, visibility: token.kind === 'hero' ? 'all' : revealVisibility },
-    );
+  if (patch.hidden === true && !token.hidden) {
+    logs.push({ type: 'system', text: `${token.name} queda oculto para los jugadores`, actorUserId: ctx.userId, visibility: 'dm' });
+  } else if (patch.hidden === false && token.hidden) {
+    // Revealed: news only when every player will see the token where it stands (not a boss in another zone).
+    const visibility = tokenLogVisibility(ctx.session, {
+      kind: token.kind,
+      hidden: false,
+      zoneId: token.zoneId,
+      levelId: token.levelId,
+      x: position?.x ?? token.x,
+      y: position?.y ?? token.y,
+    });
+    logs.push({ type: 'system', text: `Aparece ${patch.name ?? token.name}`, actorUserId: ctx.userId, visibility });
   }
 
   manager.mutate(
@@ -626,8 +655,8 @@ function tokenHp(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tokenId
   let next = set !== undefined ? Math.round(set) : before + (roundedDelta ?? 0);
   next = Math.max(0, next);
   if (token.maxHp !== null) next = Math.min(next, token.maxHp);
-  const exact = state.visibility.global.enemyHp === 'exact';
-  const visibility: 'all' | 'dm' = tokenLogVisibility(state, token) === 'all' && exact ? 'all' : 'dm';
+  // Exact numbers only when every player sees the token and its exact HP.
+  const visibility = tokenLogVisibility(ctx.session, token, (uid) => effectiveVisibility(state, uid).enemyHp === 'exact');
   manager.mutate(
     ctx.session,
     (s) => {
@@ -664,7 +693,7 @@ function tokenStatus(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tok
       if (!t) return;
       t.statuses = on ? [...t.statuses, status] : t.statuses.filter((x) => x !== status);
     },
-    { heroes: hero ? [hero.id] : undefined, log: { type: 'system', text, actorUserId: ctx.userId, visibility: tokenLogVisibility(state, token) } },
+    { heroes: hero ? [hero.id] : undefined, log: { type: 'system', text, actorUserId: ctx.userId, visibility: tokenLogVisibility(ctx.session, token) } },
   );
   return null;
 }
@@ -677,21 +706,27 @@ function removeToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { tok
   const state = ctx.session.state;
   const token = requireToken(state, payload.tokenId);
   const visibility: 'all' | 'dm' = token.kind === 'hero' && !token.hidden ? 'all' : 'dm';
+  const opts: MutateOptions = {
+    zones: token.kind === 'hero',
+    log: { type: 'system', text: `${token.name} se retira del mapa`, actorUserId: ctx.userId, visibility },
+  };
+  const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     ctx.session,
     (s) => {
+      const before = turnPointer(s);
       delete s.tokens[token.id];
       // Players keep their turn (their hero token can be placed again); other entries of the token go.
       for (const entry of s.turn.order) {
         if (entry.tokenId === token.id && entry.type === 'player') entry.tokenId = null;
       }
       removeTurnEntries(s, (entry) => entry.tokenId === token.id && entry.type !== 'player');
+      // A creature removed during its own turn passes the turn to the next entry.
+      out.landing = landAfterRemoval(ctx.session, s, opts, before);
     },
-    {
-      zones: token.kind === 'hero',
-      log: { type: 'system', text: `${token.name} se retira del mapa`, actorUserId: ctx.userId, visibility },
-    },
+    opts,
   );
+  if (out.landing) announceTurnStart(manager, ctx.session, out.landing);
   return null;
 }
 
