@@ -23,7 +23,7 @@ function localRoll(roller: Roller, user: { id: string; name: string } | null): R
     sessionId: '',
     at: new Date().toISOString(),
     rollerUserId: user?.id ?? '',
-    rollerName: user?.name ?? 'Tú',
+    rollerName: user?.name ?? 'El DM',
     byDm: false,
     label: roller.name,
     mode: 'normal' as const,

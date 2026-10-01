@@ -28,8 +28,17 @@ export function InitiativeDrawOverlay() {
 
   useEffect(() => setEvent(null), [sessionId]);
 
+  // Hidden tabs cannot animate: skip the show (the turn order panel already has the result).
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') setEvent(null);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
   useSessionEvent('initiativeDraw', (e) => {
-    if (e.draws.length === 0) return;
+    if (e.draws.length === 0 || document.visibilityState === 'hidden') return;
     setEvent({ key: Date.now(), draws: e.draws, order: e.order });
   });
 
@@ -142,7 +151,8 @@ function DrawScene({ draws, order, reducedMotion, onClose }: { draws: Initiative
     >
       <span
         aria-hidden
-        className="pointer-events-none absolute left-1/2 top-1/3 h-[38rem] w-[38rem] -translate-x-1/2 -translate-y-1/2 animate-glow-pulse rounded-full bg-gold-500/10 blur-3xl"
+        className="pointer-events-none absolute left-1/2 top-[40%] h-[44rem] w-[44rem] -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full"
+        style={{ background: 'radial-gradient(circle, rgba(233,192,99,0.2) 0%, rgba(212,166,63,0.08) 38%, transparent 68%)' }}
       />
       <div className="relative text-center">
         <div className="text-xs font-semibold uppercase tracking-[0.32em] text-gold-400">Sorteo de iniciativa</div>

@@ -251,109 +251,111 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
   const tickIndex = Math.floor(elapsed / 70);
 
   return (
-    <div className={clsx('relative flex w-full flex-col items-center', critOn && roll.crit === 'fail' && !reducedMotion && 'wl-shake')}>
+    <>
+      {/* Outside the shaking wrapper: a transformed ancestor would turn `fixed` into a local box. */}
       {critOn && roll.crit === 'fail' && (
         <div className={clsx('wl-flash-red z-0', overlay ? 'fixed inset-0' : 'absolute -inset-4 rounded-2xl')} aria-hidden />
       )}
-
-      <div className="relative z-[1] flex w-full items-center justify-center" style={{ minHeight: n > 0 ? size + 24 : 0 }}>
-        {critOn && roll.crit === 'success' && (
-          <>
-            <div className="wl-rays" style={{ '--wl-rays-size': overlay ? '680px' : '360px' } as CSSProperties} aria-hidden />
-            <div className="wl-rays-core" style={{ '--wl-rays-size': overlay ? '680px' : '360px' } as CSSProperties} aria-hidden />
-          </>
-        )}
-        <div className={clsx('relative flex flex-wrap items-center justify-center', overlay ? 'max-w-[min(92vw,980px)] gap-x-5 gap-y-4 px-4' : 'max-w-full gap-3 px-2')}>
-          {dice.map((die, i) => {
-            const landed = elapsed >= landAt(i);
-            const dropped = die.dropped && showDropped;
-            const glow = critOn && i === critIndex ? (roll.crit === 'success' ? 'wl-die-glow-gold' : 'wl-die-glow-blood') : null;
-            const start = starts[i]!;
-            const faceSeed = (seed + i * 7919 + tickIndex * 104729) >>> 0;
-            const shown = landed ? die.value : Math.floor(seededRandom(faceSeed)() * die.sides) + 1;
-            return (
-              <div
-                key={i}
-                className="wl-die"
-                style={
-                  {
-                    width: size,
-                    height: size,
-                    '--wl-sx': start.sx,
-                    '--wl-sy': start.sy,
-                    '--wl-rot': die.sides === 6 ? '0deg' : start.rot,
-                    animationDuration: `${Math.max(1, landAt(i))}ms`,
-                  } as CSSProperties
-                }
-                title={die.dropped ? `${die.value} (descartado)` : String(die.value)}
-              >
-                <div className={clsx('h-full w-full transition-transform', landed && 'wl-die-land', dropped && 'wl-die-dropped', glow)}>
-                  {die.sides === 6 ? (
-                    <D6Cube value={die.value} size={size} durationMs={reducedMotion ? 0 : landAt(i)} seed={(seed + i * 31) >>> 0} />
-                  ) : (
-                    <DieView sides={die.sides} value={shown} size={size} />
-                  )}
-                </div>
-                {dropped && <span className="wl-die-strike" aria-hidden />}
-              </div>
-            );
-          })}
-        </div>
-        {critOn && roll.crit === 'success' && <Particles seed={seed} count={overlay ? 34 : 18} distance={overlay ? 300 : 150} />}
-        {critOn && roll.crit === 'fail' && <Crack width={overlay ? Math.min(420, size * Math.max(1, n) + 140) : 240} />}
-      </div>
-
-      {critOn && (
-        <div
-          className={clsx(
-            'relative z-[3] font-display font-black uppercase',
-            overlay ? 'mt-3 text-5xl sm:text-6xl' : 'mt-2 text-3xl',
-            roll.crit === 'success' ? 'wl-crit-text title-epic' : 'wl-fail-text text-blood-400 [text-shadow:0_0_24px_rgba(196,61,51,0.85),0_3px_0_#45130f]',
+      <div className={clsx('relative flex w-full flex-col items-center', critOn && roll.crit === 'fail' && !reducedMotion && 'wl-shake')}>
+        <div className="relative z-[1] flex w-full items-center justify-center" style={{ minHeight: n > 0 ? size + 24 : 0 }}>
+          {critOn && roll.crit === 'success' && (
+            <>
+              <div className="wl-rays" style={{ '--wl-rays-size': overlay ? '680px' : '360px' } as CSSProperties} aria-hidden />
+              <div className="wl-rays-core" style={{ '--wl-rays-size': overlay ? '680px' : '360px' } as CSSProperties} aria-hidden />
+            </>
           )}
-        >
-          {roll.crit === 'success' ? '¡CRÍTICO!' : '¡PIFIA!'}
+          <div className={clsx('relative flex flex-wrap items-center justify-center', overlay ? 'max-w-[min(92vw,980px)] gap-x-5 gap-y-4 px-4' : 'max-w-full gap-3 px-2')}>
+            {dice.map((die, i) => {
+              const landed = elapsed >= landAt(i);
+              const dropped = die.dropped && showDropped;
+              const glow = critOn && i === critIndex ? (roll.crit === 'success' ? 'wl-die-glow-gold' : 'wl-die-glow-blood') : null;
+              const start = starts[i]!;
+              const faceSeed = (seed + i * 7919 + tickIndex * 104729) >>> 0;
+              const shown = landed ? die.value : Math.floor(seededRandom(faceSeed)() * die.sides) + 1;
+              return (
+                <div
+                  key={i}
+                  className="wl-die"
+                  style={
+                    {
+                      width: size,
+                      height: size,
+                      '--wl-sx': start.sx,
+                      '--wl-sy': start.sy,
+                      '--wl-rot': die.sides === 6 ? '0deg' : start.rot,
+                      animationDuration: `${Math.max(1, landAt(i))}ms`,
+                    } as CSSProperties
+                  }
+                  title={die.dropped ? `${die.value} (descartado)` : String(die.value)}
+                >
+                  <div className={clsx('h-full w-full transition-transform', landed && 'wl-die-land', dropped && 'wl-die-dropped', glow)}>
+                    {die.sides === 6 ? (
+                      <D6Cube value={die.value} size={size} durationMs={reducedMotion ? 0 : landAt(i)} seed={(seed + i * 31) >>> 0} />
+                    ) : (
+                      <DieView sides={die.sides} value={shown} size={size} />
+                    )}
+                  </div>
+                  {dropped && <span className="wl-die-strike" aria-hidden />}
+                </div>
+              );
+            })}
+          </div>
+          {critOn && roll.crit === 'success' && <Particles seed={seed} count={overlay ? 34 : 18} distance={overlay ? 300 : 150} />}
+          {critOn && roll.crit === 'fail' && <Crack width={overlay ? Math.min(420, size * Math.max(1, n) + 140) : 240} />}
         </div>
-      )}
 
-      <div
-        role={onCardClick ? 'button' : undefined}
-        tabIndex={onCardClick ? 0 : undefined}
-        onClick={onCardClick}
-        onKeyDown={(e) => {
-          if (onCardClick && (e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            onCardClick();
-          }
-        }}
-        className={clsx(
-          'wl-card-in pointer-events-auto relative z-[3] text-center',
-          overlay
-            ? 'mt-5 w-[min(92vw,30rem)] cursor-pointer rounded-2xl border border-gold-600/50 bg-ink-900/92 px-6 py-4 shadow-modal backdrop-blur'
-            : 'mt-4 w-full rounded-xl border border-ink-500 bg-ink-950/60 px-4 py-3',
-          roll.crit === 'success' && critOn && 'border-gold-400 shadow-glow-gold',
-          roll.crit === 'fail' && critOn && 'border-blood-500 shadow-glow-blood',
-        )}
-      >
-        <StageHeader roll={roll} rollerColor={rollerColor} verb="lanza" extra={extra} />
-        <div className="mt-2 flex flex-col items-center">
-          <span className="label mb-0">Total</span>
-          <span
-            key={allDone ? 'final' : 'rolling'}
+        {critOn && (
+          <div
             className={clsx(
-              'font-display font-bold leading-none tabular-nums',
-              overlay ? 'text-6xl sm:text-7xl' : 'text-5xl',
-              allDone && 'wl-total-pop',
-              critOn && roll.crit === 'success' ? 'title-epic' : critOn && roll.crit === 'fail' ? 'text-blood-400' : 'text-parchment-50',
+              'relative z-[3] font-display font-black uppercase',
+              overlay ? 'mt-3 text-5xl sm:text-6xl' : 'mt-2 text-3xl',
+              roll.crit === 'success' ? 'wl-crit-text title-epic' : 'wl-fail-text text-blood-400 [text-shadow:0_0_24px_rgba(196,61,51,0.85),0_3px_0_#45130f]',
             )}
           >
-            {allDone ? total : '…'}
-          </span>
+            {roll.crit === 'success' ? '¡CRÍTICO!' : '¡PIFIA!'}
+          </div>
+        )}
+
+        <div
+          role={onCardClick ? 'button' : undefined}
+          tabIndex={onCardClick ? 0 : undefined}
+          onClick={onCardClick}
+          onKeyDown={(e) => {
+            if (onCardClick && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault();
+              onCardClick();
+            }
+          }}
+          className={clsx(
+            'wl-card-in pointer-events-auto relative z-[3] text-center',
+            overlay
+              ? 'mt-5 w-[min(92vw,30rem)] cursor-pointer rounded-2xl border border-gold-600/50 bg-ink-900/92 px-6 py-4 shadow-modal backdrop-blur'
+              : 'mt-4 w-full rounded-xl border border-ink-500 bg-ink-950/60 px-4 py-3',
+            roll.crit === 'success' && critOn && 'border-gold-400 shadow-glow-gold',
+            roll.crit === 'fail' && critOn && 'border-blood-500 shadow-glow-blood',
+          )}
+        >
+          <StageHeader roll={roll} rollerColor={rollerColor} verb="lanza" extra={extra} />
+          <div className="mt-2 flex flex-col items-center">
+            <span className="label mb-0">Total</span>
+            <span
+              key={allDone ? 'final' : 'rolling'}
+              className={clsx(
+                'font-display font-bold leading-none tabular-nums',
+                overlay ? 'text-6xl sm:text-7xl' : 'text-5xl',
+                allDone && 'wl-total-pop',
+                critOn && roll.crit === 'success' ? 'title-epic' : critOn && roll.crit === 'fail' ? 'text-blood-400' : 'text-parchment-50',
+              )}
+            >
+              {allDone ? total : '…'}
+            </span>
+          </div>
+          {breakdown && allDone && <div className="mt-2 break-words font-mono text-xs text-parchment-300">{breakdown}</div>}
+          <RollBadges roll={roll} targetName={targetName} hideVisibility={hideVisibility} badge={badge} />
+          {hint && <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-parchment-400/80">{hint}</div>}
         </div>
-        {breakdown && allDone && <div className="mt-2 break-words font-mono text-xs text-parchment-300">{breakdown}</div>}
-        <RollBadges roll={roll} targetName={targetName} hideVisibility={hideVisibility} badge={badge} />
-        {hint && <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-parchment-400/80">{hint}</div>}
       </div>
-    </div>
+    </>
   );
 }
 

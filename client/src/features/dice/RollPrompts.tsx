@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
-import { Globe, Lock, UserRound } from 'lucide-react';
+import { Globe, Lock, UserRound, X } from 'lucide-react';
 import type { RollRequest } from '@wailers/shared';
 import { emitAck } from '../../api/socket';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
+import { IconButton } from '../../components/ui/IconButton';
 import { toast } from '../../components/ui/toast';
 import { useSessionEvent } from '../../lib/eventBus';
 import { useSessionStore } from '../../stores/session';
@@ -13,7 +14,7 @@ import { useSettingsStore } from '../../stores/settings';
 import { uiSounds } from '../audio/uiSounds';
 import { DieGlyph } from './DieShapes';
 import { MODE_LABELS } from './diceUtils';
-import { resolveOffered, useOfferedRollers } from './offeredRollers';
+import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
 import { MiniWheel } from './RouletteWheel';
 import './dice.css';
 
@@ -31,16 +32,20 @@ interface TurnBanner {
  */
 export function RollPrompts() {
   const view = useSessionStore((s) => s.view);
-  const sessionId = useSessionStore((s) => s.sessionId);
   const reducedMotion = useSettingsStore((s) => s.reducedMotion);
-  const offeredState = useOfferedRollers();
+  const lookupRoller = useRollerLookup();
   const me = view?.meUserId ?? null;
   const meRef = useRef(me);
   meRef.current = me;
 
   const requests = useMemo(() => (view && me ? view.state.rollRequests.filter((r) => r.targetUserId === me) : []), [view, me]);
   const offer = view && me && view.state.turnOffer && view.state.turnOffer.userId === me ? view.state.turnOffer : null;
-  const offered = useMemo(() => (offer ? resolveOffered(offer.rollerIds, offeredState, sessionId) : []), [offer, offeredState, sessionId]);
+  const offered = useMemo(() => (offer ? resolveOffered(offer.rollerIds, lookupRoller) : []), [offer, lookupRoller]);
+  const wantedRollerIds = useMemo(
+    () => [...(offer?.rollerIds ?? []), ...requests.map((r) => r.rollerId).filter((id): id is string => !!id)],
+    [offer, requests],
+  );
+  useEnsureRollers(wantedRollerIds);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [banner, setBanner] = useState<TurnBanner | null>(null);
@@ -65,9 +70,23 @@ export function RollPrompts() {
     if (busy) return;
     setBusy(request.id);
     try {
-      await emitAck('roll:fulfill', { requestId: request.id });
+      const result = await emitAck('roll:fulfill', { requestId: request.id });
+      // Secret results are only shown to the DM: tell the player it went through.
+      if (result.visibility === 'secret') toast.info('Tirada enviada: solo el DM verá el resultado');
     } catch (err) {
       toast.fromError(err, 'No se pudo lanzar la tirada');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const decline = async (request: RollRequest) => {
+    if (busy) return;
+    setBusy(`decline:${request.id}`);
+    try {
+      await emitAck('roll:cancel', { requestId: request.id });
+    } catch (err) {
+      toast.fromError(err, 'No se pudo descartar la petición');
     } finally {
       setBusy(null);
     }
@@ -129,7 +148,7 @@ export function RollPrompts() {
                       o.roller && o.roller.kind === 'roulette' ? (
                         <MiniWheel segments={o.roller.segments} size={18} />
                       ) : (
-                        <DieGlyph sides={20} size={18} />
+                        <DieGlyph sides={o.roller?.faces && o.roller.faces.length > 0 ? 6 : 20} size={18} />
                       )
                     }
                     onClick={() => void rollOffered(o.id)}
@@ -148,10 +167,12 @@ export function RollPrompts() {
             <RequestCard
               key={r.id}
               request={r}
-              rollerName={r.rollerId ? offeredState.known[r.rollerId]?.name ?? null : null}
+              rollerName={r.rollerId ? lookupRoller(r.rollerId)?.name ?? null : null}
               busy={busy === r.id}
+              declining={busy === `decline:${r.id}`}
               disabled={busy !== null && busy !== r.id}
               onRoll={() => void fulfill(r)}
+              onDecline={() => void decline(r)}
             />
           ))}
           {hiddenCount > 0 && (
@@ -190,18 +211,32 @@ function RequestCard({
   request,
   rollerName,
   busy,
+  declining,
   disabled,
   onRoll,
+  onDecline,
 }: {
   request: RollRequest;
   rollerName: string | null;
   busy: boolean;
+  declining: boolean;
   disabled: boolean;
   onRoll: () => void;
+  onDecline: () => void;
 }) {
-  const what = request.formula ?? (request.rollerId ? rollerName ?? 'ruleta del DM' : 'tirada');
+  const what = request.formula ?? (request.rollerId ? rollerName ?? 'ruleta o dado del DM' : 'tirada');
   return (
-    <div className="wl-card-in wl-prompt-glow pointer-events-auto flex w-[min(94vw,30rem)] items-center gap-3 rounded-2xl border border-gold-500/60 bg-ink-900/95 px-4 py-3 backdrop-blur">
+    <div className="wl-card-in wl-prompt-glow pointer-events-auto relative flex w-[min(94vw,30rem)] items-center gap-3 rounded-2xl border border-gold-500/60 bg-ink-900/95 py-3 pl-4 pr-9 backdrop-blur">
+      <span className="absolute right-1.5 top-1.5">
+        <IconButton
+          size="xs"
+          icon={<X />}
+          title="Descartar la petición (el DM recibirá un aviso)"
+          loading={declining}
+          disabled={disabled || busy}
+          onClick={onDecline}
+        />
+      </span>
       <span className="shrink-0 text-3xl leading-none" aria-hidden>
         🎲
       </span>

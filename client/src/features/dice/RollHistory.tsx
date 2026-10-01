@@ -10,6 +10,7 @@ import { DieGlyph } from './DieShapes';
 import { useUserLookup } from './diceHooks';
 import { isRollResult, MODE_LABELS, rollBreakdown, rollTitle } from './diceUtils';
 import { MiniWheel } from './RouletteWheel';
+import { useRollPending } from './rollReveal';
 
 export interface RollHistoryProps {
   compact?: boolean;
@@ -111,6 +112,56 @@ export function RollHistory({ compact = false }: RollHistoryProps) {
   );
 }
 
+/** Row shown while the big animation is still running: who and what, but not the result yet. */
+function PendingRow({
+  roll,
+  at,
+  compact,
+  color,
+  targetName,
+  firstSides,
+}: {
+  roll: RollResult;
+  at: string;
+  compact: boolean;
+  color: string | null;
+  targetName: string | null;
+  firstSides: number;
+}) {
+  return (
+    <li className={clsx('relative overflow-hidden rounded-lg border border-gold-700/50 bg-ink-900/70', compact ? 'px-2.5 py-2' : 'px-3 py-2.5')} aria-busy="true">
+      <span aria-hidden className="absolute inset-y-0 left-0 w-0.5" style={{ backgroundColor: color ?? '#7d5d1d' }} />
+      <span aria-hidden className="pointer-events-none absolute inset-0 animate-shimmer bg-[linear-gradient(110deg,transparent_30%,rgba(233,192,99,0.08)_50%,transparent_70%)] bg-[length:200%_100%]" />
+      <div className="relative flex items-center gap-2.5">
+        <span className="shrink-0 animate-spin-slow">
+          {roll.kind === 'roulette' ? (
+            <MiniWheel segments={roll.segments ?? []} size={compact ? 22 : 26} />
+          ) : (
+            <DieGlyph sides={roll.kind === 'custom_die' ? 6 : firstSides} size={compact ? 22 : 26} />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-[11px] text-parchment-400">
+            <span className="truncate font-semibold" style={{ color: color ?? undefined }}>
+              {roll.rollerName}
+            </span>
+            {roll.byDm && <Crown className="h-3 w-3 shrink-0 text-gold-400" aria-label="DM" />}
+            <span>·</span>
+            <time dateTime={at}>{formatTime(at)}</time>
+            <span className="ml-auto flex items-center">
+              <VisibilityIcon roll={roll} targetName={targetName} />
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <span className={clsx('truncate font-medium text-parchment-100', compact ? 'text-sm' : 'text-[15px]')}>{rollTitle(roll)}</span>
+            <span className="shrink-0 text-xs font-semibold italic text-gold-300">{roll.kind === 'roulette' ? 'Girando…' : 'Lanzando…'}</span>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 function VisibilityIcon({ roll, targetName }: { roll: RollResult; targetName: string | null }) {
   if (roll.visibility === 'secret') {
     return (
@@ -134,12 +185,14 @@ function VisibilityIcon({ roll, targetName }: { roll: RollResult; targetName: st
 }
 
 function RollRow({ roll, at, compact, color, targetName }: { roll: RollResult; at: string; compact: boolean; color: string | null; targetName: string | null }) {
+  const pending = useRollPending(roll.id);
   const breakdown = rollBreakdown(roll);
   const firstSides = roll.dice[0]?.sides ?? 20;
+  if (pending) return <PendingRow roll={roll} at={at} compact={compact} color={color} targetName={targetName} firstSides={firstSides} />;
   return (
     <li
       className={clsx(
-        'relative overflow-hidden rounded-lg border bg-ink-900/70',
+        'relative animate-fade-in overflow-hidden rounded-lg border bg-ink-900/70',
         compact ? 'px-2.5 py-2' : 'px-3 py-2.5',
         roll.crit === 'success' ? 'border-gold-500/60' : roll.crit === 'fail' ? 'border-blood-500/60' : 'border-ink-600/80',
       )}

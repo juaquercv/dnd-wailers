@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../stores/settings';
 import { RollStage } from './RollStage';
 import { useUserLookup, useViewportSize } from './diceHooks';
 import { rollTitle } from './diceUtils';
+import { clearPendingRolls, markRollsPending, markRollsRevealed } from './rollReveal';
 import './dice.css';
 
 const MAX_QUEUE = 12;
@@ -34,24 +35,58 @@ export function DiceOverlay() {
   const [queue, setQueue] = useState<RollResult[]>([]);
   const [settledAt, setSettledAt] = useState<number | null>(null);
   const [leaving, setLeaving] = useState(false);
+  const queueRef = useRef<RollResult[]>([]);
   const seen = useRef(new Set<string>());
   const leavingRef = useRef(false);
   const leaveTimer = useRef<number | null>(null);
 
+  const updateQueue = useCallback((fn: (q: RollResult[]) => RollResult[]) => {
+    const next = fn(queueRef.current);
+    queueRef.current = next;
+    setQueue(next);
+  }, []);
+
   useEffect(() => {
+    queueRef.current = [];
     setQueue([]);
     setSettledAt(null);
     setLeaving(false);
     leavingRef.current = false;
     seen.current = new Set();
+    clearPendingRolls();
   }, [sessionId]);
 
   useEffect(
     () => () => {
       if (leaveTimer.current !== null) window.clearTimeout(leaveTimer.current);
+      clearPendingRolls();
     },
     [],
   );
+
+  /** Remove every queued roll at once (no leave animation) and reveal their results. */
+  const dropAll = useCallback(() => {
+    if (leaveTimer.current !== null) {
+      window.clearTimeout(leaveTimer.current);
+      leaveTimer.current = null;
+    }
+    leavingRef.current = false;
+    markRollsRevealed(queueRef.current.map((r) => r.id));
+    queueRef.current = [];
+    setQueue([]);
+    setSettledAt(null);
+    setLeaving(false);
+  }, []);
+
+  // A hidden tab cannot animate (timers and frames are throttled): stop the show and do not pile
+  // up stale animations; the results stay in the history.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') dropAll();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [dropAll]);
 
   useSessionEvent('roll', (event) => {
     const roll = event.roll;
@@ -60,10 +95,15 @@ export function DiceOverlay() {
     if (currentSession && roll.sessionId && roll.sessionId !== currentSession) return;
     seen.current.add(roll.id);
     if (seen.current.size > 400) seen.current = new Set([...seen.current].slice(-200));
-    setQueue((q) => {
+    if (document.visibilityState === 'hidden') return;
+    markRollsPending([roll.id]);
+    updateQueue((q) => {
       const next = [...q, roll];
       // Too many pending: drop the oldest waiting ones (never the one on screen).
-      if (next.length > MAX_QUEUE) next.splice(1, next.length - MAX_QUEUE);
+      if (next.length > MAX_QUEUE) {
+        const dropped = next.splice(1, next.length - MAX_QUEUE);
+        markRollsRevealed(dropped.map((r) => r.id));
+      }
       return next;
     });
   });
@@ -73,18 +113,21 @@ export function DiceOverlay() {
       if (leavingRef.current) return;
       leavingRef.current = true;
       setLeaving(true);
+      const q = queueRef.current;
+      // Skipping reveals the result right away (history, log…).
+      markRollsRevealed(clearAll ? q.map((r) => r.id) : q.slice(0, 1).map((r) => r.id));
       leaveTimer.current = window.setTimeout(
         () => {
           leaveTimer.current = null;
           leavingRef.current = false;
           setLeaving(false);
           setSettledAt(null);
-          setQueue((q) => (clearAll ? [] : q.slice(1)));
+          updateQueue((cur) => (clearAll ? [] : cur.slice(1)));
         },
         fast || reducedMotion ? 80 : LEAVE_MS,
       );
     },
-    [reducedMotion],
+    [reducedMotion, updateQueue],
   );
 
   const current = queue[0] ?? null;
@@ -146,7 +189,10 @@ export function DiceOverlay() {
           roll={current}
           variant="overlay"
           reducedMotion={reducedMotion}
-          onSettled={() => setSettledAt(performance.now())}
+          onSettled={() => {
+            setSettledAt(performance.now());
+            markRollsRevealed([current.id]);
+          }}
           onCardClick={() => advance(true)}
           targetName={targetName}
           rollerColor={rollerColor}

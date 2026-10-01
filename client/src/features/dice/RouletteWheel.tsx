@@ -26,6 +26,10 @@ const RIM_OUTER = 99;
 const RIM_INNER = 91;
 const WEDGE_R = 90;
 const HUB_R = 17;
+/** Average glyph advance (em) of the bold label font. */
+const GLYPH_EM = 0.58;
+/** Labels shrink down to this size (wheel units) before being truncated with an ellipsis. */
+const MIN_LABEL_FONT = 6.2;
 
 function polar(r: number, deg: number): [number, number] {
   const a = (deg * Math.PI) / 180;
@@ -75,9 +79,13 @@ function layoutLabels(arcs: SegmentArc[]): LabelLayout[] {
     const textOuter = showIcon ? iconR - iconSize * 0.75 : 84;
     const midR = (rInner + textOuter) / 2;
     const chord = 2 * midR * Math.sin(((width / 2) * Math.PI) / 180);
-    const fontSize = Math.min(10.5, chord * 0.52);
     const length = textOuter - rInner;
-    const maxChars = Math.floor(length / (fontSize * 0.56));
+    const labelLength = Math.max(1, Array.from(arc.segment.label.trim()).length);
+    // Largest size the wedge allows; shrink (down to a readable floor) before truncating long labels.
+    const maxFont = Math.min(10.5, chord * 0.52);
+    const fitFont = length / (labelLength * GLYPH_EM);
+    const fontSize = Math.min(maxFont, Math.max(fitFont, Math.min(maxFont, MIN_LABEL_FONT)));
+    const maxChars = Math.floor(length / (fontSize * GLYPH_EM));
     const showText = fontSize >= 3.6 && maxChars >= 1 && arc.segment.label.trim().length > 0;
     // Left half: flip so the text is upright when the wheel is at rest.
     const flip = arc.midDeg > 180;

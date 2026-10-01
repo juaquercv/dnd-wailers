@@ -30,7 +30,7 @@ import { RollerManager } from '../rollers/RollerManager';
 import { DieGlyph } from './DieShapes';
 import { playerLabel, useSessionPlayers, type PlayerOption } from './diceHooks';
 import { combineFormula, FORMULA_EXAMPLES, formulaError, MODE_LABELS, QUICK_DICE } from './diceUtils';
-import { resolveOffered, useOfferedRollers } from './offeredRollers';
+import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
 import { RollHistory } from './RollHistory';
 import { MiniWheel, SegmentStrip } from './RouletteWheel';
 import { Segmented, type SegmentedOption } from './Segmented';
@@ -115,7 +115,7 @@ const MODE_OPTIONS: SegmentedOption<RollMode>[] = [
 
 const VISIBILITY_OPTIONS: SegmentedOption<RollVisibility>[] = [
   { value: 'public', label: 'Pública', icon: <Globe />, title: 'Todos ven la tirada' },
-  { value: 'player', label: 'Un jugador', icon: <UserRound />, title: 'Solo la ve un jugador (y tú)' },
+  { value: 'player', label: 'Jugador', icon: <UserRound />, title: 'Solo la ve un jugador (y tú)' },
   { value: 'secret', label: 'Secreta', icon: <Lock />, title: 'Solo la ves tú' },
 ];
 
@@ -247,9 +247,9 @@ function DiceTray({ busy, onRoll, children, note }: TrayProps) {
         ))}
       </div>
 
-      <div className="flex items-end gap-2">
+      <div className="flex flex-wrap items-end gap-2">
         <Stepper label="Modificador" size="sm" value={modifier} min={-99} max={99} onChange={(v) => setModifier(v)} format={(v) => (v > 0 ? `+${v}` : String(v))} />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[13.5rem] flex-1">
           <span className="label">Modo</span>
           <Segmented value={mode} onChange={setMode} options={MODE_OPTIONS} ariaLabel="Modo de tirada" />
         </div>
@@ -588,15 +588,19 @@ function PendingRequests({ requests, players, rollers }: { requests: RollRequest
 
 function PlayerDice() {
   const view = useSessionStore((s) => s.view);
-  const sessionId = useSessionStore((s) => s.sessionId);
   const rules = useSessionStore((s) => s.campaign?.rules ?? null);
-  const offeredState = useOfferedRollers();
+  const lookupRoller = useRollerLookup();
   const [busy, setBusy] = useState<string | null>(null);
 
   const me = view?.meUserId ?? null;
   const requests = useMemo(() => (view && me ? view.state.rollRequests.filter((r) => r.targetUserId === me) : []), [view, me]);
   const offer = view && me && view.state.turnOffer?.userId === me ? view.state.turnOffer : null;
-  const offered = useMemo(() => (offer ? resolveOffered(offer.rollerIds, offeredState, sessionId) : []), [offer, offeredState, sessionId]);
+  const offered = useMemo(() => (offer ? resolveOffered(offer.rollerIds, lookupRoller) : []), [offer, lookupRoller]);
+  const wantedRollerIds = useMemo(
+    () => [...(offer?.rollerIds ?? []), ...requests.map((r) => r.rollerId).filter((id): id is string => !!id)],
+    [offer, requests],
+  );
+  useEnsureRollers(wantedRollerIds);
 
   const run = async (key: string, fn: () => Promise<unknown>, fallback: string) => {
     if (busy) return;
@@ -623,7 +627,9 @@ function PlayerDice() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-semibold text-parchment-50">{r.label || 'Tirada'}</div>
                   <div className="flex flex-wrap items-center gap-1 text-[10px] text-parchment-400">
-                    <span className="font-mono text-gold-300/90">{r.formula ?? (r.rollerId ? offeredState.known[r.rollerId]?.name ?? 'ruleta' : '—')}</span>
+                    <span className="font-mono text-gold-300/90">
+                      {r.formula ?? (r.rollerId ? lookupRoller(r.rollerId)?.name ?? 'ruleta o dado del DM' : '—')}
+                    </span>
                     {r.mode !== 'normal' && (
                       <Badge size="xs" tone={r.mode === 'advantage' ? 'emerald' : 'blood'}>
                         {MODE_LABELS[r.mode]}
@@ -637,7 +643,16 @@ function PlayerDice() {
                   epic
                   loading={busy === r.id}
                   disabled={busy !== null && busy !== r.id}
-                  onClick={() => void run(r.id, () => emitAck('roll:fulfill', { requestId: r.id }), 'No se pudo lanzar la tirada')}
+                  onClick={() =>
+                    void run(
+                      r.id,
+                      async () => {
+                        const result = await emitAck('roll:fulfill', { requestId: r.id });
+                        if (result.visibility === 'secret') toast.info('Tirada enviada: solo el DM verá el resultado');
+                      },
+                      'No se pudo lanzar la tirada',
+                    )
+                  }
                 >
                   ¡Tirar!
                 </Button>
@@ -658,7 +673,7 @@ function PlayerDice() {
                 block
                 loading={busy === `offer:${o.id}`}
                 disabled={busy !== null && busy !== `offer:${o.id}`}
-                icon={o.roller?.kind === 'roulette' ? <MiniWheel segments={o.roller.segments} size={18} /> : <DieGlyph sides={20} size={18} />}
+                icon={o.roller?.kind === 'roulette' ? <MiniWheel segments={o.roller.segments} size={18} /> : <DieGlyph sides={o.roller?.faces && o.roller.faces.length > 0 ? 6 : 20} size={18} />}
                 onClick={() => void run(`offer:${o.id}`, () => emitAck('roll:roller', { rollerId: o.id }), 'No se pudo lanzar')}
               >
                 {o.name}

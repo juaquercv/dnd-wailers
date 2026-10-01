@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { ArrowDown, ArrowUp, Dices, Disc3, Palette, Plus, RotateCw, Save, Scale, Trash2 } from 'lucide-react';
 import {
@@ -498,7 +499,7 @@ function SegmentRow({
           value={segment.icon ?? ''}
           onChange={(e) => onPatch({ icon: e.target.value ? e.target.value : null })}
           placeholder="🙂"
-          maxLength={8}
+          maxLength={16}
           aria-label="Icono (emoji)"
           title="Icono (emoji opcional)"
           className="input input-sm w-10 shrink-0 px-1 text-center text-base"
@@ -546,46 +547,94 @@ function SegmentRow({
   );
 }
 
-/** Color swatch that opens a small popover with the palette + custom picker. */
+const POPOVER_WIDTH = 256;
+const POPOVER_HEIGHT_ESTIMATE = 190;
+
+/**
+ * Color swatch that opens a small popover (palette + custom picker). The popover is portaled with
+ * fixed positioning so the modal's scroll area never clips it; it flips above when there is no room.
+ */
 function ColorSwatch({ color, onChange }: { color: string; onChange: (c: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number | null; bottom: number | null } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const open = pos !== null;
+
+  const toggle = () => {
+    if (open) {
+      setPos(null);
+      return;
+    }
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const above = rect.bottom + 6 + POPOVER_HEIGHT_ESTIMATE > window.innerHeight && rect.top - 6 - POPOVER_HEIGHT_ESTIMATE > 0;
+    const left = Math.min(Math.max(8, rect.left), window.innerWidth - POPOVER_WIDTH - 8);
+    setPos(above ? { left, top: null, bottom: window.innerHeight - rect.top + 6 } : { left, top: rect.bottom + 6, bottom: null });
+  };
+
   useEffect(() => {
     if (!open) return;
+    const close = () => setPos(null);
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (popoverRef.current?.contains(target) || buttonRef.current?.contains(target)) return;
+      close();
+    };
+    const onScroll = (e: Event) => {
+      if (popoverRef.current && e.target instanceof Node && popoverRef.current.contains(e.target)) return;
+      close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Close only the popover, not the editor modal underneath.
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      buttonRef.current?.focus();
     };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', onKey, true);
+    };
   }, [open]);
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape' && open) {
-      e.stopPropagation();
-      e.preventDefault();
-      setOpen(false);
-    }
-  };
+
   return (
-    <div ref={ref} className="relative shrink-0" onKeyDown={onKeyDown}>
+    <div className="relative shrink-0">
       <button
+        ref={buttonRef}
         type="button"
         aria-label="Color del segmento"
         aria-expanded={open}
+        aria-haspopup="dialog"
         title="Cambiar color"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         className="h-7 w-7 rounded-md border border-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] ring-gold-400/70 transition hover:scale-105 focus-visible:ring-2"
         style={{ backgroundColor: color }}
       />
-      {open && (
-        <div className="absolute left-0 top-full z-60 mt-1 w-64 animate-scale-in rounded-lg border border-ink-500 bg-ink-900 p-2.5 shadow-modal">
-          <ColorPicker value={color} onChange={onChange} size="sm" />
-          <div className="mt-2 flex justify-end">
-            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-              Listo
-            </Button>
-          </div>
-        </div>
-      )}
+      {pos &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            role="dialog"
+            aria-label="Elegir color"
+            className="fixed z-[75] animate-scale-in rounded-lg border border-ink-500 bg-ink-900 p-2.5 shadow-modal"
+            style={{ left: pos.left, top: pos.top ?? undefined, bottom: pos.bottom ?? undefined, width: POPOVER_WIDTH }}
+          >
+            <ColorPicker value={color} onChange={onChange} size="sm" />
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" variant="ghost" onClick={() => setPos(null)}>
+                Listo
+              </Button>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

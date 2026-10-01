@@ -14,7 +14,7 @@ import {
 
 export const KIND_LABELS: Record<RollerKind, string> = { roulette: 'Ruleta', dice: 'Dado' };
 
-export const MAX_SEGMENTS = 60;
+export const MAX_SEGMENTS = 100;
 export const MAX_FACES = 100;
 export const MAX_NAME = 80;
 
