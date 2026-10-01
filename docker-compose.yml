@@ -1,0 +1,46 @@
+# D&D Wailers: docker compose up -d --build
+# Opens on http://<IP de este equipo>:${APP_PORT} (8080 por defecto) for everyone on the LAN.
+name: dnd-wailers
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wailers}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wailers}
+      POSTGRES_DB: ${POSTGRES_DB:-wailers}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  app:
+    build: .
+    image: dnd-wailers-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wailers}:${POSTGRES_PASSWORD:-wailers}@db:5432/${POSTGRES_DB:-wailers}?schema=public
+      USER_RELEASE_SECONDS: ${USER_RELEASE_SECONDS:-60}
+      APP_PORT: ${APP_PORT:-8080}
+    ports:
+      - "0.0.0.0:${APP_PORT:-8080}:3000"
+    volumes:
+      - uploads:/data/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  db-data:
+  uploads:

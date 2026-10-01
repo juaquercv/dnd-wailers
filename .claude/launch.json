@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/dev.mjs",
+        "--db",
+        "postgresql://wailers:wailers@localhost:54329/wailers_dev"
+      ],
+      "port": 5173
+    }
+  ]
+}
