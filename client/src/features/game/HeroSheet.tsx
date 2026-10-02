@@ -47,6 +47,7 @@ import { TextArea } from '../../components/ui/TextArea';
 import { TextInput } from '../../components/ui/TextInput';
 import { formatGold, formatNumber } from '../../lib/format';
 import { emitUiEvent } from '../../lib/uiEvents';
+import { MAX_ACTIONS_PER_TURN, MAX_MOVE_CELLS } from '../library/editor/HeroFields';
 import { send, useDraft } from './panels/actions';
 import { AbilityGrid } from './panels/AbilityGrid';
 import {
@@ -460,7 +461,7 @@ function TurnLimitsFields({ heroId, speed, moveCells, actionsPerTurn }: { heroId
         integer
         size="sm"
         min={0}
-        max={60}
+        max={MAX_MOVE_CELLS}
         label="Movimiento por turno (casillas)"
         placeholder={String(derived)}
         hint={`Vacío = según la velocidad${speed ? ` (${speed} → ${derived} casillas)` : ` (${derived} casillas)`}. 1 casilla = 1,5 m.`}
@@ -469,7 +470,14 @@ function TurnLimitsFields({ heroId, speed, moveCells, actionsPerTurn }: { heroId
       />
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-parchment-200">Acciones de combate por turno</span>
-        <Stepper size="sm" value={actionsDraft} min={0} max={6} onChange={(next) => setActionsDraft(next)} title="Ataques, hechizos u objetos que puede usar en su turno" />
+        <Stepper
+          size="sm"
+          value={actionsDraft}
+          min={0}
+          max={MAX_ACTIONS_PER_TURN}
+          onChange={(next) => setActionsDraft(next)}
+          title="Ataques, hechizos u objetos que puede usar en su turno"
+        />
       </div>
     </div>
   );

@@ -31,9 +31,17 @@ export function hasOverride(overrides: Partial<VisibilitySettings> | undefined, 
   return v !== null || key === 'sceneImageUrl';
 }
 
-export function overrideCount(overrides: Partial<VisibilitySettings> | undefined): number {
-  if (!overrides) return 0;
-  return (Object.keys(overrides) as VisibilityKey[]).filter((k) => hasOverride(overrides, k)).length;
+/**
+ * Personal vision and screen values of a player ("Restablecer" / "Igualar a todos" clear them). The movement
+ * permission is not one of them: it has its own switch and resetting never unlocks a player.
+ */
+export function resettableKeys(overrides: Partial<VisibilitySettings> | undefined): VisibilityKey[] {
+  if (!overrides) return [];
+  return (Object.keys(overrides) as VisibilityKey[]).filter((k) => k !== 'canMoveOwnToken' && hasOverride(overrides, k));
+}
+
+export function resettableCount(overrides: Partial<VisibilitySettings> | undefined): number {
+  return resettableKeys(overrides).length;
 }
 
 export function personalChoice(state: LiveState, userId: string): VisionChoice {
@@ -91,9 +99,17 @@ export function setPlayerVision(userId: string, choice: VisionChoice): Promise<b
   return updatePlayer(userId, { visionMode: choice });
 }
 
-/** Clears every personal setting of the player. */
+/** Clears the player's personal vision and screen values; their movement permission stays as it is. */
 export function resetPlayer(userId: string): Promise<boolean> {
-  return send('vis:setPlayer', { userId, patch: null }, 'No se pudieron quitar sus ajustes personales');
+  const state = fresh();
+  if (!state) return Promise.resolve(false);
+  const current = state.visibility.perPlayer[userId];
+  const keys = resettableKeys(current);
+  if (keys.length === 0) return Promise.resolve(true);
+  if (!hasOverride(current, 'canMoveOwnToken')) {
+    return send('vis:setPlayer', { userId, patch: null }, 'No se pudieron quitar sus ajustes personales');
+  }
+  return updatePlayer(userId, {}, keys);
 }
 
 /** Same value for everyone: the starting value changes and every personal value of that key is dropped. */
@@ -127,11 +143,11 @@ export async function setPersonalForEveryone(patch: Partial<VisibilitySettings>)
   return results.every(Boolean);
 }
 
-/** Clears every personal setting of every player. */
+/** Clears the personal vision and screen values of every player (movement permissions stay as they are). */
 export async function resetEveryone(): Promise<boolean> {
   const state = fresh();
   if (!state) return false;
-  const ids = playerIds(state).filter((id) => overrideCount(state.visibility.perPlayer[id]) > 0);
+  const ids = playerIds(state).filter((id) => resettableCount(state.visibility.perPlayer[id]) > 0);
   const results = await Promise.all(ids.map((id) => resetPlayer(id)));
   return results.every(Boolean);
 }
@@ -151,6 +167,8 @@ export interface PlayerVisionInfo {
   source: 'personal' | 'zone' | 'start' | 'offmap';
   /** Why, e.g. "por la zona «Fábrica abandonada»". */
   reason: string;
+  /** Where the radius comes from in a limited mode: personal value, the hero sheet (it beats the zone radius) or the zone/start value. */
+  radiusSource: 'personal' | 'hero' | 'default';
   /** Extra detail about the radius ("radio personal", "radio propio del héroe"), or null. */
   radiusNote: string | null;
   zoneId: string | null;
@@ -185,12 +203,21 @@ export function playerVisionInfo(state: LiveState, userId: string, zoneName: (zo
     reason = 'Su héroe no está en el mapa';
   }
 
-  let radiusNote: string | null = null;
-  if (isLimitedMode(mode)) {
-    const hero = token?.heroId ? state.heroes[token.heroId] : undefined;
-    if (hasOverride(own, 'visionRadius')) radiusNote = 'radio personal';
-    else if (typeof hero?.data.visionCells === 'number') radiusNote = 'radio propio del héroe';
-  }
+  const heroCells = token?.heroId ? state.heroes[token.heroId]?.data.visionCells : undefined;
+  const radiusSource: PlayerVisionInfo['radiusSource'] = hasOverride(own, 'visionRadius')
+    ? 'personal'
+    : typeof heroCells === 'number' && Number.isFinite(heroCells)
+      ? 'hero'
+      : 'default';
+  const radiusNote = !isLimitedMode(mode)
+    ? null
+    : radiusSource === 'personal'
+      ? 'radio personal'
+      : radiusSource === 'hero'
+        ? source === 'zone'
+          ? 'radio propio del héroe (no usa el de la zona)'
+          : 'radio propio del héroe'
+        : null;
 
   return {
     eff,
@@ -200,6 +227,7 @@ export function playerVisionInfo(state: LiveState, userId: string, zoneName: (zo
     phrase: visionPhrase(mode, radius, cone, eff.sceneImageUrl),
     source,
     reason,
+    radiusSource,
     radiusNote,
     zoneId,
     zoneName: name,

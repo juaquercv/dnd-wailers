@@ -9,7 +9,6 @@ import {
   type LiveState,
   type RuleSystem,
   type SessionPlayer,
-  type VisibilitySettings,
 } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { Button } from '../../components/ui/Button';
@@ -20,8 +19,9 @@ import { Stepper } from '../../components/ui/Stepper';
 import { Toggle } from '../../components/ui/Toggle';
 import { toast } from '../../components/ui/toast';
 import { formatGold, formatNumber } from '../../lib/format';
-import { send, sendAll } from './panels/actions';
-import { CombatBar, UsageChip } from './panels/CombatControls';
+import { setForEveryone } from '../visibility/playerVisibility';
+import { send } from './panels/actions';
+import { CombatBar, hasOwnMoveSetting, setPlayerMove, UsageChip } from './panels/CombatControls';
 import { canEditResources, canSeeInventoryOf, partyMembers, usePanelContext, viewerOwnsHero, type PanelContext } from './panels/context';
 import { HeroChips } from './panels/HeroChips';
 import { HpBar } from './panels/HpBar';
@@ -147,54 +147,48 @@ export function PartyPanel() {
   );
 }
 
-/** null removes the player's own value so they follow the setting for everyone (wire protocol of vis:setPlayer). */
-function setPlayerMove(state: LiveState, player: SessionPlayer, allow: boolean): Promise<boolean> {
-  const sameAsAll = allow === state.visibility.global.canMoveOwnToken;
-  const wire: Record<string, unknown> = { canMoveOwnToken: sameAsAll ? null : allow };
-  return send(
-    'vis:setPlayer',
-    { userId: player.userId, patch: wire as Partial<VisibilitySettings> },
-    { success: allow ? `${player.name} puede mover su ficha` : `${player.name} ya no puede mover su ficha`, error: 'No se pudo cambiar el permiso de movimiento' },
-  );
-}
-
-function hasOwnMoveSetting(state: LiveState, userId: string): boolean {
-  return typeof state.visibility.perPlayer[userId]?.canMoveOwnToken === 'boolean';
-}
-
-/** DM: freedom of movement for everyone, with the players that have their own setting. */
+/**
+ * DM: freedom of movement for everyone. The switch means the same as "Pueden moverse" in the players tab:
+ * it sets the value for everyone and drops personal exceptions; the cards below then add exceptions.
+ */
 function MovementControl({ state, members }: { state: LiveState; members: { player: SessionPlayer; hero: HeroSheetData }[] }) {
   const all = state.visibility.global.canMoveOwnToken;
   const own = members.filter((m) => hasOwnMoveSetting(state, m.player.userId));
-  const equalize = () =>
-    void sendAll(
-      own.map((m) => () => send('vis:setPlayer', { userId: m.player.userId, patch: { canMoveOwnToken: null } as unknown as Partial<VisibilitySettings> })),
-    ).then((ok) => {
-      if (ok) toast.success(all ? 'Ahora todos pueden mover su ficha' : 'Ahora nadie puede mover su ficha');
-    });
+  const [busy, setBusy] = useState(false);
+  const apply = async (allow: boolean) => {
+    setBusy(true);
+    const ok = await setForEveryone('canMoveOwnToken', allow);
+    setBusy(false);
+    if (ok) toast.success(allow ? 'Ahora todos pueden mover su ficha' : 'Movimiento bloqueado para todos');
+  };
+  const exceptions = own.map((m) => `${m.player.name} (${effectiveVisibility(state, m.player.userId).canMoveOwnToken ? 'sí' : 'no'})`).join(', ');
   return (
     <div className={clsx('shrink-0 rounded-xl border px-2.5 py-2', all ? 'border-emerald-600/40 bg-emerald-500/5' : 'border-amber-500/50 bg-amber-500/10')}>
       <Toggle
         size="sm"
         labelFirst
         checked={all}
-        onChange={(v) =>
-          void send('vis:setGlobal', { patch: { canMoveOwnToken: v } }, { success: v ? 'Todos pueden mover su ficha' : 'Movimiento bloqueado para todos', error: 'No se pudo cambiar el movimiento' })
-        }
+        disabled={busy}
+        onChange={(v) => void apply(v)}
         label={
           <span className="flex items-center gap-1.5 font-semibold">
             {all ? <Footprints className="h-3.5 w-3.5 text-emerald-300" aria-hidden /> : <Lock className="h-3.5 w-3.5 text-amber-300" aria-hidden />}
-            {all ? 'Los jugadores pueden mover su ficha' : 'Movimiento de los jugadores bloqueado'}
+            {all ? (own.length > 0 ? 'Los jugadores pueden mover su ficha*' : 'Los jugadores pueden mover su ficha') : own.length > 0 ? 'Movimiento bloqueado*' : 'Movimiento de los jugadores bloqueado'}
           </span>
         }
         description={
           own.length > 0
-            ? `${own.length === 1 ? `${own[0]!.player.name} tiene` : `${own.length} jugadores tienen`} su propio permiso (abajo, en su tarjeta).`
+            ? `*Excepto quien tiene su propio permiso: ${exceptions}. Este interruptor lo aplica a todos por igual.`
             : 'Para todos a la vez. Cambia a un jugador concreto en su tarjeta.'
         }
       />
       {own.length > 0 && (
-        <button type="button" onClick={equalize} className="mt-1 text-[11px] font-semibold text-gold-300 underline-offset-2 hover:text-gold-200 hover:underline">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void apply(all)}
+          className="mt-1 text-[11px] font-semibold text-gold-300 underline-offset-2 hover:text-gold-200 hover:underline disabled:opacity-50"
+        >
           Aplicar a todos por igual
         </button>
       )}
@@ -310,7 +304,7 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
               {mine && <span className="shrink-0 rounded-full bg-gold-500/20 px-1.5 text-[10px] font-bold uppercase tracking-wider text-gold-200">Tú</span>}
               {heroTurn && (
                 <span className="shrink-0 animate-pop rounded-full border border-gold-400/70 bg-gold-500/20 px-1.5 text-[10px] font-bold uppercase tracking-wider text-gold-100">
-                  Su turno
+                  {mine ? 'Tu turno' : 'Su turno'}
                 </span>
               )}
             </div>

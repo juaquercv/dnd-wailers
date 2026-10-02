@@ -18,6 +18,14 @@ sessionBus.on('turnStart', (event) => {
   useOwnTurnMark.setState({ mark: mine ? { round: event.round, index: null, version: view.state.version } : null });
 });
 
+/*
+ * Without the turn order the player only sees currentIndex and round move. The DM's client never sends a
+ * position when adding entries (they go to the end), so within the same round:
+ *  - a higher index means the turn moved on (next / end of turn): the mark is dropped for good, so a later
+ *    shift back to that index cannot revive it;
+ *  - a lower index means earlier entries left the order (a defeated creature removed) while the turn stays
+ *    with the player: the mark follows the new index. The server still validates every move and action.
+ */
 useSessionStore.subscribe((s) => {
   const { mark } = useOwnTurnMark.getState();
   const state = s.view?.state;
@@ -25,6 +33,17 @@ useSessionStore.subscribe((s) => {
     if (mark) useOwnTurnMark.setState({ mark: null });
     return;
   }
-  if (!mark || mark.index !== null || state.version <= mark.version) return;
-  useOwnTurnMark.setState({ mark: { ...mark, index: state.turn.currentIndex } });
+  if (!mark || state.version <= mark.version) return;
+  const { round, currentIndex, order } = state.turn;
+  if (mark.index === null) {
+    useOwnTurnMark.setState({ mark: { ...mark, index: currentIndex } });
+    return;
+  }
+  if (round !== mark.round || currentIndex > mark.index) {
+    useOwnTurnMark.setState({ mark: null });
+    return;
+  }
+  if (currentIndex < mark.index && order.length === 0) {
+    useOwnTurnMark.setState({ mark: { ...mark, index: currentIndex, version: state.version } });
+  }
 });

@@ -1,7 +1,6 @@
 import {
   adaptHeroToRules,
   allowedZoneIds,
-  buildPlayerView,
   decodeExplored,
   effectiveVisibility,
   emptyZoneLiveState,
@@ -9,7 +8,6 @@ import {
   filterZoneForPlayer,
   markExplored,
   newId,
-  visibleAreas,
   visionCellsFor,
   visionConeFor,
   visionTokensFor,
@@ -40,7 +38,16 @@ import { bus } from '../bus';
 import { prisma } from '../db';
 import { refreshSearchText } from '../services/library';
 import { entryInclude, entryToDTO, isPlainObject, logToDTO, sessionInclude, sessionSummaryToDTO, toJson, toNullableJson, type SessionRow } from '../services/serializers';
-import { anonymizedTurnEntry, playerKnowsTurnEntry, zoneVisionMap } from './helpers';
+import {
+  anonymizedTurnEntry,
+  hasLimitedVisionSources,
+  playerKnowsTurnEntry,
+  playerStateFor,
+  playerZoneVisionMode,
+  zoneLimitedAreas,
+  zoneVisionMap,
+} from './helpers';
+import { remindShiftedTurn, turnMark } from './handlers/turns';
 import { SessionPersistence, isMissingRecordError, parseLiveState } from './persistence';
 import {
   defaultLevel,
@@ -391,6 +398,7 @@ export class SessionManager implements SessionManagerApi {
       return;
     }
     const backup = structuredClone(running.state);
+    const turnBefore = turnMark(running.state);
     running.mutateDepth++;
     try {
       fn(running.state);
@@ -418,6 +426,7 @@ export class SessionManager implements SessionManagerApi {
     }
     this.scheduleBroadcast(running, zones);
     this.schedulePersist(running, persistNow);
+    remindShiftedTurn(this, running, turnBefore);
   }
 
   /** Hero tokens and player turn entries mirror the live hero sheets. */
@@ -458,24 +467,29 @@ export class SessionManager implements SessionManagerApi {
     }
     for (const zoneId of zoneIds) {
       const zone = session.campaign.zones.find((z) => z.id === zoneId);
-      parts.push(`${zoneId}@${zone?.updatedAt ?? ''}=${JSON.stringify(state.zoneStates[zoneId]?.doors ?? {})}`);
+      parts.push(
+        `${zoneId}@${zone?.updatedAt ?? ''}:${playerZoneVisionMode(state, userId, zoneId)}=${JSON.stringify(state.zoneStates[zoneId]?.doors ?? {})}`,
+      );
     }
     parts.push(Object.keys(state.explored[userId] ?? {}).sort().join(','));
     return parts.join('|');
   }
 
-  /** Marks what each player currently sees as explored (players in 'explored' or 'vision' mode). */
+  /**
+   * Marks what each player currently sees as explored, in the zones where their vision is limited
+   * (playerZoneVisionMode): lit zones need no memory.
+   */
   private updateExplored(session: RunningSession): void {
     const state = session.state;
     const zones = session.campaign.zones;
     for (const userId of Object.keys(state.players)) {
-      const eff = effectiveVisibility(state, userId);
-      if (eff.visionMode !== 'explored' && eff.visionMode !== 'vision') {
+      if (!hasLimitedVisionSources(state, userId)) {
         session.visionSignatures.delete(userId);
         continue;
       }
+      const eff = effectiveVisibility(state, userId);
       if (session.visionSignatures.get(userId) === this.visionSignature(session, userId, eff)) continue;
-      const areas = visibleAreas(state, zones, userId);
+      const areas = zoneLimitedAreas(state, zones, userId);
       for (const [levelId, polygons] of Object.entries(areas)) {
         const found = session.levelIndex.get(levelId);
         if (!found || polygons.length === 0) continue;
@@ -535,7 +549,7 @@ export class SessionManager implements SessionManagerApi {
       return { role: 'dm', meUserId: userId, state, effective: state.visibility.global };
     }
     if (!state.players[userId]) return null;
-    const playerState = buildPlayerView(state, session.campaign.zones, userId);
+    const playerState = playerStateFor(state, session.campaign.zones, userId);
     // Creatures the player does not see on the map (out of sight, another zone, under fog) stay anonymous.
     playerState.turn.order = playerState.turn.order.map((entry) =>
       playerKnowsTurnEntry(session, userId, entry) ? entry : anonymizedTurnEntry(entry),

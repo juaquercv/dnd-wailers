@@ -1,21 +1,48 @@
-import { normalizeText, type SoundType } from '@wailers/shared';
+import { AUDIO_MIME_TYPES, normalizeText, type SoundType } from '@wailers/shared';
 
-/** Canonical mime per accepted audio extension (what the server stores). */
+/** Canonical mime per accepted audio extension (mirrors the server upload allow-list). */
 const EXT_MIME: Record<string, string> = {
   mp3: 'audio/mpeg',
   ogg: 'audio/ogg',
   oga: 'audio/ogg',
+  opus: 'audio/ogg',
   wav: 'audio/wav',
   m4a: 'audio/mp4',
   webm: 'audio/webm',
+  weba: 'audio/webm',
   flac: 'audio/flac',
   aac: 'audio/aac',
 };
 
-/** `accept` attribute for audio pickers. */
-export const AUDIO_ACCEPT = `audio/*,${Object.keys(EXT_MIME)
-  .map((e) => `.${e}`)
-  .join(',')}`;
+/** Non-standard audio mime names the server maps to an accepted type. */
+const MIME_ALIASES: Record<string, string> = {
+  'audio/mp3': 'audio/mpeg',
+  'audio/x-mp3': 'audio/mpeg',
+  'audio/x-mpeg': 'audio/mpeg',
+  'audio/mpeg3': 'audio/mpeg',
+  'audio/x-mpeg-3': 'audio/mpeg',
+  'audio/mpg': 'audio/mpeg',
+  'audio/vnd.wave': 'audio/wav',
+  'audio/x-pn-wav': 'audio/wav',
+  'audio/x-m4a': 'audio/mp4',
+  'audio/m4a': 'audio/mp4',
+  'audio/x-mp4': 'audio/mp4',
+  'audio/mp4a-latm': 'audio/mp4',
+  'audio/x-aac': 'audio/aac',
+  'audio/aacp': 'audio/aac',
+  'audio/x-hx-aac-adts': 'audio/aac',
+  'audio/x-flac': 'audio/flac',
+  'audio/opus': 'audio/ogg',
+  'audio/x-ogg': 'audio/ogg',
+  'audio/vorbis': 'audio/ogg',
+  'audio/x-webm': 'audio/webm',
+};
+
+/** `accept` attribute for audio pickers: only the formats the server stores. */
+export const AUDIO_ACCEPT = [...Object.keys(EXT_MIME).map((e) => `.${e}`), ...AUDIO_MIME_TYPES, ...Object.keys(MIME_ALIASES)].join(',');
+
+/** Reported mime types the server accepts for audio as-is (browsers label .webm as video/webm, .m4a as audio/x-m4a…). */
+export const AUDIO_UPLOAD_MIME_TYPES = [...AUDIO_MIME_TYPES, ...Object.keys(MIME_ALIASES), 'video/webm', 'video/ogg', 'application/ogg'];
 
 export const AUDIO_FORMATS_LABEL = 'MP3, OGG, WAV, M4A, WEBM o FLAC';
 
@@ -32,16 +59,19 @@ function extOf(name: string): string {
 }
 
 /**
- * Mime type the server accepts for a picked file, or null when it is not audio. Browsers report .webm as
- * video/webm, .m4a as audio/x-m4a or nothing at all, so the extension wins when it is known.
+ * Mime type the server accepts for a picked file, or null when the format is not supported (e.g. .wma, .mid,
+ * .aiff). Browsers report .webm as video/webm, .m4a as audio/x-m4a or nothing at all, so the extension wins
+ * when it is known.
  */
 export function audioMimeFor(name: string, reportedType: string): string | null {
   const byExt = EXT_MIME[extOf(name)];
   if (byExt) return byExt;
-  return reportedType.toLowerCase().startsWith('audio/') ? reportedType : null;
+  const lowered = reportedType.split(';')[0]!.trim().toLowerCase();
+  const mime = MIME_ALIASES[lowered] ?? lowered;
+  return AUDIO_MIME_TYPES.includes(mime) ? mime : null;
 }
 
-/** The same file with a server-friendly mime type, or null when it is not an audio file. */
+/** The same file with a server-friendly mime type, or null when it is not a supported audio file. */
 export function normalizeAudioFile(file: File): File | null {
   const mime = audioMimeFor(file.name, file.type);
   if (!mime) return null;

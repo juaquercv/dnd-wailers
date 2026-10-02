@@ -1,5 +1,6 @@
 import {
   describeRoll,
+  parseFormula,
   type DiceRollOutcome,
   type RollMode,
   type RollResult,
@@ -99,9 +100,29 @@ export function errorMessage(err: unknown, fallback = 'Algo salió mal'): string
   return fallback;
 }
 
-/** Default heading when a roll has no label. */
+const AUTO_LABEL = /^tirada de\s+(.+)$/i;
+
+/**
+ * Label worth showing: the default ones built from the formula ("Tirada de 2d20+1d4+4") only repeat
+ * the formula chip, so they count as no label.
+ */
+export function meaningfulRollLabel(label: string | null | undefined): string {
+  const text = (label ?? '').trim();
+  const auto = AUTO_LABEL.exec(text);
+  if (auto) {
+    try {
+      if (parseFormula(auto[1]!).terms.length > 0) return '';
+    } catch {
+      // Not a formula: a real label that happens to start with "Tirada de".
+    }
+  }
+  return text;
+}
+
+/** Heading of a roll; a generic one when it has no meaningful label. */
 export function rollTitle(roll: RollResult): string {
-  if (roll.label.trim()) return roll.label.trim();
+  const label = meaningfulRollLabel(roll.label);
+  if (label) return label;
   if (roll.kind === 'roulette') return 'Ruleta';
   if (roll.kind === 'custom_die') return 'Dado especial';
   return 'Tirada de dados';

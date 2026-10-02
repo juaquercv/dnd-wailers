@@ -27,6 +27,7 @@ import { TextInput } from '../../../components/ui/TextInput';
 import { Toggle } from '../../../components/ui/Toggle';
 import { formatDuration, formatNumber } from '../../../lib/format';
 import { useCategoriesStore } from '../../../stores/categories';
+import { AUDIO_ACCEPT, AUDIO_FORMATS_LABEL, AUDIO_UPLOAD_MIME_TYPES } from '../../audio/audioFiles';
 import { SectionTitle } from '../common';
 import { DAMAGE_TYPE_SUGGESTIONS, SOUND_TYPE_ICONS, SPELL_ANIMATION_COLORS } from '../meta';
 import { SoundPlayer } from '../SoundPlayer';
@@ -223,9 +224,10 @@ export function SoundAudioTab({ draft, onChange, errors }: { draft: SoundDraft; 
     <div className="flex flex-col gap-5">
       <FileUpload
         label="Archivo de audio"
-        accept="audio/*"
+        accept={AUDIO_ACCEPT}
+        mimeTypes={AUDIO_UPLOAD_MIME_TYPES}
         value={d.url || null}
-        hint="MP3, OGG, WAV, WEBM, M4A o FLAC"
+        hint={AUDIO_FORMATS_LABEL}
         onChange={(url, info) => {
           const next: SoundDraft = { ...draft, data: { ...d, url: url ?? '', durationSec: null } };
           if (url && info && !draft.name.trim()) next.name = stripExtension(info.originalName);

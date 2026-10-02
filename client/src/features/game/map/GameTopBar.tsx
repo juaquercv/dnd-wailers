@@ -16,6 +16,7 @@ import { markSelfExit } from '../../lobby/lobbyUi';
 import { ZoneNavigator } from '../ZoneNavigator';
 import { currencyNoun, joinWords } from '../panels/currencyText';
 import { send } from './actions';
+import { useGameUi } from './gameUi';
 
 export interface GameTopBarProps {
   onQuickSearch: () => void;
@@ -44,7 +45,12 @@ function ConnectionDot() {
 }
 
 /** Top bar of the game table: session title, zone navigator, DM tools and connection state. */
-export function GameTopBar({ onQuickSearch, onShowToPlayers, onOverview }: GameTopBarProps) {
+export function GameTopBar({ onQuickSearch: openPalette, onShowToPlayers, onOverview }: GameTopBarProps) {
+  // The search bar places things at the view center: a point picked before with "Añadir enemigo aquí…" no longer applies.
+  const onQuickSearch = () => {
+    useGameUi.getState().setSpawnAt(null);
+    openPalette();
+  };
   const navigate = useNavigate();
   const confirm = useConfirm();
   const menu = useContextMenu();

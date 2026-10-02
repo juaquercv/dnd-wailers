@@ -398,3 +398,51 @@ export function spellFxAt(animation: SpellAnimation, at: Point & { zoneId: strin
   };
   return send('fx:trigger', { fx }, 'No se pudo lanzar la animación');
 }
+
+/**
+ * Moves tokens next to a point, spreading them on free cells around it: tokens already on that level use
+ * one `token:moveMany`, the others travel there with `token:transfer`. Resolves the number of tokens moved.
+ */
+export async function moveTokensNear(tokens: Token[], target: Point & { zoneId: string; levelId: string }): Promise<number> {
+  if (tokens.length === 0) return 0;
+  const s = useSessionStore.getState();
+  const zone = s.zonesById[target.zoneId] ?? null;
+  const level = findLevel(zone, target.levelId);
+  if (!zone || !level || level.id !== target.levelId) return 0;
+  const moving = new Set(tokens.map((t) => t.id));
+  const state = s.view?.state;
+  const occupied = state
+    ? Object.values(state.tokens)
+        .filter((t) => t.zoneId === zone.id && t.levelId === level.id && !moving.has(t.id))
+        .map((t) => ({ x: t.x, y: t.y }))
+    : [];
+  const spots = findFreeSpots(target, tokens.length, level, occupied);
+  const here: { tokenId: string; x: number; y: number }[] = [];
+  const away: { tokenIds: string[]; zoneId: string; levelId: string; x: number; y: number }[] = [];
+  tokens.forEach((t, i) => {
+    const p = spots[i] ?? target;
+    if (t.zoneId === zone.id && t.levelId === level.id) here.push({ tokenId: t.id, x: p.x, y: p.y });
+    else away.push({ tokenIds: [t.id], zoneId: zone.id, levelId: level.id, x: p.x, y: p.y });
+  });
+  let ok = 0;
+  if (here.length > 0 && (await send('token:moveMany', { moves: here }, 'No se pudieron mover las fichas'))) ok += here.length;
+  if (away.length > 0) ok += await sendMany('token:transfer', away, 'No se pudo traer la ficha');
+  return ok;
+}
+
+/** DM: adjust what a hero has spent this turn (movement / combat actions). */
+export function adjustUsage(
+  heroId: string,
+  patch: { reset?: boolean; bonusMoveDelta?: number; bonusActionsDelta?: number; movedDelta?: number; actionsDelta?: number },
+  success?: string,
+): Promise<boolean> {
+  return send('usage:adjust', { heroId, ...patch }, 'No se pudo ajustar el turno').then((ok) => {
+    if (ok && success) toast.success(success);
+    return ok;
+  });
+}
+
+/** Turn entry of a token (its own entry, or its hero's). */
+export function turnEntryOf(state: LiveState, token: Token): TurnEntry | null {
+  return state.turn.order.find((e) => e.tokenId === token.id || (token.heroId !== null && e.heroId === token.heroId)) ?? null;
+}

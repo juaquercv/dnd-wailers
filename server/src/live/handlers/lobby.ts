@@ -4,7 +4,7 @@ import { entryInclude, entryToDTO } from '../../services/serializers';
 import { heroSheetFromEntry } from '../runtime';
 import type { SessionManager } from '../SessionManager';
 import { HandlerError, type AppSocket, type HandlerCtx, type LiveSession, type MutateOptions } from '../types';
-import { announceTurnStart, landAfterRemoval, removeTurnEntries, turnPointer, type TurnLanding } from './turns';
+import { announceTurnStart, joinTurnOrder, landAfterRemoval, removeTurnEntries, turnPointer, type TurnLanding } from './turns';
 
 /*
  * Lobby: hero selection (also for late joiners while playing), ready flag and kicking players.
@@ -96,6 +96,12 @@ async function selectHero(manager: SessionManager, ctx: HandlerCtx, heroIdRaw: u
   if (!session.state.players[userId]) throw new HandlerError('Ya no formas parte de esta partida');
   if (takenBy(session.state)) throw new HandlerError('Otro jugador ya ha elegido ese héroe');
 
+  const opts: MutateOptions = {
+    log: { type: 'system', text: `«${playerName}» ha elegido a «${sheet.name}»` },
+    heroes: adapted ? [heroId] : [],
+    zones: true,
+  };
+  const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     session,
     (state) => {
@@ -123,14 +129,15 @@ async function selectHero(manager: SessionManager, ctx: HandlerCtx, heroIdRaw: u
         if (oldToken) near = { zoneId: oldToken.zoneId, levelId: oldToken.levelId, x: oldToken.x, y: oldToken.y };
         releaseHeroIfUnused(manager, session, state, previous);
       }
-      if (state.status === 'playing') manager.placeHeroToken(session, state, userId, near);
+      if (state.status === 'playing') {
+        manager.placeHeroToken(session, state, userId, near);
+        // A player who joins (or picks a hero) mid-game takes part in the turns, also in combat.
+        out.landing = joinTurnOrder(session, state, opts, userId, previous !== null);
+      }
     },
-    {
-      log: { type: 'system', text: `«${playerName}» ha elegido a «${sheet.name}»` },
-      heroes: adapted ? [heroId] : [],
-      zones: true,
-    },
+    opts,
   );
+  if (out.landing) announceTurnStart(manager, session, out.landing);
   manager.broadcastSessionsList();
   return null;
 }

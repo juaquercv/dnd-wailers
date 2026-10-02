@@ -1,7 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import clsx from 'clsx';
 import type Konva from 'konva';
-import { DoorOpen, Eye, EyeOff, LocateFixed, Map as MapIcon, Maximize, Move, Radar, Shield, Users } from 'lucide-react';
+import {
+  DoorClosed,
+  DoorOpen,
+  Eye,
+  EyeOff,
+  Footprints,
+  Hand,
+  LocateFixed,
+  Map as MapIcon,
+  Maximize,
+  Move,
+  Radar,
+  Shield,
+  Skull,
+  Users,
+} from 'lucide-react';
 import {
   allowedZoneIds,
   decodeExplored,
@@ -10,10 +25,13 @@ import {
   isOwnHeroToken,
   LAYER_IDS,
   markExplored,
+  moveCost,
   pointInAnyPolygon,
   pointInPolygon,
+  sessionOptionsOf,
   tokenHp,
   visibleAreas,
+  zoneVisionFor,
   type LayerId,
   type LightingPreset,
   type LiveState,
@@ -59,19 +77,26 @@ import {
 import { useDisplayState, useSessionStore } from '../../stores/session';
 import { MapFxLayer } from '../fx/MapFxLayer';
 import { api } from '../../api/http';
+import { useHeroEconomy } from './hud/economy';
+import { nearbyThings } from './hud/nearby';
 import { useTokenContextMenu } from './TokenContextMenu';
-import { goToZone, request, send, sendMany, spellFxAt, transferTokens } from './map/actions';
+import { goToZone, moveTokensNear, request, send, sendMany, spellFxAt, transferTokens } from './map/actions';
 import { gameCamera, useGameCamera } from './map/camera';
 import { unrevealedFogPolygons } from './map/fog';
-import { facingTowards, findFreeSpots, placeToken, pointInTransition, tokenAtPoint } from './map/geometry';
+import { distanceToPolyline, facingTowards, findFreeSpots, placeToken, pointInTransition, tokenAtPoint, tokenRadius } from './map/geometry';
 import { useGameUi } from './map/gameUi';
 import { MarqueeRect, SPELL_COLORS, StageTapBinder, TargetReticle, type MarqueeBox } from './map/Indicators';
+import { cleanupStaleDrags, installKonvaGuards } from './map/konvaGuards';
 import { MapToolbar } from './map/MapToolbar';
+import { DragRuler, PlayerDoorHandles, ReachArea, type PlayerDoor } from './map/MoveOverlays';
+import { freeMoveBlock, MOVE_LOCKED_REASON } from './map/ownEconomy';
 import { buildQuickActions } from './map/quickActions';
 import { TokensGroup, type TokenHandlers, type TokenPointerEvent, type TokenView } from './map/TokensGroup';
 import { TransitionHotspots, type TransitionPointerEvent } from './map/TransitionHotspots';
 import { useRemoteDrags } from './map/useRemoteDrags';
 import { findLevel, levelLabel } from './map/zoneTree';
+
+installKonvaGuards();
 
 const DM_LAYERS: LayerId[] = [...LAYER_IDS];
 const PLAYER_LAYERS: LayerId[] = LAYER_IDS.filter((l) => l !== 'notes');
@@ -80,6 +105,11 @@ const ZERO_OFFSET = { x: 0, y: 0 };
 const EMPTY_ZONE_STATE: ZoneLiveState = emptyZoneLiveState();
 const DRAG_EMIT_MS = 66;
 const MARQUEE_THRESHOLD_PX = 5;
+const DRAG_HINT_PX = 8;
+const DOOR_PICK_CELLS = 0.75;
+/** Same values as MapStage: a right drag longer than this pans, and no menu opens right after it. */
+const RIGHT_PAN_PX = 5;
+const RIGHT_PAN_MENU_SUPPRESS_MS = 300;
 
 /** The DM sees the lighting one step softer unless "real lighting" is enabled. */
 const DM_LIGHTING: Record<LightingPreset, LightingPreset> = { day: 'day', dusk: 'day', night: 'dusk', dark: 'dusk' };
@@ -105,6 +135,14 @@ function clientPoint(e: TransitionPointerEvent | TokenPointerEvent): { x: number
 
 function boxFrom(a: Point, b: Point): MarqueeBox {
   return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) };
+}
+
+function cellsLabel(n: number): string {
+  return `${n} ${n === 1 ? 'casilla' : 'casillas'}`;
+}
+
+function reportMapError(err: unknown): void {
+  console.error('[mapa] Error en una interacción del mapa:', err);
 }
 
 /** Live map of the game screen: the zone/level the user is looking at, with tokens and every interaction. */
@@ -218,12 +256,27 @@ interface MarqueeGesture {
   active: boolean;
 }
 
+/** Token being dragged on this client: where it was and where the pointer has it now. */
+interface LocalDrag {
+  tokenId: string;
+  from: Point;
+  to: Point;
+}
+
+/** Press on the own hero that cannot move: a drag attempt shows why. */
+interface BlockedPress {
+  x: number;
+  y: number;
+  reason: string;
+}
+
 function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, level, zones }: LiveMapProps) {
   const asPlayer = !isDm || isPreview;
   const dmView = isDm && !isPreview;
   const stageRef = useRef<MapStageHandle>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectedIds = useSessionStore((s) => s.selectedTokenIds);
+  const zonesById = useSessionStore((s) => s.zonesById);
   const pingMode = useGameUi((s) => s.pingMode);
   const cast = useGameUi((s) => s.cast);
   const realLighting = useGameUi((s) => s.realLighting);
@@ -235,6 +288,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   const zoneState = state.zoneStates[zone.id] ?? EMPTY_ZONE_STATE;
   const doorStates = zoneState.doors;
   const revealed = zoneState.revealedFog;
+  const levelSize = { width: Math.max(1, level.background.width), height: Math.max(1, level.background.height) };
 
   // --- camera store ------------------------------------------------------------
   useEffect(() => {
@@ -275,6 +329,24 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   );
   const ownToken = isDm ? null : followToken;
 
+  // --- turn economy (players) -------------------------------------------------------
+  const myHeroId = isDm ? null : state.players[meUserId]?.heroId ?? ownToken?.heroId ?? null;
+  const economy = useHeroEconomy(myHeroId);
+  /** Why the player's hero cannot move right now (null = it can). */
+  const moveBlock = isDm ? null : !effective.canMoveOwnToken ? MOVE_LOCKED_REASON : economy?.moveBlock ?? null;
+  /** Doors, stairs and zone edges cost no movement: only the DM's permission and, in combat, the own turn count. */
+  const travelBlock = isDm ? null : freeMoveBlock(effective.canMoveOwnToken, economy);
+  /** Cells the player's hero may still move this turn (null = no limit right now). */
+  const moveLimit = !isDm && economy && economy.limited && economy.myTurn ? economy.move.left : null;
+
+  // --- free interactions next to the player's hero (pick up items, doors) -------------
+  const nearby = useMemo(() => (!isDm && ownToken ? nearbyThings(state, zonesById, ownToken) : []), [isDm, ownToken, state, zonesById]);
+  const pickableIds = useMemo(() => new Set(nearby.flatMap((n) => (n.kind === 'item' ? [n.token.id] : []))), [nearby]);
+  const playerDoors = useMemo<PlayerDoor[]>(
+    () => nearby.flatMap((n) => (n.kind === 'door' && n.zoneId === zone.id ? [{ wall: n.wall, open: n.open }] : [])),
+    [nearby, zone.id],
+  );
+
   // HP objects are reused while unchanged so memoized sprites do not re-render.
   const hpCache = useRef(new Map<string, TokenHpInfo>());
   const hpById = useMemo(() => {
@@ -291,12 +363,16 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   const currentEntry = state.turn.order[state.turn.currentIndex] ?? null;
   const remoteDrags = useRemoteDrags(meUserId, state.tokens);
   const [groupDrag, setGroupDrag] = useState<{ leaderId: string; dx: number; dy: number } | null>(null);
+  const [localDrag, setLocalDrag] = useState<LocalDrag | null>(null);
+  const [revisions, setRevisions] = useState<Record<string, number>>({});
   const [dropHoverId, setDropHoverId] = useState<string | null>(null);
   const dropHoverRef = useRef<string | null>(null);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const coneMatters = dmView
-    ? state.visibility.global.visionCone < 360 || Object.values(state.visibility.perPlayer).some((p) => (p.visionCone ?? 360) < 360)
+    ? state.visibility.global.visionCone < 360 ||
+      (zoneVisionFor(state, zone.id)?.cone ?? 360) < 360 ||
+      Object.values(state.visibility.perPlayer).some((p) => (p.visionCone ?? 360) < 360)
     : effective.visionCone < 360;
 
   const hpMode = (t: Token): HpBarMode => {
@@ -306,13 +382,21 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     return effective.enemyHp === 'exact' ? 'exact' : effective.enemyHp === 'bar' ? 'bar' : 'none';
   };
 
+  const isOwnHero = (t: Token): boolean => t.kind === 'hero' && isOwnHeroToken(state, t, meUserId);
+
   const canDrag = (t: Token): boolean => {
     if (modeActive) return false;
     if (isDm) return true;
-    return t.kind === 'hero' && effective.canMoveOwnToken && isOwnHeroToken(state, t, meUserId);
+    return isOwnHero(t) && moveBlock === null;
   };
 
-  const views: TokenView[] = levelTokens.map((t) => {
+  // Selected tokens are drawn (and hit-tested) above the others of their kind: never hidden under a neighbor.
+  const ordered = useMemo(() => {
+    if (selectedSet.size === 0) return levelTokens;
+    return [...levelTokens].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || Number(selectedSet.has(a.id)) - Number(selectedSet.has(b.id)));
+  }, [levelTokens, selectedSet]);
+
+  const views: TokenView[] = ordered.map((t) => {
     let dragPreview = remoteDrags[t.id] ?? null;
     if (groupDrag && groupDrag.leaderId !== t.id && selectedSet.has(t.id)) {
       dragPreview = { x: t.x + groupDrag.dx, y: t.y + groupDrag.dy };
@@ -328,6 +412,8 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       isCurrentTurn,
       dragPreview,
       highlight: t.id === dropHoverId ? MAP_COLORS.emerald400 : t.id === flashTokenId ? MAP_COLORS.gold300 : null,
+      revision: revisions[t.id] ?? 0,
+      pickable: pickableIds.has(t.id),
     };
   });
 
@@ -342,20 +428,21 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   const baseLighting = zoneState.lighting ?? zone.lighting;
   const lighting = dmView && !realLighting ? DM_LIGHTING[baseLighting] : baseLighting;
 
-  const lightsKey = levelTokens
-    .filter((t) => t.light && t.light.radius > 0)
-    .map((t) => `${Math.round(t.x)},${Math.round(t.y)},${t.light!.radius},${t.light!.color}`)
-    .join('|');
-  const tokenLights = useMemo<TokenLight[]>(
-    () =>
-      lightsKey
-        ? lightsKey.split('|').map((part) => {
-            const [x, y, radius, color] = part.split(',');
-            return { x: Number(x), y: Number(y), radius: Number(radius), color: color ?? '#ffb347' };
-          })
-        : [],
-    [lightsKey],
+  const lightsKey = JSON.stringify(
+    levelTokens
+      .filter((t) => t.light && t.light.radius > 0)
+      .map((t) => [Math.round(t.x), Math.round(t.y), t.light!.radius, t.light!.color]),
   );
+  const tokenLights = useMemo<TokenLight[]>(() => {
+    const parsed: unknown = JSON.parse(lightsKey);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((row: unknown) => {
+      if (!Array.isArray(row)) return [];
+      const [x, y, radius, color] = row as unknown[];
+      if (typeof x !== 'number' || typeof y !== 'number' || typeof radius !== 'number' || !Number.isFinite(radius) || radius <= 0) return [];
+      return [{ x, y, radius, color: typeof color === 'string' && color.trim() ? color : '#ffb347' }];
+    });
+  }, [lightsKey]);
 
   const limitedVision = asPlayer && (effective.visionMode === 'vision' || effective.visionMode === 'explored');
   const visionPolygons = useMemo(() => {
@@ -389,16 +476,52 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   );
 
   const activeTransition =
-    !isDm && ownToken && effective.canMoveOwnToken ? transitions.find((tr) => tr.target && pointInTransition(ownToken, tr)) ?? null : null;
+    !isDm && ownToken && travelBlock === null ? transitions.find((tr) => tr.target && pointInTransition(ownToken, tr)) ?? null : null;
 
-  // --- marquee / reticle -------------------------------------------------------------------
+  // --- marquee / reticle / drag frames ------------------------------------------------------
   const marqueeRef = useRef<MarqueeGesture | null>(null);
   const [marquee, setMarquee] = useState<MarqueeBox | null>(null);
   const [reticle, setReticle] = useState<Point | null>(null);
   const frameRef = useRef<number | null>(null);
-  const pendingFrame = useRef<{ marquee?: MarqueeBox | null; reticle?: Point | null; group?: { leaderId: string; dx: number; dy: number } | null }>({});
+  const pendingFrame = useRef<{
+    marquee?: MarqueeBox | null;
+    reticle?: Point | null;
+    group?: { leaderId: string; dx: number; dy: number } | null;
+    drag?: LocalDrag | null;
+  }>({});
   const suppressClickRef = useRef(false);
   const lastDragEmit = useRef(0);
+  const dragRef = useRef<{ tokenId: string; from: Point } | null>(null);
+  const cancelDragRef = useRef<string | null>(null);
+  const blockedPressRef = useRef<BlockedPress | null>(null);
+  const rightPanRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const lastRightPanRef = useRef(0);
+
+  // Right-button gestures (MapStage pans with them): remember when one ended as a pan.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (e.button === 2) rightPanRef.current = { x: e.clientX, y: e.clientY, moved: false };
+    };
+    const onMove = (e: MouseEvent) => {
+      const g = rightPanRef.current;
+      if (!g || g.moved) return;
+      if ((e.buttons & 2) === 0) rightPanRef.current = null;
+      else if (Math.hypot(e.clientX - g.x, e.clientY - g.y) >= RIGHT_PAN_PX) g.moved = true;
+    };
+    const onUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      if (rightPanRef.current?.moved) lastRightPanRef.current = performance.now();
+      rightPanRef.current = null;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    window.addEventListener('mousemove', onMove, true);
+    window.addEventListener('mouseup', onUp, true);
+    return () => {
+      window.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('mousemove', onMove, true);
+      window.removeEventListener('mouseup', onUp, true);
+    };
+  }, []);
 
   const scheduleFrame = (patch: typeof pendingFrame.current) => {
     Object.assign(pendingFrame.current, patch);
@@ -410,12 +533,14 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       if ('marquee' in p) setMarquee(p.marquee ?? null);
       if ('reticle' in p) setReticle(p.reticle ?? null);
       if ('group' in p) setGroupDrag(p.group ?? null);
+      if ('drag' in p) setLocalDrag(p.drag ?? null);
     });
   };
 
   useEffect(
     () => () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      useGameUi.getState().setTokenDragging(false);
     },
     [],
   );
@@ -423,6 +548,35 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   useEffect(() => {
     if (!cast) setReticle(null);
   }, [cast]);
+
+  /** Snap a token sprite back to its real position right away (refused or cancelled move). */
+  const snapBack = (tokenId: string) => setRevisions((r) => ({ ...r, [tokenId]: (r[tokenId] ?? 0) + 1 }));
+
+  const endLocalDrag = () => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    pendingFrame.current = {};
+    dragRef.current = null;
+    setGroupDrag(null);
+    setLocalDrag(null);
+    useGameUi.getState().setTokenDragging(false);
+  };
+
+  // Esc while dragging a token: drop it back where it was.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !dragRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      cancelDragRef.current = dragRef.current.tokenId;
+      cleanupStaleDrags(true);
+      endLocalDrag();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
 
   // --- actions -------------------------------------------------------------------------------
   const pingAt = (p: Point) => {
@@ -459,23 +613,64 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     return facingTowards(t, dest);
   };
 
-  const finishDrag = (tokenId: string, x: number, y: number) => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-    pendingFrame.current = {};
-    setGroupDrag(null);
+  const pickUp = (t: Token) => {
+    void send('token:pickup', { tokenId: t.id }, 'No se pudo recoger el objeto').then((ok) => ok && toast.success(`Recoges «${t.name}»`));
+  };
+
+  const useDoor = (wall: Wall) => {
+    void send('door:use', { zoneId: zone.id, wallId: wall.id }, 'No se pudo usar la puerta');
+  };
+
+  const toggleDoor = (wall: Wall) => {
+    const open = doorStates[wall.id] ?? wall.open;
+    void send('door:toggle', { zoneId: zone.id, wallId: wall.id, open: !open }, 'No se pudo cambiar la puerta');
+  };
+
+  /** Player: move the own hero to a point, respecting the turn economy. */
+  const moveOwnTo = (t: Token, dest: Point) => {
+    const facing = autoFacing(t, dest);
+    void send('token:move', facing !== null ? { tokenId: t.id, x: dest.x, y: dest.y, facing } : { tokenId: t.id, x: dest.x, y: dest.y }, 'No puedes moverte ahí').then(
+      (ok) => {
+        if (!ok) snapBack(t.id);
+      },
+    );
+  };
+
+  const finishDragUnsafe = (tokenId: string, x: number, y: number) => {
     const t = state.tokens[tokenId];
     if (!t) return;
-    const dest = placeToken({ x, y }, t.cells, level);
-    const moves: { tokenId: string; x: number; y: number; facing?: number }[] = [];
-    const facing = autoFacing(t, dest);
-    if (Math.hypot(dest.x - t.x, dest.y - t.y) >= 0.5 || facing !== null) {
-      moves.push(facing !== null ? { tokenId, x: dest.x, y: dest.y, facing } : { tokenId, x: dest.x, y: dest.y });
+    if (cancelDragRef.current === tokenId) {
+      cancelDragRef.current = null;
+      snapBack(tokenId);
+      return;
     }
+    const dest = placeToken({ x, y }, t.cells, level);
+    const facing = autoFacing(t, dest);
+    const moved = Math.hypot(dest.x - t.x, dest.y - t.y) >= 0.5;
+    if (!isDm) {
+      if (!moved && facing === null) return;
+      if (moveBlock !== null) {
+        toast.info(moveBlock);
+        snapBack(tokenId);
+        return;
+      }
+      const cost = moveCost(t, dest, level.grid);
+      if (moveLimit !== null && cost > moveLimit) {
+        toast.warning(
+          moveLimit === 0
+            ? 'Ya no te queda movimiento este turno'
+            : `Demasiado lejos: te ${moveLimit === 1 ? 'queda 1 casilla' : `quedan ${moveLimit} casillas`} y eso son ${cellsLabel(cost)}`,
+        );
+        snapBack(tokenId);
+        return;
+      }
+      moveOwnTo(t, dest);
+      return;
+    }
+    const moves: { tokenId: string; x: number; y: number; facing?: number }[] = [];
+    if (moved || facing !== null) moves.push(facing !== null ? { tokenId, x: dest.x, y: dest.y, facing } : { tokenId, x: dest.x, y: dest.y });
     const s = useSessionStore.getState();
-    if (isDm && s.selectedTokenIds.length > 1 && s.selectedTokenIds.includes(tokenId)) {
+    if (s.selectedTokenIds.length > 1 && s.selectedTokenIds.includes(tokenId)) {
       const dx = x - t.x;
       const dy = y - t.y;
       for (const id of s.selectedTokenIds) {
@@ -486,7 +681,36 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
         if (Math.hypot(p.x - f.x, p.y - f.y) >= 0.5) moves.push({ tokenId: id, x: p.x, y: p.y });
       }
     }
-    if (moves.length > 0) void sendMany('token:move', moves, 'No se pudo mover la ficha');
+    if (moves.length > 0) {
+      void sendMany('token:move', moves, 'No se pudo mover la ficha').then((ok) => {
+        if (ok === 0) snapBack(tokenId);
+      });
+    }
+  };
+
+  const finishDrag = (tokenId: string, x: number, y: number) => {
+    endLocalDrag();
+    try {
+      finishDragUnsafe(tokenId, x, y);
+    } catch (err) {
+      reportMapError(err);
+      snapBack(tokenId);
+    }
+  };
+
+  /** Player click on an item token: pick it up when it is next to the hero, else explain how. */
+  const itemClick = (t: Token, client: { x: number; y: number }) => {
+    if (pickableIds.has(t.id)) {
+      contextMenu.openAt(client.x, client.y, [
+        { heading: true, label: t.name },
+        { label: `Recoger «${t.name}»`, icon: <Hand />, onClick: () => pickUp(t) },
+        { label: 'Ver detalles', icon: <Eye />, onClick: () => emitUiEvent('open-token', { tokenId: t.id }) },
+      ]);
+      return;
+    }
+    if (!ownToken) return;
+    if (!sessionOptionsOf(state).playersCanPickUp) toast.info('El DM no permite recoger objetos ahora mismo');
+    else toast.info(`Acércate a «${t.name}» (a una casilla) para recogerlo`);
   };
 
   const actions = {
@@ -510,25 +734,45 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       } else {
         store.selectTokens([tokenId]);
       }
+      if (!isDm && t.kind === 'item') itemClick(t, clientPoint(e));
     },
     dblClick: (tokenId: string) => {
       if (useGameUi.getState().cast || useGameUi.getState().pingMode) return;
       emitUiEvent('open-token', { tokenId });
     },
     contextMenu: (tokenId: string, e: Konva.KonvaEventObject<MouseEvent>) => {
+      // Releasing a right-drag pan over a token must not open its menu (MapStage only guards the empty map).
+      if (rightPanRef.current?.moved || performance.now() - lastRightPanRef.current < RIGHT_PAN_MENU_SUPPRESS_MS) return;
       if (useGameUi.getState().cancelModes()) return;
-      tokenMenu.open({ clientX: e.evt.clientX, clientY: e.evt.clientY }, tokenId);
+      tokenMenu.open({ clientX: e.evt.clientX, clientY: e.evt.clientY }, tokenId, { pickable: pickableIds.has(tokenId) });
+    },
+    press: (tokenId: string, e: TokenPointerEvent) => {
+      blockedPressRef.current = null;
+      if (isDm || moveBlock === null || modeActive) return;
+      const t = state.tokens[tokenId];
+      if (!t || !isOwnHero(t)) return;
+      const p = clientPoint(e);
+      blockedPressRef.current = { x: p.x, y: p.y, reason: moveBlock };
     },
     dragMove: (tokenId: string, x: number, y: number) => {
-      const now = performance.now();
-      if (now - lastDragEmit.current >= DRAG_EMIT_MS) {
-        lastDragEmit.current = now;
-        emitQuiet('token:drag', { tokenId, x, y });
-      }
-      const s = useSessionStore.getState();
-      if (isDm && s.selectedTokenIds.length > 1 && s.selectedTokenIds.includes(tokenId)) {
+      try {
+        const now = performance.now();
+        if (now - lastDragEmit.current >= DRAG_EMIT_MS) {
+          lastDragEmit.current = now;
+          emitQuiet('token:drag', { tokenId, x, y });
+        }
         const t = state.tokens[tokenId];
-        if (t) scheduleFrame({ group: { leaderId: tokenId, dx: x - t.x, dy: y - t.y } });
+        if (!t) return;
+        if (!dragRef.current || dragRef.current.tokenId !== tokenId) {
+          dragRef.current = { tokenId, from: { x: t.x, y: t.y } };
+          useGameUi.getState().setTokenDragging(true);
+        }
+        const patch: typeof pendingFrame.current = { drag: { tokenId, from: dragRef.current.from, to: { x, y } } };
+        const s = useSessionStore.getState();
+        if (isDm && s.selectedTokenIds.length > 1 && s.selectedTokenIds.includes(tokenId)) patch.group = { leaderId: tokenId, dx: x - t.x, dy: y - t.y };
+        scheduleFrame(patch);
+      } catch (err) {
+        reportMapError(err);
       }
     },
     dragEnd: finishDrag,
@@ -536,6 +780,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       const client = clientPoint(e);
       if (isDm) openTransitionMenu(el, client);
       else if (activeTransition && activeTransition.id === el.id) void takeTransition(el);
+      else if (travelBlock !== null && ownToken && pointInTransition(ownToken, el)) toast.info(travelBlock);
       else toast.info(`Acerca tu ficha a «${el.label || TRANSITION_STYLES[el.transitionType].label}» para usarla`);
     },
     stageTap: (stage: Konva.Stage) => {
@@ -544,6 +789,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       if (!p || !h) return;
       handleEmptyPress(h.screenToWorld(p), { alt: false, shift: false });
     },
+    door: (wall: Wall) => useDoor(wall),
   };
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
@@ -553,6 +799,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
       click: (id, e, touch) => actionsRef.current.click(id, e, touch),
       dblClick: (id) => actionsRef.current.dblClick(id),
       contextMenu: (id, e) => actionsRef.current.contextMenu(id, e),
+      press: (id, e) => actionsRef.current.press(id, e),
       dragMove: (id, x, y) => actionsRef.current.dragMove(id, x, y),
       dragEnd: (id, x, y) => actionsRef.current.dragEnd(id, x, y),
     }),
@@ -560,6 +807,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   );
   const onTransition = useCallback((el: TransitionElement, e: TransitionPointerEvent) => actionsRef.current.transition(el, e), []);
   const onStageTap = useCallback((stage: Konva.Stage) => actionsRef.current.stageTap(stage), []);
+  const onPlayerDoor = useCallback((wall: Wall) => actionsRef.current.door(wall), []);
 
   const takeTransition = async (el: TransitionElement) => {
     if (!ownToken || !el.target) return;
@@ -610,60 +858,104 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     contextMenu.openAt(client.x, client.y, items);
   }
 
-  const moveSelectionTo = (world: Point) => {
-    const s = useSessionStore.getState();
-    const moving = s.selectedTokenIds.map((id) => state.tokens[id]).filter((t): t is Token => !!t && t.zoneId === zone.id && t.levelId === level.id);
-    if (moving.length === 0) return;
-    const ids = new Set(moving.map((t) => t.id));
-    const occupied = levelTokens.filter((t) => !ids.has(t.id)).map((t) => ({ x: t.x, y: t.y }));
-    const spots = findFreeSpots(world, moving.length, level, occupied);
-    void sendMany(
-      'token:move',
-      moving.map((t, i) => ({ tokenId: t.id, x: spots[i]!.x, y: spots[i]!.y })),
-      'No se pudo mover la selección',
-    );
+  // --- right-click on the map ------------------------------------------------------------------
+  const doorsNear = (world: Point): Wall[] => {
+    const reach = Math.max(12, (level.grid.size > 0 ? level.grid.size : 70) * DOOR_PICK_CELLS);
+    return level.walls.filter((w) => w.kind === 'door' && w.points.length >= 4 && distanceToPolyline(world, w.points) <= reach);
+  };
+
+  const dmMapItems = (world: Point): ContextMenuItem[] => {
+    const full = useSessionStore.getState().view?.state ?? state;
+    const selection = useSessionStore
+      .getState()
+      .selectedTokenIds.map((id) => full.tokens[id])
+      .filter((t): t is Token => !!t);
+    const heroesWithPlayer = Object.values(full.players).filter((p) => p.heroId && p.userId !== full.hostUserId).length;
+    const target = { zoneId: zone.id, levelId: level.id, x: world.x, y: world.y };
+    const items: ContextMenuItem[] = [
+      {
+        label: selection.length > 0 ? `Mover selección aquí (${selection.length})` : 'Mover selección aquí',
+        icon: <Move />,
+        disabled: selection.length === 0,
+        onClick: () => void moveTokensNear(selection, target),
+      },
+      {
+        label: heroesWithPlayer > 0 ? `Mover a todo el grupo aquí (${heroesWithPlayer})` : 'Mover a todo el grupo aquí',
+        icon: <Users />,
+        disabled: heroesWithPlayer === 0,
+        onClick: () =>
+          void send('token:placeHeroes', { target }, 'No se pudo colocar a los héroes').then((ok) => ok && toast.success('El grupo aparece en este punto')),
+      },
+      {
+        label: 'Añadir enemigo aquí…',
+        icon: <Skull />,
+        shortcut: 'Ctrl+K',
+        onClick: () => {
+          useGameUi.getState().setSpawnAt(target);
+          emitUiEvent('open-quicksearch', {});
+        },
+      },
+      { separator: true },
+      { label: 'Hacer ping aquí', icon: <Radar />, shortcut: 'Alt+clic', onClick: () => pingAt(world) },
+    ];
+    const shown = new Set(revealed);
+    for (const region of level.fogRegions) {
+      if (region.points.length < 6 || !pointInPolygon(world, region.points)) continue;
+      const isShown = shown.has(region.id);
+      const name = region.name || 'región de niebla';
+      items.push({
+        label: isShown ? `Ocultar «${name}»` : `Revelar «${name}»`,
+        icon: isShown ? <EyeOff /> : <Eye />,
+        onClick: () => void send('fog:reveal', { zoneId: zone.id, regionId: region.id, revealed: !isShown }, 'No se pudo cambiar la niebla'),
+      });
+    }
+    for (const wall of doorsNear(world)) {
+      const open = doorStates[wall.id] ?? wall.open;
+      items.push({ label: open ? 'Cerrar la puerta' : 'Abrir la puerta', icon: open ? <DoorClosed /> : <DoorOpen />, onClick: () => toggleDoor(wall) });
+    }
+    return items;
+  };
+
+  const playerMapItems = (world: Point): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [];
+    if (ownToken && !isDm) {
+      const occupied = levelTokens.filter((t) => t.id !== ownToken.id).map((t) => ({ x: t.x, y: t.y }));
+      const dest = placeToken(findFreeSpots(world, 1, level, occupied)[0] ?? world, ownToken.cells, level);
+      const cost = moveCost(ownToken, dest, level.grid);
+      const tooFar = moveBlock === null && moveLimit !== null && cost > moveLimit;
+      const label =
+        moveBlock !== null
+          ? 'Mover mi ficha aquí'
+          : moveLimit !== null
+            ? `Mover mi ficha aquí (${cost} de ${cellsLabel(moveLimit)})`
+            : `Mover mi ficha aquí (${cellsLabel(cost)})`;
+      items.push({
+        label: tooFar ? `${label} · demasiado lejos` : label,
+        icon: <Footprints />,
+        disabled: moveBlock !== null || tooFar || cost === 0 || moveLimit === 0,
+        onClick: () => moveOwnTo(ownToken, dest),
+      });
+      if (moveBlock !== null) items.push({ label: <span className="whitespace-normal text-xs leading-snug">{moveBlock}</span>, disabled: true });
+    }
+    items.push({ label: 'Hacer ping aquí', icon: <Radar />, shortcut: 'Alt+clic', onClick: () => pingAt(world) });
+    if (!isDm) {
+      for (const n of nearby) {
+        if (n.kind === 'item') items.push({ label: `Recoger «${n.token.name}»`, icon: <Hand />, onClick: () => pickUp(n.token) });
+        else if (n.zoneId === zone.id) {
+          items.push({ label: n.open ? 'Cerrar la puerta' : 'Abrir la puerta', icon: n.open ? <DoorClosed /> : <DoorOpen />, onClick: () => useDoor(n.wall) });
+        }
+      }
+    }
+    return items;
   };
 
   const openMapMenu = (world: Point, clientX: number, clientY: number) => {
-    const items: ContextMenuItem[] = [
-      { heading: true, label: `${zone.name}${zone.levels.length > 1 ? ` · ${levelLabel(level)}` : ''}` },
-      { label: 'Hacer ping aquí', icon: <Radar />, shortcut: 'Alt+clic', onClick: () => pingAt(world) },
-    ];
-    if (dmView) {
-      const selection = useSessionStore
-        .getState()
-        .selectedTokenIds.filter((id) => state.tokens[id]?.zoneId === zone.id && state.tokens[id]?.levelId === level.id);
-      if (selection.length > 0) {
-        items.push({ label: `Mover selección aquí (${selection.length})`, icon: <Move />, onClick: () => moveSelectionTo(world) });
-      }
-      const withHero = Object.values(state.players).filter((p) => p.heroId && p.userId !== state.hostUserId).length;
-      if (withHero > 0) {
-        items.push({
-          label: 'Traer aquí a los héroes',
-          icon: <Users />,
-          onClick: () =>
-            void send(
-              'token:placeHeroes',
-              { target: { zoneId: zone.id, levelId: level.id, x: world.x, y: world.y } },
-              'No se pudo colocar a los héroes',
-            ).then((ok) => ok && toast.success('Los héroes aparecen en este punto')),
-        });
-      }
-      const shown = new Set(revealed);
-      for (const region of level.fogRegions) {
-        if (region.points.length < 6 || !pointInPolygon(world, region.points)) continue;
-        const isShown = shown.has(region.id);
-        const name = region.name || 'Región de niebla';
-        items.push({
-          label: isShown ? `Ocultar «${name}»` : `Revelar «${name}»`,
-          icon: isShown ? <EyeOff /> : <Eye />,
-          onClick: () => void send('fog:reveal', { zoneId: zone.id, regionId: region.id, revealed: !isShown }, 'No se pudo cambiar la niebla'),
-        });
-      }
-    }
+    const items: ContextMenuItem[] = [{ heading: true, label: `${zone.name}${zone.levels.length > 1 ? ` · ${levelLabel(level)}` : ''}` }];
+    items.push(...(isDm ? dmMapItems(world) : playerMapItems(world)));
     items.push(
       { separator: true },
-      { label: 'Centrar vista aquí', icon: <LocateFixed />, onClick: () => stageRef.current?.centerOn(world.x, world.y) },
+      ...(ownToken ? [{ label: 'Centrar en mi ficha', icon: <LocateFixed />, onClick: () => emitUiEvent('center-on-token', { tokenId: ownToken.id }) }] : []),
+      { label: 'Centrar cámara aquí', icon: <LocateFixed />, onClick: () => stageRef.current?.centerOn(world.x, world.y) },
       { label: 'Ajustar vista', icon: <Maximize />, shortcut: 'F', onClick: () => stageRef.current?.fitToView() },
     );
     contextMenu.openAt(clientX, clientY, items);
@@ -689,6 +981,33 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   const levelTokensRef = useRef(levelTokens);
   levelTokensRef.current = levelTokens;
 
+  /** Drops a box selection whose release was lost, without selecting anything. */
+  const cancelMarquee = useCallback(() => {
+    window.removeEventListener('mouseup', windowUpRef.current);
+    if (!marqueeRef.current) return;
+    marqueeRef.current = null;
+    scheduleFrame({ marquee: null });
+  }, []);
+
+  useEffect(() => {
+    // A new left press (anywhere) or leaving the window means the previous release never arrived.
+    const onPress = (e: MouseEvent) => {
+      if (e.button === 0 && marqueeRef.current) cancelMarquee();
+    };
+    const onLost = () => {
+      if (marqueeRef.current) cancelMarquee();
+    };
+    window.addEventListener('mousedown', onPress, true);
+    window.addEventListener('blur', onLost);
+    document.addEventListener('visibilitychange', onLost);
+    return () => {
+      window.removeEventListener('mousedown', onPress, true);
+      window.removeEventListener('blur', onLost);
+      document.removeEventListener('visibilitychange', onLost);
+      window.removeEventListener('mouseup', windowUpRef.current);
+    };
+  }, [cancelMarquee]);
+
   const onStageMouseDown = (e: MapMouseEvent, world: MapPoint) => {
     suppressClickRef.current = false;
     if (e.evt.button !== 0 || e.target !== e.target.getStage()) return;
@@ -697,9 +1016,19 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     window.addEventListener('mouseup', windowUpRef.current);
   };
 
-  const onStageMouseMove = (_e: MapMouseEvent, world: MapPoint) => {
+  const onStageMouseMove = (e: MapMouseEvent, world: MapPoint) => {
+    const press = blockedPressRef.current;
+    if (press) {
+      if ((e.evt.buttons & 1) === 0) blockedPressRef.current = null;
+      else if (Math.hypot(e.evt.clientX - press.x, e.evt.clientY - press.y) >= DRAG_HINT_PX) {
+        blockedPressRef.current = null;
+        toast.info(press.reason);
+      }
+    }
     const m = marqueeRef.current;
-    if (m) {
+    if (m && (e.evt.buttons & 1) === 0) {
+      cancelMarquee();
+    } else if (m) {
       m.current = world;
       if (!m.active) {
         const scale = stageRef.current?.getScale() ?? 1;
@@ -711,6 +1040,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
   };
 
   const onStageMouseUp = (_e: MapMouseEvent, world: MapPoint) => {
+    blockedPressRef.current = null;
     const m = marqueeRef.current;
     if (m) {
       m.current = world;
@@ -728,7 +1058,6 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
 
   const onStageContextMenu = (e: MapMouseEvent, world: MapPoint) => {
     if (useGameUi.getState().cancelModes()) return;
-    if (e.target !== e.target.getStage()) return;
     openMapMenu(world, e.evt.clientX, e.evt.clientY);
   };
 
@@ -839,6 +1168,14 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     // Only on zone/level changes (initial mount included).
   }, [fitKey]);
 
+  // A zone/level switch never keeps half-finished gestures from the previous one.
+  useEffect(() => {
+    marqueeRef.current = null;
+    blockedPressRef.current = null;
+    setMarquee(null);
+    cleanupStaleDrags(false);
+  }, [fitKey]);
+
   // Players (and the DM preview): follow the hero token when it arrives on the displayed level (transfers,
   // DM moves between zones). The zone list and the state can arrive in any order, so the zone switch alone
   // is not enough.
@@ -875,13 +1212,14 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
 
   useUiEvent('game-fit', () => stageRef.current?.fitToView());
 
-  const toggleDoor = (wall: Wall) => {
-    const open = doorStates[wall.id] ?? wall.open;
-    void send('door:toggle', { zoneId: zone.id, wallId: wall.id, open: !open }, 'No se pudo cambiar la puerta');
-  };
-
   const castColor = cast ? SPELL_COLORS[cast.animation] : MAP_COLORS.gold400;
   const castRadius = Math.max(16, level.grid.size * 1.5);
+
+  // --- local drag overlays ---------------------------------------------------------------------------
+  const dragToken = localDrag ? state.tokens[localDrag.tokenId] ?? null : null;
+  const dragLimit = dragToken && !isDm && isOwnHero(dragToken) ? moveLimit : null;
+  const dragDest = dragToken && localDrag ? placeToken(localDrag.to, dragToken.cells, level) : null;
+  const dragCost = dragDest && localDrag ? moveCost(localDrag.from, dragDest, level.grid) : 0;
 
   return (
     <div
@@ -891,8 +1229,8 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
     >
       <MapStage
         ref={stageRef}
-        worldWidth={Math.max(1, level.background.width)}
-        worldHeight={Math.max(1, level.background.height)}
+        worldWidth={levelSize.width}
+        worldHeight={levelSize.height}
         initialFit
         fitKey={fitKey}
         panWithRightButton
@@ -912,6 +1250,9 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
           <SceneElementsLayer level={level} layers={dmView ? DM_LAYERS : PLAYER_LAYERS} showHidden={dmView} excludeTypes={LIVE_EXCLUDE} />
           <GridLayer level={level} />
           <FogRegionsLayer regions={level.fogRegions} revealed={revealed} mode={dmView ? 'dm' : 'player'} />
+          {localDrag && dragLimit !== null && (
+            <ReachArea origin={localDrag.from} cells={dragLimit} grid={level.grid} width={levelSize.width} height={levelSize.height} />
+          )}
         </CombinedLayer>
         <CombinedLayer>
           <TransitionHotspots
@@ -921,6 +1262,15 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
             onActivate={onTransition}
           />
           {dmView && <WallsLayer walls={level.walls} doorStates={doorStates} onDoorToggle={toggleDoor} />}
+          {!isDm && playerDoors.length > 0 && (
+            <PlayerDoorHandles
+              doors={playerDoors}
+              gridSize={level.grid.size}
+              interactive={!modeActive}
+              avoid={ownToken ? { x: ownToken.x, y: ownToken.y, r: tokenRadius(ownToken, level.grid) } : null}
+              onToggle={onPlayerDoor}
+            />
+          )}
           <TokensGroup views={views} grid={level.grid} isDmView={dmView} handlers={handlers} />
           {marquee && <MarqueeRect box={marquee} />}
           <StageTapBinder onTap={onStageTap} />
@@ -932,6 +1282,7 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
         <CombinedLayer listening={false}>
           <PingLayer zoneId={zone.id} levelId={level.id} />
           {cast && reticle && <TargetReticle x={reticle.x} y={reticle.y} radius={castRadius} color={castColor} />}
+          {localDrag && dragDest && <DragRuler from={localDrag.from} to={dragDest} cost={dragCost} limit={dragLimit} />}
         </CombinedLayer>
       </MapStage>
 
@@ -941,22 +1292,6 @@ function LiveMap({ isDm, isPreview, meUserId, state, effective, asUserId, zone, 
           onCenterOwn={ownToken ? () => emitUiEvent('center-on-token', { tokenId: ownToken.id }) : null}
         />
       </div>
-
-      {activeTransition && activeTransition.target && !modeActive && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center pl-4 pr-16">
-          <Button
-            variant="primary"
-            size="lg"
-            epic
-            className="pointer-events-auto max-w-full animate-pop shadow-glow-gold"
-            icon={<span aria-hidden>{TRANSITION_STYLES[activeTransition.transitionType].icon}</span>}
-            onClick={() => void takeTransition(activeTransition)}
-            title={`Usar ${activeTransition.label || TRANSITION_STYLES[activeTransition.transitionType].label}`}
-          >
-            Usar {activeTransition.label || TRANSITION_STYLES[activeTransition.transitionType].label}
-          </Button>
-        </div>
-      )}
 
       {tokenMenu.dialogs}
     </div>

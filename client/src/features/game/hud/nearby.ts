@@ -1,4 +1,4 @@
-import { gridDistance, sessionOptionsOf, type LiveState, type Point, type SessionZone, type Token, type Wall } from '@wailers/shared';
+import { gridDistance, sessionOptionsOf, type GridConfig, type LiveState, type Point, type SessionZone, type Token, type Wall } from '@wailers/shared';
 
 /** Something next to the player's hero that can be used for free (no movement, no combat action). */
 export type NearbyThing =
@@ -22,6 +22,18 @@ function distanceToPolyline(p: Point, points: number[]): number {
   return best;
 }
 
+function finiteCells(t: Token): number {
+  return Number.isFinite(t.cells) ? t.cells : 1;
+}
+
+/** Grid cells between two token centres minus the extent of big tokens (1 = adjacent). */
+function cellsBetween(a: Token, b: Token, grid: GridConfig): number {
+  const size = grid.size > 0 ? grid.size : 70;
+  const raw = grid.size > 0 ? gridDistance(a, b, grid) : Math.floor(Math.hypot(a.x - b.x, a.y - b.y) / size);
+  const extent = (t: Token) => Math.max(0, Math.ceil((finiteCells(t) - 1) / 2));
+  return Math.max(0, raw - extent(a) - extent(b));
+}
+
 /**
  * Item tokens next to the hero (adjacent cell or the same one) and doors within reach, as allowed by the
  * session options (playersCanPickUp / playersCanUseDoors).
@@ -32,16 +44,16 @@ export function nearbyThings(state: LiveState, zonesById: Record<string, Session
   if (!zone || !level) return [];
   const options = sessionOptionsOf(state);
   const out: NearbyThing[] = [];
+  // Same reach rules as the server: items one cell away (big tokens count their size), doors 1.5 cells.
   if (options.playersCanPickUp) {
     for (const t of Object.values(state.tokens)) {
       if (t.kind !== 'item' || t.hidden || t.zoneId !== hero.zoneId || t.levelId !== hero.levelId) continue;
-      const reach = Math.max(1, Math.ceil((hero.cells + t.cells) / 2));
-      if (gridDistance(hero, t, level.grid) <= reach) out.push({ kind: 'item', key: `item:${t.id}`, token: t });
+      if (cellsBetween(hero, t, level.grid) <= 1) out.push({ kind: 'item', key: `item:${t.id}`, token: t });
     }
   }
   if (options.playersCanUseDoors) {
     const cell = level.grid.size > 0 ? level.grid.size : 70;
-    const reach = cell * (Math.max(1, hero.cells) / 2 + 1);
+    const reach = (1.5 + Math.max(0, (finiteCells(hero) - 1) / 2)) * cell;
     const doors = state.zoneStates[zone.id]?.doors ?? {};
     for (const wall of level.walls) {
       if (wall.kind !== 'door' || wall.points.length < 4) continue;

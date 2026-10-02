@@ -8,8 +8,8 @@ import { Button } from '../../components/ui/Button';
 import { toast } from '../../components/ui/toast';
 import { useSessionStore } from '../../stores/session';
 import { send } from '../game/map/actions';
-import { hasOverride, heroTokenOf, playerIds } from './playerVisibility';
-import { DEFAULT_ZONE_RADIUS, sameZoneVision, VISION_TITLES, zoneVisionSummary } from './visionText';
+import { hasOverride, heroTokenOf, playerIds, playerVisionInfo } from './playerVisibility';
+import { cellsLabel, DEFAULT_ZONE_RADIUS, isLimitedMode, sameZoneVision, VISION_TITLES, zoneVisionSummary } from './visionText';
 import { savedZoneVision } from './zoneVision';
 import { ZoneVisionFields } from './ZoneVisionFields';
 
@@ -38,6 +38,11 @@ function waitForState(check: (state: LiveState) => boolean, timeoutMs: number): 
   });
 }
 
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} y ${names[names.length - 1]}`;
+}
+
 /** DM: vision of the zone being viewed (live change, back to the zone value, save it in the campaign). */
 export function ZoneVisionSection({ state, zone }: { state: LiveState; zone: SessionZone }) {
   const zonesById = useSessionStore((s) => s.zonesById);
@@ -48,7 +53,14 @@ export function ZoneVisionSection({ state, zone }: { state: LiveState; zone: Ses
   const global = state.visibility.global;
   const startMode = global.visionMode === 'none' ? null : global.visionMode;
 
-  const here = playerIds(state).filter((id) => heroTokenOf(state, id)?.zoneId === zone.id);
+  const here = playerIds(state)
+    .filter((id) => heroTokenOf(state, id)?.zoneId === zone.id)
+    .map((id) => ({
+      id,
+      info: playerVisionInfo(state, id, (zid) => zonesById[zid]?.name ?? null),
+      personal: hasOverride(state.visibility.perPlayer[id], 'visionMode'),
+    }));
+  const ownRadius = here.filter((h) => !h.personal && h.info.radiusSource === 'hero' && isLimitedMode(h.info.mode));
   const changed = live !== null && !sameZoneVision(live, saved);
 
   const setLive = (vision: ZoneVision | null) => {
@@ -141,22 +153,44 @@ export function ZoneVisionSection({ state, zone }: { state: LiveState; zone: Ses
           <p className="text-[11px] text-parchment-400">No hay héroes de jugadores aquí.</p>
         ) : (
           <ul className="flex flex-wrap gap-1.5">
-            {here.map((id) => {
+            {here.map(({ id, info, personal }) => {
               const p = state.players[id]!;
-              const personal = hasOverride(state.visibility.perPlayer[id], 'visionMode');
+              const limited = isLimitedMode(info.mode);
               return (
                 <li
                   key={id}
                   className="flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-800/70 py-0.5 pl-0.5 pr-2 text-[11px] text-parchment-100"
-                  title={personal ? 'Tiene una visión personal: la de la zona no le afecta' : 'Usa la visión de la zona'}
+                  title={
+                    personal
+                      ? `Tiene una visión personal (${info.phrase}): la de la zona no le afecta`
+                      : `Ve ${info.phrase}${info.radiusNote ? ` · ${info.radiusNote}` : ''}`
+                  }
                 >
                   <Avatar name={p.name} color={p.color} size="xs" />
                   {p.name}
-                  {personal && <span className="text-gold-300">· visión personal</span>}
+                  {personal ? (
+                    <span className="text-gold-300">· visión personal</span>
+                  ) : (
+                    limited && (
+                      <span className={info.radiusSource === 'default' ? 'text-parchment-400' : 'text-sky-300'}>
+                        · {cellsLabel(info.radius)}
+                        {info.radiusSource === 'hero' ? ' (visión propia)' : info.radiusSource === 'personal' ? ' (radio personal)' : ''}
+                      </span>
+                    )
+                  )}
                 </li>
               );
             })}
           </ul>
+        )}
+        {ownRadius.length > 0 && (
+          <p className="mt-1.5 flex items-start gap-2 text-[11px] leading-snug text-sky-200/90">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden />
+            <span>
+              {joinNames(ownRadius.map((h) => state.players[h.id]!.name))} {ownRadius.length === 1 ? 'tiene' : 'tienen'} visión propia en su ficha
+              (p. ej. visión en la oscuridad): {ownRadius.length === 1 ? 've' : 'ven'} hasta su radio, no el de la zona.
+            </span>
+          </p>
         )}
       </div>
       {Object.keys(zonesById).length > 1 && (

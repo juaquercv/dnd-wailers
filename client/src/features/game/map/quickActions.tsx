@@ -4,16 +4,33 @@ import { toast } from '../../../components/ui/toast';
 import { useSessionStore } from '../../../stores/session';
 import type { QuickAction } from '../../library/QuickSearch';
 import { addToInitiative, request, send, spellFxAt, viewCenterPoint, waitForTokens } from './actions';
+import { useGameUi } from './gameUi';
 import { placeToken } from './geometry';
 import { findLevel } from './zoneTree';
+
+/** Point picked with "Añadir enemigo aquí…" on the viewed level, if any. */
+function pickedPoint(): { zoneId: string; levelId: string; x: number; y: number } | null {
+  const vz = useSessionStore.getState().viewZone;
+  return vz ? useGameUi.getState().peekSpawnAt(vz.zoneId, vz.levelId) : null;
+}
 
 function isKind<K extends EntryKind>(entry: LibraryEntry, kind: K): entry is LibraryEntry<K> {
   return entry.kind === kind;
 }
 
-/** Center of the DM view snapped to the grid, or null (with a toast) when no map is shown. */
-function spawnPoint(): { zoneId: string; levelId: string; x: number; y: number; gridSize: number } | null {
-  const center = viewCenterPoint();
+export interface QuickActionsOptions {
+  /** Use the point picked with "Añadir enemigo aquí…" (default true; false = always the view center). */
+  usePickedPoint?: boolean;
+}
+
+/**
+ * Where quick actions place things: the point picked with the map's right-click menu (used once), else the
+ * center of the DM view; snapped to the grid. Null (with a toast) when no map is shown.
+ */
+function spawnPoint(usePicked: boolean): { zoneId: string; levelId: string; x: number; y: number; gridSize: number } | null {
+  const picked = usePicked ? pickedPoint() : null;
+  if (picked) useGameUi.getState().setSpawnAt(null);
+  const center = picked ?? viewCenterPoint();
   const s = useSessionStore.getState();
   const zone = center ? s.zonesById[center.zoneId] : null;
   const level = findLevel(zone, center?.levelId);
@@ -25,8 +42,12 @@ function spawnPoint(): { zoneId: string; levelId: string; x: number; y: number; 
   return { zoneId: zone.id, levelId: level.id, x: p.x, y: p.y, gridSize: level.grid.size };
 }
 
-async function spawnAtCenter(entry: LibraryEntry, opts: { hidden?: boolean; dramatic?: boolean; initiative?: boolean } = {}): Promise<void> {
-  const at = spawnPoint();
+async function spawnAtCenter(
+  entry: LibraryEntry,
+  usePicked: boolean,
+  opts: { hidden?: boolean; dramatic?: boolean; initiative?: boolean } = {},
+): Promise<void> {
+  const at = spawnPoint(usePicked);
   if (!at) return;
   const ids = await request(
     'token:spawn',
@@ -60,17 +81,19 @@ function partyHeroes(): { heroId: string; name: string }[] {
  * DM quick actions for a library entry (Ctrl+K palette and the library tab).
  * Everything is an explicit DM action: nothing is applied automatically.
  */
-export function buildQuickActions(entry: LibraryEntry): QuickAction[] {
+export function buildQuickActions(entry: LibraryEntry, options: QuickActionsOptions = {}): QuickAction[] {
+  const usePicked = options.usePickedPoint ?? true;
+  const here = usePicked && pickedPoint() !== null;
   if (isKind(entry, 'creature')) {
     return [
-      { id: 'spawn', label: 'Colocar en el centro de la vista', icon: <MapPin />, run: () => void spawnAtCenter(entry) },
-      { id: 'spawn-hidden', label: 'Colocar oculto', icon: <EyeOff />, run: () => void spawnAtCenter(entry, { hidden: true }) },
-      { id: 'spawn-dramatic', label: 'Aparición dramática', icon: <Flame />, run: () => void spawnAtCenter(entry, { dramatic: true }) },
+      { id: 'spawn', label: here ? 'Colocar en el punto elegido' : 'Colocar en el centro de la vista', icon: <MapPin />, run: () => void spawnAtCenter(entry, usePicked) },
+      { id: 'spawn-hidden', label: 'Colocar oculto', icon: <EyeOff />, run: () => void spawnAtCenter(entry, usePicked, { hidden: true }) },
+      { id: 'spawn-dramatic', label: 'Aparición dramática', icon: <Flame />, run: () => void spawnAtCenter(entry, usePicked, { dramatic: true }) },
       {
         id: 'spawn-initiative',
         label: 'Colocar y añadir a la iniciativa',
         icon: <Swords />,
-        run: () => void spawnAtCenter(entry, { initiative: true }),
+        run: () => void spawnAtCenter(entry, usePicked, { initiative: true }),
       },
     ];
   }
@@ -87,7 +110,7 @@ export function buildQuickActions(entry: LibraryEntry): QuickAction[] {
     }));
     return [
       ...give,
-      { id: 'drop', label: 'Soltar en el mapa', icon: <PackageOpen />, run: () => void spawnAtCenter(entry) },
+      { id: 'drop', label: here ? 'Soltar en el punto elegido' : 'Soltar en el mapa', icon: <PackageOpen />, run: () => void spawnAtCenter(entry, usePicked) },
     ];
   }
   if (isKind(entry, 'sound')) {
@@ -120,10 +143,10 @@ export function buildQuickActions(entry: LibraryEntry): QuickAction[] {
     return [
       {
         id: 'spell-fx',
-        label: 'Animación en el centro',
+        label: here ? 'Animación en el punto elegido' : 'Animación en el centro',
         icon: <Sparkles />,
         run: () => {
-          const at = spawnPoint();
+          const at = spawnPoint(usePicked);
           if (!at) return;
           void spellFxAt(entry.data.animation, at, entry.name, at.gridSize);
         },

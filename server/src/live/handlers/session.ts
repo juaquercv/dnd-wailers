@@ -4,7 +4,7 @@ import { isPlainObject } from '../../services/serializers';
 import { DEFAULT_PLAYER_COLOR, resolveSpawn } from '../runtime';
 import type { SessionManager } from '../SessionManager';
 import { HandlerError, type AppSocket, type HandlerCtx, type LogInput, type MutateOptions } from '../types';
-import { announceTurnStart, startTurns, type TurnLanding } from './turns';
+import { announceTurnStart, remindOwnTurn, startTurns, type TurnLanding } from './turns';
 
 /*
  * Session lifecycle: join/leave (presence), start, save, pause, end and session options.
@@ -71,6 +71,7 @@ async function join(manager: SessionManager, ctx: HandlerCtx): Promise<SessionVi
   if (!view) throw new HandlerError('No se pudo entrar en la partida');
   manager.sendZones(session, socket, true);
   manager.broadcastSessionsList();
+  if (!isDm) remindOwnTurn(manager, session, socket, userId);
   return view;
 }
 

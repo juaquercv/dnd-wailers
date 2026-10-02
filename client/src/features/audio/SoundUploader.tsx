@@ -190,7 +190,7 @@ function UploadDialog({
         else accepted.push(file);
       }
       if (rejected.length > 0) {
-        toast.warning(rejected.length === 1 ? 'Ese archivo no es de audio' : `${rejected.length} archivos no son de audio`, {
+        toast.warning(rejected.length === 1 ? 'Formato de audio no compatible' : `${rejected.length} archivos con formato no compatible`, {
           description: `${rejected.slice(0, 3).join(', ')}${rejected.length > 3 ? '…' : ''} · Formatos: ${AUDIO_FORMATS_LABEL}.`,
         });
       }

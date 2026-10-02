@@ -84,9 +84,9 @@ export function poolFormula(pool: DicePool): string | null {
   return out;
 }
 
-/** Advantage / disadvantage only make sense with exactly one d20 on the table. */
+/** Advantage / disadvantage need exactly one d20 on the table (other dice may go with it, e.g. 1d20 + 1d4). */
 export function poolAllowsAdvantage(pool: DicePool): boolean {
-  return pool.groups.length === 1 && pool.groups[0]!.sides === 20 && pool.groups[0]!.count === 1;
+  return poolCountOf(pool, 20) === 1;
 }
 
 /** Minimum and maximum possible total. */

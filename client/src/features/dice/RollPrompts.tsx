@@ -14,9 +14,10 @@ import { useSettingsStore } from '../../stores/settings';
 import { uiSounds } from '../audio/uiSounds';
 import { DieGlyph } from './DieShapes';
 import { prettyFormula } from './dicePool';
-import { MODE_LABELS } from './diceUtils';
+import { meaningfulRollLabel, MODE_LABELS } from './diceUtils';
 import { isCoveringOverlayShowing, useCoveringOverlayShowing } from './coveringOverlays';
 import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
+import { usePromptPlacement } from './promptPlacement';
 import { MiniWheel } from './RouletteWheel';
 import './dice.css';
 
@@ -54,6 +55,8 @@ export function RollPrompts() {
   /** Banner held back while the initiative draw or a roll covers the screen (it would play unseen underneath). */
   const [queuedBanner, setQueuedBanner] = useState<(TurnBanner & { entryId: string }) | null>(null);
   const covered = useCoveringOverlayShowing();
+  const showPrompts = !!view && (!!offer || requests.length > 0);
+  const placement = usePromptPlacement(showPrompts);
 
   useSessionEvent('rollRequest', (event) => {
     if (event.request.targetUserId === meRef.current) uiSounds.notify();
@@ -150,10 +153,13 @@ export function RollPrompts() {
 
   return createPortal(
     <>
-      {(offer || requests.length > 0) && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-60 flex flex-col items-center gap-3 px-3">
+      {showPrompts && (
+        <div
+          className={clsx('pointer-events-none fixed z-60 flex flex-col items-center gap-3 px-3', !placement && 'inset-x-0 bottom-5')}
+          style={placement ? { left: placement.left, width: placement.width, bottom: placement.bottom } : undefined}
+        >
           {offer && (
-            <div className="wl-card-in wl-prompt-glow pointer-events-auto w-[min(94vw,30rem)] rounded-2xl border border-gold-500/60 bg-ink-900/95 px-4 py-3 backdrop-blur">
+            <div className="wl-card-in wl-prompt-glow pointer-events-auto w-[min(94vw,30rem)] max-w-full rounded-2xl border border-gold-500/60 bg-ink-900/95 px-4 py-3 backdrop-blur">
               <div className="flex items-center gap-3">
                 <span className="text-2xl" aria-hidden>
                   ⚔️
@@ -252,8 +258,9 @@ function RequestCard({
   onDecline: () => void;
 }) {
   const what = request.formula ? prettyFormula(request.formula) : request.rollerId ? rollerName ?? 'ruleta o dado del DM' : 'tirada';
+  const label = meaningfulRollLabel(request.label) || 'Tirada';
   return (
-    <div className="wl-card-in wl-prompt-glow pointer-events-auto relative flex w-[min(94vw,30rem)] items-center gap-3 rounded-2xl border border-gold-500/60 bg-ink-900/95 py-3 pl-4 pr-9 backdrop-blur">
+    <div className="wl-card-in wl-prompt-glow pointer-events-auto relative flex w-[min(94vw,30rem)] max-w-full items-center gap-3 rounded-2xl border border-gold-500/60 bg-ink-900/95 py-3 pl-4 pr-9 backdrop-blur">
       <span className="absolute right-1.5 top-1.5">
         <IconButton
           size="xs"
@@ -269,8 +276,8 @@ function RequestCard({
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold-400">El DM te pide:</div>
-        <div className="truncate font-display text-lg font-semibold leading-tight text-parchment-50" title={`${request.label} (${what})`}>
-          {request.label || 'Tirada'} <span className="font-sans text-sm font-normal text-parchment-300">({what})</span>
+        <div className="truncate font-display text-lg font-semibold leading-tight text-parchment-50" title={`${label} (${what})`}>
+          {label} <span className="font-sans text-sm font-normal text-parchment-300">({what})</span>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {request.mode !== 'normal' && (

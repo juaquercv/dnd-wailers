@@ -158,3 +158,18 @@ export function distanceToEdge(p: Point, dir: EdgeDirection, level: Pick<ZoneLev
       return height - p.y;
   }
 }
+
+/** Shortest distance in px from p to a polyline given as flat [x0, y0, x1, y1, ...] points. */
+export function distanceToPolyline(p: Point, points: number[]): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i + 3 < points.length; i += 2) {
+    const ax = points[i]!;
+    const ay = points[i + 1]!;
+    const dx = points[i + 2]! - ax;
+    const dy = points[i + 3]! - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? clamp(((p.x - ax) * dx + (p.y - ay) * dy) / len2, 0, 1) : 0;
+    best = Math.min(best, Math.hypot(p.x - (ax + t * dx), p.y - (ay + t * dy)));
+  }
+  return best;
+}

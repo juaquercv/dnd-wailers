@@ -454,7 +454,7 @@ export const TokenSprite = memo(function TokenSprite(props: TokenSpriteProps) {
           fontSize={nameSize}
           maxWidth={Math.max(d * 2.2, 120)}
           borderColor={withAlpha(token.color, 0.8)}
-          listening
+          listening={false}
         />
       </Group>
     </>

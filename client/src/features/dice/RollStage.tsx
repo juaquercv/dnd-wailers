@@ -6,7 +6,7 @@ import { Badge } from '../../components/ui/Badge';
 import { uiSounds } from '../audio/uiSounds';
 import { D6Cube, DieView } from './DieShapes';
 import { RouletteWheel } from './RouletteWheel';
-import { useCountUp, useElapsed, useThrottled } from './diceHooks';
+import { useCountUp, useElapsed, useThrottled, useViewportSize } from './diceHooks';
 import { prettyFormula } from './dicePool';
 import { hashString, hashUnit, MODE_LABELS, rollBreakdown, rollTitle, seededRandom } from './diceUtils';
 import './dice.css';
@@ -246,10 +246,67 @@ function faceIndexAt(track: DieTrack, elapsed: number): number {
   return i;
 }
 
-function visibleIndices(dice: DieResult[], critIndex: number): number[] {
-  const out = dice.slice(0, MAX_VISIBLE_DICE).map((_, i) => i);
-  if (critIndex >= MAX_VISIBLE_DICE) out[MAX_VISIBLE_DICE - 1] = critIndex;
-  return out;
+/**
+ * Dice drawn when not all fit: one of each type per round (d20 and d100 first), always keeping the
+ * critical d20, so no die type is hidden behind the "+N dados más" chip.
+ */
+function visibleIndices(dice: DieResult[], critIndex: number, max: number): number[] {
+  if (dice.length <= max) return dice.map((_, i) => i);
+  const buckets = new Map<number, number[]>();
+  dice.forEach((d, i) => {
+    const list = buckets.get(d.sides);
+    if (list) list.push(i);
+    else buckets.set(d.sides, [i]);
+  });
+  const priority = (sides: number) => (sides === 20 || sides === 100 ? 0 : 1);
+  const queues = [...buckets.entries()].sort((a, b) => priority(a[0]) - priority(b[0])).map(([, list]) => list);
+  const picked = new Set<number>();
+  if (critIndex >= 0) picked.add(critIndex);
+  for (let round = 0; picked.size < max; round++) {
+    let more = false;
+    for (const queue of queues) {
+      if (picked.size >= max) break;
+      const index = queue[round];
+      if (index === undefined) continue;
+      more = true;
+      picked.add(index);
+    }
+    if (!more) break;
+  }
+  return [...picked].sort((a, b) => a - b);
+}
+
+const OVERLAY_GAP_X = 22;
+const OVERLAY_GAP_Y = 20;
+const MIN_OVERLAY_DIE = 36;
+/** Windows shorter than this get a denser result card. */
+const SHORT_VIEWPORT = 640;
+const OVERLAY_CHIP_HEIGHT = 42;
+
+/**
+ * Biggest overlay die size that leaves room for the result card in the window; when even the smallest
+ * size does not fit, fewer dice are drawn (the rest go to the "+N dados más" chip).
+ */
+function fitOverlayDice(count: number, hidden: boolean, vw: number, vh: number, reserved: number): { size: number; maxVisible: number } {
+  const innerWidth = Math.min(vw * 0.94, vw - 32) - 32;
+  const desiredPerRow = count <= 6 ? Math.max(1, count) : Math.ceil(count / 2);
+  const perRowAt = (size: number) => Math.max(1, Math.min(desiredPerRow, Math.floor((innerWidth + OVERLAY_GAP_X) / (size + OVERLAY_GAP_X))));
+  const blockHeight = (size: number) => {
+    const rows = Math.ceil(count / perRowAt(size));
+    return rows * size + (rows - 1) * OVERLAY_GAP_Y;
+  };
+  const avail = vh - reserved - (hidden ? OVERLAY_CHIP_HEIGHT : 0);
+  for (let size = dieSizeFor(count, 'overlay'); size >= MIN_OVERLAY_DIE; size -= 4) {
+    if (blockHeight(size) <= avail) return { size, maxVisible: count };
+  }
+  const roomy = vh - reserved - OVERLAY_CHIP_HEIGHT;
+  const rows = Math.max(1, Math.floor((roomy + OVERLAY_GAP_Y) / (MIN_OVERLAY_DIE + OVERLAY_GAP_Y)));
+  return { size: MIN_OVERLAY_DIE, maxVisible: Math.max(1, Math.min(count, rows * perRowAt(MIN_OVERLAY_DIE))) };
+}
+
+/** Height taken in the overlay by everything except the dice (padding, crit text, result card). */
+function overlayReservedHeight(short: boolean, crit: boolean, extraLine: boolean): number {
+  return 48 + 12 + (short ? 250 : 290) + (crit ? 72 : 0) + (extraLine ? 18 : 0);
 }
 
 function buildTracks(dice: DieResult[], indices: number[], seed: number, rollMs: number, overlay: boolean, reduced: boolean): DieTrack[] {
@@ -272,7 +329,8 @@ function buildTracks(dice: DieResult[], indices: number[], seed: number, rollMs:
     const start = overlay
       ? { sx: `${(side * (16 + rnd() * 30)).toFixed(1)}vw`, sy: `${(-(30 + rnd() * 24)).toFixed(1)}vh`, rot: `${Math.round(side * (620 + rnd() * 560))}deg` }
       : { sx: `${Math.round(side * (60 + rnd() * 120))}px`, sy: `${Math.round(-(110 + rnd() * 90))}px`, rot: `${Math.round(side * (480 + rnd() * 420))}deg` };
-    const schedule = faceSchedule(die.sides, die.value, landAt, (seed + index * 7919) >>> 0);
+    // Reduced motion: no flickering faces, the die simply shows its value.
+    const schedule = reduced ? { times: [], values: [] } : faceSchedule(die.sides, die.value, landAt, (seed + index * 7919) >>> 0);
     return { index, die, landAt, start, ...schedule };
   });
 }
@@ -297,8 +355,17 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
   const overlay = variant === 'overlay';
   const [rollMs] = useState(() => (reducedMotion ? REDUCED_ROLL_MS : rollMsProp ?? (overlay ? DEFAULT_OVERLAY_ROLL_MS : DEFAULT_INLINE_ROLL_MS)));
   const seed = useMemo(() => hashString(roll.id), [roll.id]);
+  const viewport = useViewportSize();
+  const short = overlay && viewport.height < SHORT_VIEWPORT;
+  const reserved = overlayReservedHeight(short, roll.crit !== null, !!extra);
+  // Read once: changing which dice are drawn mid-roll would restart their animations.
+  const [maxVisible] = useState(() => {
+    if (!overlay) return MAX_VISIBLE_DICE;
+    const count = Math.min(dice.length, MAX_VISIBLE_DICE);
+    return fitOverlayDice(count, dice.length > count, viewport.width, viewport.height, reserved).maxVisible;
+  });
   const critIndex = useMemo(() => (roll.crit ? dice.findIndex((d) => d.sides === 20 && !d.dropped) : -1), [roll.crit, dice]);
-  const indices = useMemo(() => visibleIndices(dice, critIndex), [dice, critIndex]);
+  const indices = useMemo(() => visibleIndices(dice, critIndex, maxVisible), [dice, critIndex, maxVisible]);
   const tracks = useMemo(() => buildTracks(dice, indices, seed, rollMs, overlay, reducedMotion), [dice, indices, seed, rollMs, overlay, reducedMotion]);
   const lastTrack = useMemo(() => tracks.reduce<DieTrack | null>((a, t) => (!a || t.landAt > a.landAt ? t : a), null), [tracks]);
   const hiddenCount = dice.length - indices.length;
@@ -313,11 +380,13 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
   const showDropped = elapsed >= allLanded + 180;
   const critOn = roll.crit !== null && elapsed >= critAt;
   const total = useCountUp(roll.total ?? 0, allDone, countMs);
-  const size = dieSizeFor(indices.length, variant);
+  const size = overlay
+    ? fitOverlayDice(indices.length, hiddenCount > 0, viewport.width, viewport.height, reserved).size
+    : dieSizeFor(indices.length, variant);
   const breakdown = rollBreakdown(roll);
   const onSettledRef = useLatest(onSettled);
   const perRow = indices.length <= 6 ? Math.max(1, indices.length) : Math.ceil(indices.length / 2);
-  const rowWidth = perRow * (size + (overlay ? 22 : 12)) + 24;
+  const rowWidth = perRow * (size + (overlay ? OVERLAY_GAP_X : 12)) + 24;
 
   const sfx = useRef({ shake: false, shake2: false, landed: 0, landSounds: 0, lastLandAt: 0, tickIdx: -1, crit: false, settled: false });
   useEffect(() => {
@@ -448,7 +517,10 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
           className={clsx(
             'wl-card-in pointer-events-auto relative z-[3] text-center',
             overlay
-              ? 'mt-5 w-[min(92vw,30rem)] cursor-pointer rounded-2xl border border-gold-600/50 bg-ink-900/92 px-6 py-4 shadow-modal backdrop-blur'
+              ? clsx(
+                  'w-[min(92vw,30rem)] cursor-pointer rounded-2xl border border-gold-600/50 bg-ink-900/92 shadow-modal backdrop-blur',
+                  short ? 'mt-3 px-5 py-3' : 'mt-5 px-6 py-4',
+                )
               : 'mt-4 w-full rounded-xl border border-ink-500 bg-ink-950/60 px-4 py-3',
             roll.crit === 'success' && critOn && 'border-gold-400 shadow-glow-gold',
             roll.crit === 'fail' && critOn && 'border-blood-500 shadow-glow-blood',
@@ -461,7 +533,7 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
               <span
                 className={clsx(
                   'wl-total-pop font-display font-bold leading-none tabular-nums',
-                  overlay ? 'text-6xl sm:text-7xl' : 'text-5xl',
+                  overlay ? (short ? 'text-5xl' : 'text-6xl sm:text-7xl') : 'text-5xl',
                   critOn && roll.crit === 'success' ? 'title-epic' : critOn && roll.crit === 'fail' ? 'text-blood-400' : 'text-parchment-50',
                 )}
               >

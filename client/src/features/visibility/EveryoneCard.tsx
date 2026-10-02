@@ -10,11 +10,11 @@ import { toast } from '../../components/ui/toast';
 import { useSessionStore } from '../../stores/session';
 import { MoveSwitch, ScreenToggles, VisionChoicePicker, type ScreenKey } from './controls';
 import {
-  overrideCount,
   personalChoice,
   playerIds,
   playerVisionInfo,
   resetEveryone,
+  resettableCount,
   setForEveryone,
   setPersonalForEveryone,
   setVisionForEveryone,
@@ -62,7 +62,7 @@ export function EveryoneCard({ state }: { state: LiveState }) {
   const common: VisionChoice | null = n === 0 ? 'follow' : choices.every((c) => c === choices[0]) ? choices[0]! : null;
   const firstId = ids[0];
   const firstInfo = firstId ? playerVisionInfo(state, firstId, (id) => zonesById[id]?.name ?? null) : null;
-  const withPersonal = ids.filter((id) => overrideCount(state.visibility.perPlayer[id]) > 0).length;
+  const withPersonal = ids.filter((id) => resettableCount(state.visibility.perPlayer[id]) > 0).length;
 
   const differs = (key: ScreenKey | 'enemyHp') => effs.filter((e) => e[key] !== global[key]).length;
 
@@ -72,8 +72,9 @@ export function EveryoneCard({ state }: { state: LiveState }) {
 
   const resetAll = async () => {
     const ok = await confirm({
-      title: 'Quitar los ajustes personales',
-      message: 'Todos los jugadores volverán a ver lo mismo y su visión seguirá a la zona donde está su héroe.',
+      title: 'Quitar los ajustes personales de visión',
+      message:
+        'Todos los jugadores volverán a ver lo mismo y su visión seguirá a la zona donde está su héroe. Quién puede moverse no cambia: eso se ajusta con «Pueden moverse» o en la tarjeta de cada jugador.',
       confirmLabel: 'Quitar ajustes',
     });
     if (!ok) return;
@@ -128,7 +129,9 @@ export function EveryoneCard({ state }: { state: LiveState }) {
         {withPersonal > 0 && (
           <div className="flex items-center gap-2 rounded-lg border border-gold-700/40 bg-ink-950/50 px-2.5 py-1.5">
             <span className="min-w-0 flex-1 text-[11px] leading-snug text-parchment-300">
-              {withPersonal === 1 ? '1 jugador tiene ajustes personales.' : `${withPersonal} jugadores tienen ajustes personales.`}
+              {withPersonal === 1
+                ? '1 jugador tiene ajustes personales de visión o pantalla.'
+                : `${withPersonal} jugadores tienen ajustes personales de visión o pantalla.`}
             </span>
             <Button size="sm" variant="ghost" icon={<RotateCcw />} onClick={() => void resetAll()}>
               Igualar a todos

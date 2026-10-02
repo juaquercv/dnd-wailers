@@ -188,7 +188,8 @@ export function DiceOverlay() {
       data-dice-overlay
     >
       <div className="wl-backdrop absolute inset-0" aria-hidden />
-      <div className="relative flex max-h-full w-full flex-col items-center justify-center px-4 py-6">
+      {/* safe center: if a tiny window still overflows, the dice stay visible instead of going off the top. */}
+      <div className="relative flex max-h-full w-full flex-col items-center justify-center px-4 py-6 [justify-content:safe_center]">
         <RollStage
           key={current.id}
           roll={current}

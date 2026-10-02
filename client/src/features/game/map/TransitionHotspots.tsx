@@ -2,17 +2,68 @@ import { memo, useState } from 'react';
 import type Konva from 'konva';
 import { Group, Rect } from 'react-konva';
 import type { TransitionElement } from '@wailers/shared';
-import { MAP_COLORS, setStageCursor, TRANSITION_STYLES } from '../../../map';
+import { MAP_COLORS, MapLabel, setStageCursor, TRANSITION_STYLES, useMapView } from '../../../map';
 
 export type TransitionPointerEvent = Konva.KonvaEventObject<Event>;
 
 export interface TransitionHotspotsProps {
   transitions: TransitionElement[];
-  /** Transition currently usable by the player's own token (drawn with a pulsing emerald frame). */
+  /** Transition currently usable by the player's own token (pulsing emerald frame + "Usar" pill). */
   activeId?: string | null;
   /** When false the hotspots are drawn but ignore the pointer (cast/ping modes). */
   interactive: boolean;
   onActivate(el: TransitionElement, e: TransitionPointerEvent): void;
+}
+
+const PILL_GAP_PX = 10;
+
+/**
+ * "Usar …" pill above the transition the player's token stands on. Constant screen size; drawn in the same
+ * layer as the tokens but before them, so it can never cover a token or steal its clicks.
+ */
+function UsePill({ el, interactive, onActivate }: { el: TransitionElement; interactive: boolean; onActivate: (el: TransitionElement, e: TransitionPointerEvent) => void }) {
+  const view = useMapView();
+  const k = 1 / Math.max(0.05, view.scale || 1);
+  const style = TRANSITION_STYLES[el.transitionType];
+  const label = el.label || style?.label || 'paso';
+  const top = el.y - Math.max(8, el.height) / 2;
+  return (
+    <Group
+      x={el.x}
+      y={top - PILL_GAP_PX * k}
+      scaleX={k}
+      scaleY={k}
+      listening={interactive}
+      onMouseEnter={(e) => setStageCursor(e.target, 'pointer')}
+      onMouseLeave={(e) => setStageCursor(e.target, '')}
+      onMouseDown={(e) => {
+        if (e.evt.button === 0) e.cancelBubble = true;
+      }}
+      onClick={(e) => {
+        if (e.evt.button !== 0) return;
+        e.cancelBubble = true;
+        onActivate(el, e);
+      }}
+      onTap={(e) => {
+        e.cancelBubble = true;
+        onActivate(el, e);
+      }}
+    >
+      <MapLabel
+        text={`${style?.icon ?? '➜'}  Usar: ${label}`}
+        y={0}
+        anchor="bottom"
+        fontSize={14}
+        paddingX={12}
+        paddingY={6}
+        maxWidth={260}
+        textColor={MAP_COLORS.parchment50}
+        background="rgba(6, 40, 28, 0.94)"
+        borderColor={MAP_COLORS.emerald400}
+        listening
+      />
+    </Group>
+  );
 }
 
 const Hotspot = memo(function Hotspot({
@@ -75,11 +126,13 @@ const Hotspot = memo(function Hotspot({
 
 /** Invisible click targets over transition elements (doors, stairs, portals...) with hover feedback. */
 export function TransitionHotspots({ transitions, activeId, interactive, onActivate }: TransitionHotspotsProps) {
+  const active = activeId ? transitions.find((el) => el.id === activeId) ?? null : null;
   return (
     <Group listening={interactive}>
       {transitions.map((el) => (
         <Hotspot key={el.id} el={el} active={el.id === activeId} interactive={interactive} onActivate={onActivate} />
       ))}
+      {active && <UsePill el={active} interactive={interactive} onActivate={onActivate} />}
     </Group>
   );
 }

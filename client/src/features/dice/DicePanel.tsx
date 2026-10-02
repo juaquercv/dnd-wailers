@@ -19,7 +19,7 @@ import { DieGlyph } from './DieShapes';
 import { playerLabel, useSessionPlayers, type PlayerOption } from './diceHooks';
 import { poolFormula, poolIsEmpty, prettyFormula } from './dicePool';
 import { patchDiceTray, useDiceTray, useDiceTraySession, type LastTrayRoll } from './diceTrayStore';
-import { MODE_LABELS } from './diceUtils';
+import { meaningfulRollLabel, MODE_LABELS } from './diceUtils';
 import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
 import { RollHistory } from './RollHistory';
 import { MiniWheel, SegmentStrip } from './RouletteWheel';
@@ -588,7 +588,7 @@ function PendingRequests({ requests, players, rollers }: { requests: RollRequest
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p?.color ?? '#a8946b' }} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs font-semibold text-parchment-100">
-                  {p ? p.name : 'Jugador'} · {r.label}
+                  {p ? p.name : 'Jugador'} · {meaningfulRollLabel(r.label) || 'Tirada'}
                 </div>
                 <div className="flex flex-wrap items-center gap-1 text-[10px] text-parchment-400">
                   <span className="font-mono text-gold-300/90">{what}</span>
@@ -662,7 +662,7 @@ function PlayerDice() {
               <li key={r.id} className="flex items-center gap-2.5 rounded-lg border border-gold-700/50 bg-ink-800/70 px-2.5 py-2">
                 <DieGlyph sides={20} size={30} className="shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold text-parchment-50">{r.label || 'Tirada'}</div>
+                  <div className="truncate text-sm font-semibold text-parchment-50">{meaningfulRollLabel(r.label) || 'Tirada'}</div>
                   <div className="flex flex-wrap items-center gap-1 text-[11px] text-parchment-400">
                     <span className="font-mono text-gold-300/90">
                       {r.formula ? prettyFormula(r.formula) : r.rollerId ? lookupRoller(r.rollerId)?.name ?? 'ruleta o dado del DM' : '—'}

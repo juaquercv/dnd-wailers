@@ -52,7 +52,10 @@ const CHOICE_ICONS: Record<VisionChoice, LucideIcon> = {
   none: Moon,
 };
 
-/** "Sigue la zona | Todo | Explorado | Limitada | Nada". `value` null = players differ (nothing highlighted). */
+/**
+ * "Sigue la zona" (the normal choice, full width) over "Todo | Explorado | Limitada | Nada" (a fixed personal
+ * vision). `value` null = players differ (nothing highlighted).
+ */
 export function VisionChoicePicker({
   value,
   onChange,
@@ -65,9 +68,10 @@ export function VisionChoicePicker({
   ariaLabel?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className="grid grid-cols-5 gap-1 rounded-lg border border-ink-600 bg-ink-950/60 p-1">
+    <div role="radiogroup" aria-label={ariaLabel} className="grid grid-cols-4 gap-1 rounded-lg border border-ink-600 bg-ink-950/60 p-1">
       {VISION_CHOICES.map((c) => {
         const active = c.value === value;
+        const follow = c.value === 'follow';
         const Icon = CHOICE_ICONS[c.value];
         return (
           <button
@@ -81,16 +85,19 @@ export function VisionChoicePicker({
               if (!active) onChange(c.value);
             }}
             className={clsx(
-              'flex min-w-0 flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-center text-[10px] font-semibold leading-tight transition disabled:cursor-not-allowed disabled:opacity-50',
+              'flex min-w-0 items-center rounded-md py-1.5 text-center font-semibold leading-tight transition disabled:cursor-not-allowed disabled:opacity-50',
+              follow ? 'col-span-4 justify-center gap-1.5 px-2 text-[11px]' : 'flex-col gap-0.5 px-0.5 text-[10px]',
               active
-                ? c.value === 'follow'
+                ? follow
                   ? 'bg-emerald-500/15 text-emerald-200 shadow-[0_0_0_1px_rgba(52,211,153,0.45)]'
                   : 'bg-gradient-to-b from-ink-600 to-ink-700 text-gold-200 shadow-[0_0_0_1px_rgba(176,133,43,0.55)]'
                 : 'text-parchment-300 hover:bg-ink-800 hover:text-parchment-100',
             )}
           >
             <Icon className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="w-full break-words">{c.label}</span>
+            <span lang="es" className={clsx('min-w-0 hyphens-auto', !follow && 'w-full break-words')}>
+              {c.label}
+            </span>
           </button>
         );
       })}

@@ -35,7 +35,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { economyApplies, tokenHp, type HeroSheet, type LiveState, type SessionZone, type Token, type TurnEntry } from '@wailers/shared';
+import { economyApplies, effectiveVisibility, tokenHp, type HeroSheet, type LiveState, type SessionZone, type Token, type TurnEntry } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { Button } from '../../components/ui/Button';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/ContextMenu';
@@ -47,7 +47,7 @@ import { emitUiEvent } from '../../lib/uiEvents';
 import { useSessionStore } from '../../stores/session';
 import { isTurnEntryMasked } from './map/fog';
 import { send } from './panels/actions';
-import { CombatBar, UsageChip } from './panels/CombatControls';
+import { CombatBar, setPlayerMove, usageAdjustItems, UsageChip } from './panels/CombatControls';
 import { heroTokenOf, partyMembers, usePanelContext, type PanelContext } from './panels/context';
 import { HpBar, type HpInfo } from './panels/HpBar';
 import { PromptDialog, type PromptField } from './panels/PromptDialog';
@@ -235,18 +235,17 @@ export function InitiativePanel() {
   const rowMenu = (v: EntryView): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [{ heading: true, label: v.name }];
     items.push({ label: 'Dar el turno', icon: <Play />, onClick: () => void send('turn:setCurrent', { entryId: v.entry.id }) });
-    if (v.hero && economyApplies(state)) {
-      const heroId = v.hero.id;
-      const heroName = v.hero.name;
+    const rowPlayer = v.entry.userId ? state.players[v.entry.userId] ?? null : null;
+    if (rowPlayer && rowPlayer.userId !== state.hostUserId) {
+      const canMove = effectiveVisibility(state, rowPlayer.userId).canMoveOwnToken;
       items.push({
-        label: 'Turno del héroe',
-        icon: <Footprints />,
-        children: [
-          { label: 'Reiniciar movimiento y acciones', onClick: () => void send('usage:adjust', { heroId, reset: true }, { success: `${heroName}: turno reiniciado` }) },
-          { label: '+1 acción de combate', onClick: () => void send('usage:adjust', { heroId, bonusActionsDelta: 1 }, { success: `${heroName}: +1 acción` }) },
-          { label: '+3 casillas', onClick: () => void send('usage:adjust', { heroId, bonusMoveDelta: 3 }, { success: `${heroName}: +3 casillas` }) },
-        ],
+        label: 'Puede mover su ficha',
+        checked: canMove,
+        onClick: () => void setPlayerMove(state, rowPlayer, !canMove),
       });
+    }
+    if (v.hero && economyApplies(state)) {
+      items.push({ label: 'Turno del héroe', icon: <Footprints />, children: usageAdjustItems(state, v.hero.id, v.hero.name) });
     }
     if (v.token) items.push({ label: 'Centrar en la ficha', icon: <Crosshair />, onClick: () => centerOn(v) });
     items.push({ label: 'Cambiar iniciativa…', icon: <Swords />, onClick: () => setPrompt({ kind: 'initiative', entry: v.entry }) });
@@ -281,7 +280,10 @@ export function InitiativePanel() {
   };
 
   const current = views.find((v) => v.entry.id === currentId) ?? null;
+  // Outside combat the order is only a reference (exploration is free): nobody is told "it is your turn".
+  const inCombat = state.turn.combat === true;
   const myTurn =
+    inCombat &&
     !!current &&
     !!ctx.viewerId &&
     ctx.viewerId !== ctx.hostUserId &&
@@ -376,12 +378,23 @@ export function InitiativePanel() {
           <span className="font-display text-lg font-bold leading-none text-gold-200">{state.turn.round}</span>
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-parchment-400">{state.turn.mode === 'random' ? 'Orden sorteado' : 'Orden manual'}</div>
-          <div className="truncate font-display text-sm font-semibold text-parchment-50" title={current ? `Turno de ${current.name}` : undefined}>
+          <div className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-parchment-400">
+            {inCombat ? (state.turn.mode === 'random' ? 'Orden sorteado' : 'Orden manual') : 'Sin combate · orden de turnos'}
+          </div>
+          <div
+            className="truncate font-display text-sm font-semibold text-parchment-50"
+            title={current ? (inCombat ? `Turno de ${current.name}` : `${current.name} va primero cuando empiece el combate`) : undefined}
+          >
             {current ? (
-              <>
-                Turno de <span className="text-gold-300">{current.name}</span>
-              </>
+              inCombat ? (
+                <>
+                  Turno de <span className="text-gold-300">{current.name}</span>
+                </>
+              ) : (
+                <>
+                  Empieza <span className="text-parchment-200">{current.name}</span>
+                </>
+              )
             ) : views.length > 0 ? (
               'Sin turno activo'
             ) : (
@@ -397,7 +410,7 @@ export function InitiativePanel() {
         {manage && <IconButton icon={<UserPlus />} title="Añadir a la iniciativa" size="sm" variant="secondary" onClick={openAddMenu} />}
       </div>
 
-      {myTurn && !ctx.isDm && state.turn.combat === true && (
+      {myTurn && !ctx.isDm && (
         <Button
           size="sm"
           variant="primary"

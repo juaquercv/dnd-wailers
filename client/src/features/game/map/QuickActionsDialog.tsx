@@ -12,7 +12,8 @@ export interface QuickActionsDialogProps {
 
 /** Touch-friendly list of the DM quick actions for a library entry (same actions as Ctrl+K). */
 export function QuickActionsDialog({ entry, onClose }: QuickActionsDialogProps) {
-  const actions = entry ? buildQuickActions(entry) : [];
+  // Opened from the library tab: things go to the view center, never to an old right-click point.
+  const actions = entry ? buildQuickActions(entry, { usePickedPoint: false }) : [];
   return (
     <Modal
       open={!!entry}

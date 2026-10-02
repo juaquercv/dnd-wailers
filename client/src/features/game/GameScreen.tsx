@@ -9,6 +9,7 @@ import { FxOverlay } from '../fx/FxOverlay';
 import { QuickSearch } from '../library/QuickSearch';
 import { EdgeNavigator } from './EdgeNavigator';
 import { GameMap } from './GameMap';
+import { usePlayerHudLayout } from './hud/hudLayout';
 import { PlayerHud } from './hud/PlayerHud';
 import { OverviewModal } from './OverviewModal';
 import { ProjectionOverlay } from './ProjectionOverlay';
@@ -60,6 +61,7 @@ export function GameScreen() {
   const combat = useSessionStore((s) => s.view?.state.status === 'playing' && s.view.state.turn.combat === true);
   const pendingDmTrades = useSessionStore((s) => (s.view?.role === 'dm' ? s.view.state.trades.filter((t) => t.status === 'pending_dm').length : 0));
   const { effective, isPreview } = useDisplayState();
+  const hudInset = usePlayerHudLayout((s) => s.centerInset);
   const wide = useMediaQuery('(min-width: 1024px)');
   const roomy = useMediaQuery('(min-width: 1280px)');
 
@@ -240,7 +242,12 @@ export function GameScreen() {
         <main id="game-viewport" className="relative min-w-0 flex-1 overflow-hidden bg-[#070605]">
           {sceneMode ? <SceneScreen /> : <GameMap />}
           <FxOverlay />
-          {!sceneMode && <EdgeNavigator />}
+          {!sceneMode && (
+            // The edge arrows live above the player's action bar when it reaches the centre ("Viajar a…" stays clickable).
+            <div className="pointer-events-none absolute inset-x-0 top-0 transition-[bottom] duration-200" style={{ bottom: hudInset }}>
+              <EdgeNavigator />
+            </div>
+          )}
           <ProjectionOverlay />
           {!sceneMode && <ViewportBanners />}
           {combat && (

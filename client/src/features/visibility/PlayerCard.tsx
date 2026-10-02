@@ -13,10 +13,10 @@ import { useSessionStore } from '../../stores/session';
 import { MoveSwitch, ScreenToggles, VisionChoicePicker, type ScreenKey } from './controls';
 import {
   hasOverride,
-  overrideCount,
   personalChoice,
   playerVisionInfo,
   resetPlayer,
+  resettableCount,
   setPlayerSetting,
   setPlayerVision,
   updatePlayer,
@@ -92,7 +92,7 @@ export function PlayerCard({ state, userId, defaultOpen = false }: { state: Live
   const info = playerVisionInfo(state, userId, (id) => zonesById[id]?.name ?? null);
   const eff = info.eff;
   const choice = personalChoice(state, userId);
-  const personalCount = overrideCount(own);
+  const personalCount = resettableCount(own);
   const previewing = viewAsUserId === userId;
 
   const changeScreen = <K extends ScreenKey | 'enemyHp'>(key: K, value: VisibilitySettings[K]) => {
@@ -101,7 +101,11 @@ export function PlayerCard({ state, userId, defaultOpen = false }: { state: Live
 
   const reset = () => {
     void resetPlayer(userId).then((ok) => {
-      if (ok) toast.success(`${player.name} vuelve a ver como todos`, { description: 'Su visión sigue a la zona donde está su héroe.' });
+      if (ok) {
+        toast.success(`${player.name} vuelve a ver como todos`, {
+          description: 'Su visión sigue a la zona donde está su héroe. Su permiso para moverse no cambia.',
+        });
+      }
     });
   };
 
@@ -119,7 +123,7 @@ export function PlayerCard({ state, userId, defaultOpen = false }: { state: Live
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-sm font-semibold text-parchment-50">{player.name}</span>
             {personalCount > 0 && (
-              <Badge tone="gold" size="xs" title={`${personalCount} ajustes solo para este jugador`}>
+              <Badge tone="gold" size="xs" title={`${personalCount} ${personalCount === 1 ? 'ajuste' : 'ajustes'} de visión o pantalla solo para este jugador`}>
                 Personal
               </Badge>
             )}
@@ -199,7 +203,7 @@ export function PlayerCard({ state, userId, defaultOpen = false }: { state: Live
               icon={<RotateCcw />}
               disabled={personalCount === 0}
               onClick={reset}
-              title="Quita todos sus ajustes personales: vuelve a seguir la zona y a ver lo mismo que los demás"
+              title="Quita sus ajustes personales de visión y pantalla: vuelve a seguir la zona y a ver lo mismo que los demás. Su permiso para moverse no cambia."
             >
               Restablecer
             </Button>

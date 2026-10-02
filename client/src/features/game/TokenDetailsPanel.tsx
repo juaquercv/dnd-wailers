@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import {
   Copy,
   Crosshair,
-  Eye,
   EyeOff,
   Flame,
   Gift,
+  Hand,
   HeartPulse,
   Info,
   Lightbulb,
@@ -19,7 +19,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { tokenHp, type C2SPayloads, type LiveState, type Token, type TurnEntry } from '@wailers/shared';
+import { isOwnHeroToken, sessionOptionsOf, tokenHp, type C2SPayloads, type LiveState, type Token, type TurnEntry } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -38,6 +38,7 @@ import { Toggle } from '../../components/ui/Toggle';
 import { isEditableTarget } from '../../lib/hotkeys';
 import { emitUiEvent } from '../../lib/uiEvents';
 import { useSessionStore } from '../../stores/session';
+import { nearbyThings } from './hud/nearby';
 import { send, useDraft } from './panels/actions';
 import { usePanelContext, type PanelContext } from './panels/context';
 import { CreatureStatBlock } from './panels/CreatureStatBlock';
@@ -430,10 +431,43 @@ function PlayerDetails({ ctx, state, token }: { ctx: PanelContext; state: LiveSt
           )}
         </Section>
       )}
-      {token.kind === 'item' && (
-        <EmptyState compact icon={<Eye />} title={token.name} description="Un objeto en el mapa. Pide al DM que te lo entregue." />
-      )}
+      {token.kind === 'item' && <ItemTokenPickup ctx={ctx} state={state} token={token} />}
     </div>
+  );
+}
+
+/** Player view of an item token: "Recoger" when it is next to their hero (free action). */
+function ItemTokenPickup({ ctx, state, token }: { ctx: PanelContext; state: LiveState; token: Token }) {
+  const zonesById = useSessionStore((s) => s.zonesById);
+  const [busy, setBusy] = useState(false);
+  const allowed = sessionOptionsOf(state).playersCanPickUp;
+  const viewer = ctx.viewerId;
+  const hero = viewer ? Object.values(state.tokens).find((t) => isOwnHeroToken(state, t, viewer)) ?? null : null;
+  const near = !!hero && nearbyThings(state, zonesById, hero).some((n) => n.kind === 'item' && n.token.id === token.id);
+  const description = !allowed
+    ? 'Un objeto en el mapa. Pide al DM que te lo entregue.'
+    : near
+      ? 'Está a tu alcance. Recogerlo es gratis: no gasta acción ni movimiento.'
+      : 'Acércate a él para recogerlo (no gasta acción).';
+  const pickUp = async () => {
+    setBusy(true);
+    await send('token:pickup', { tokenId: token.id }, { success: `Recoges: ${token.name}`, error: 'No se pudo recoger el objeto' });
+    setBusy(false);
+  };
+  return (
+    <EmptyState
+      compact
+      icon={<Gift />}
+      title={token.name}
+      description={description}
+      action={
+        allowed && near && !ctx.isDm ? (
+          <Button size="sm" variant="primary" icon={<Hand />} loading={busy} onClick={() => void pickUp()}>
+            Recoger
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 

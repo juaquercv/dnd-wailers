@@ -5,6 +5,7 @@ import {
   emptyZoneLiveState,
   gridDistance,
   inventoryItemFromEntry,
+  isHeroTurn,
   newId,
   sessionOptionsOf,
   usageOf,
@@ -87,11 +88,12 @@ function requireOwnHero(ctx: HandlerCtx, heroIdRaw: unknown): HeroSheet {
 
 /**
  * Inside mutate: a combat action of `heroId`. A player is checked against the turn economy (own turn,
- * actions left); the DM spends without checks, and only while the turn economy applies.
+ * actions left); the DM acting for the hero spends without checks, only while the turn economy applies
+ * and it is that hero's turn (an action logged out of turn does not eat the next one).
  */
-function spendAction(ctx: HandlerCtx, state: LiveState, heroId: string, dmSpends: boolean): void {
+function spendAction(ctx: HandlerCtx, state: LiveState, heroId: string): void {
   if (ctx.isDm) {
-    if (dmSpends && economyApplies(state)) addUsage(state, heroId, { actions: 1 });
+    if (economyApplies(state) && isHeroTurn(state, heroId)) addUsage(state, heroId, { actions: 1 });
     return;
   }
   const check = checkPlayerAction(state, heroId);
@@ -167,7 +169,7 @@ function useAction(manager: SessionManagerApi, ctx: HandlerCtx, payload: { heroI
     ctx.session,
     (s) => {
       if (!s.heroes[hero.id]) throw new HandlerError('Ese héroe no está en la partida');
-      spendAction(ctx, s, hero.id, true);
+      spendAction(ctx, s, hero.id);
     },
     {
       log: {
@@ -195,7 +197,7 @@ function useItem(manager: SessionManagerApi, ctx: HandlerCtx, payload: { heroId:
       const h = s.heroes[hero.id];
       const it = h?.data.inventory.find((x) => x.id === itemId);
       if (!h || !it) throw new HandlerError(ITEM_GONE);
-      spendAction(ctx, s, h.id, false);
+      spendAction(ctx, s, h.id);
       if (!consume) return;
       if (it.quantity > 1) it.quantity -= 1;
       else h.data.inventory = h.data.inventory.filter((x) => x.id !== itemId);

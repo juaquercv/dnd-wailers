@@ -117,7 +117,8 @@ function validate(entries: SeedEntry[], campaigns: SeedCampaign[], rollers: Seed
       for (const sp of hero.data.spells) if (sp.entryId && kindOf(sp.entryId) !== 'spell') errors.push(`${e.name}: hechizo inexistente (${sp.entryId})`);
       if (!SEED_USERS.some((u) => u.id === hero.ownerId)) errors.push(`${e.name}: dueño inexistente (${hero.ownerId ?? 'ninguno'})`);
       const move = hero.data.moveCells;
-      if (typeof move !== 'number' || !Number.isInteger(move) || move < 0) errors.push(`${e.name}: movimiento por turno inválido`);
+      if (move != null && (!Number.isInteger(move) || move < 0)) errors.push(`${e.name}: movimiento por turno inválido`);
+      if (move == null && parseSpeedCells(hero.data.speed) === null) errors.push(`${e.name}: la velocidad no indica una distancia (movimiento por turno)`);
       const actions = hero.data.actionsPerTurn;
       if (typeof actions !== 'number' || !Number.isInteger(actions) || actions < 0 || actions > HERO_ACTIONS_PER_TURN_MAX) errors.push(`${e.name}: acciones por turno inválidas`);
     }
@@ -450,8 +451,8 @@ async function seedContent(prisma: PrismaClient, from: number, log: (msg: string
 /**
  * Seed v3 on a database seeded by an older version. Only rows created by the seed (matched by their seed ids)
  * are touched, and only with the fields v3 introduces: zone visions and the vision of the dark templates
- * (when not set), movement and combat actions per turn of the seed heroes (when missing; movement derived from
- * the hero's current speed) and the starting visibility of the seed campaigns (everyone sees everything and
+ * (when not set), movement and combat actions per turn of the seed heroes (when missing; movement stays null =
+ * derived from the hero's speed, unless the seed overrides it) and the starting visibility of the seed campaigns (everyone sees everything and
  * moves their own hero; darkness now comes from each zone's vision).
  */
 async function upgradeTurnEconomy(prisma: PrismaClient, log: (msg: string) => void): Promise<void> {
@@ -484,10 +485,7 @@ async function upgradeTurnEconomy(prisma: PrismaClient, log: (msg: string) => vo
     const seed = seedHeroes.get(row.id);
     if (!seed || !isPlainObject(row.data)) continue;
     const patch: Partial<HeroData> = {};
-    if (typeof row.data.moveCells !== 'number') {
-      const speed = typeof row.data.speed === 'string' ? row.data.speed : seed.speed;
-      patch.moveCells = parseSpeedCells(speed) ?? seed.moveCells ?? null;
-    }
+    if (row.data.moveCells === undefined) patch.moveCells = seed.moveCells ?? null;
     if (typeof row.data.actionsPerTurn !== 'number') patch.actionsPerTurn = seed.actionsPerTurn ?? DEFAULT_ACTIONS_PER_TURN;
     if (Object.keys(patch).length === 0) continue;
     await prisma.libraryEntry.update({ where: { id: row.id }, data: { data: json({ ...row.data, ...patch }) } });

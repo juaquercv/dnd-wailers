@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import clsx from 'clsx';
-import { Backpack, ChevronDown, ChevronUp, Dices, DoorClosed, DoorOpen, Hand, Handshake, SkipForward, Swords, WandSparkles } from 'lucide-react';
+import { Backpack, ChevronDown, ChevronUp, Dices, DoorClosed, DoorOpen, Hand, Handshake, Lock, SkipForward, Swords, WandSparkles } from 'lucide-react';
 import { isOwnHeroToken, type HeroSheet, type HeroSpell, type InventoryItem, type RuleSystem } from '@wailers/shared';
 import { Avatar } from '../../../components/ui/Avatar';
 import { isAnyModalOpen } from '../../../components/ui/Modal';
@@ -17,6 +17,7 @@ import { ActionMenu } from './ActionMenu';
 import { useHeroEconomy } from './economy';
 import { EconomyMeters, turnStatus, TurnStatusPill } from './EconomyMeters';
 import { HudPopover } from './HudPopover';
+import { usePublishHudLayout } from './hudLayout';
 import { ItemsMenu } from './ItemsMenu';
 import { nearbyThings, type NearbyThing } from './nearby';
 import { SpellsMenu } from './SpellsMenu';
@@ -41,6 +42,8 @@ export function PlayerHud() {
   const { state, rules, effective } = ctx;
   const zonesById = useSessionStore((s) => s.zonesById);
   const casting = useGameUi((s) => s.cast !== null);
+  // While a token is dragged the bar steps aside so it never swallows the drop.
+  const tokenDragging = useGameUi((s) => s.tokenDragging);
   const readOnly = ctx.isDm;
   const viewerId = ctx.viewerId;
   const heroId = state && viewerId ? state.players[viewerId]?.heroId ?? null : null;
@@ -54,6 +57,8 @@ export function PlayerHud() {
   const spellsRef = useRef<HTMLButtonElement>(null);
   const itemsRef = useRef<HTMLButtonElement>(null);
   const actionRef = useRef<HTMLButtonElement>(null);
+  const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
+  usePublishHudLayout(rootEl);
 
   const token = useMemo(() => {
     if (!state || !viewerId || !hero) return null;
@@ -129,7 +134,14 @@ export function PlayerHud() {
   const nextKey = () => String(++key);
 
   return (
-    <div className="pointer-events-none absolute bottom-3 left-3 z-[11] flex max-w-[calc(100%-4.75rem)] flex-col items-start gap-1.5">
+    <div
+      ref={setRootEl}
+      data-player-hud=""
+      className={clsx(
+        'pointer-events-none absolute bottom-3 left-3 z-[11] flex max-w-[calc(100%-4.75rem)] flex-col items-start gap-1.5 transition-opacity duration-200',
+        tokenDragging && 'opacity-30 [&_*]:!pointer-events-none',
+      )}
+    >
       {nearby.length > 0 && <NearbyChips things={nearby} readOnly={readOnly} />}
 
       {collapsed ? (
@@ -180,12 +192,13 @@ export function PlayerHud() {
               <Avatar name={hero.name} imageUrl={hero.imageUrl} color={player?.color} size={46} ring />
             </button>
             <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex items-center gap-2">
-                <h3 className="min-w-0 flex-1 truncate font-display text-[15px] font-bold leading-5 text-gold-100" title={hero.name}>
-                  {hero.name}
-                  <span className="ml-1.5 font-sans text-[10px] font-semibold text-gold-400/80">Nv {hero.level}</span>
+              {/* The name keeps its width: when it and the status do not fit on one line, the status wraps below. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h3 className="flex min-w-0 flex-[1_1_auto] items-baseline gap-1.5" title={`${hero.name} · nivel ${hero.level}`}>
+                  <span className="min-w-0 truncate font-display text-[15px] font-bold leading-5 text-gold-100">{hero.name}</span>
+                  <span className="shrink-0 text-[10px] font-semibold text-gold-400/80">Nv {hero.level}</span>
                 </h3>
-                <TurnStatusPill tone={status.tone} text={status.text} hint={status.hint} className="max-w-[12rem] shrink" />
+                <TurnStatusPill tone={status.tone} text={status.text} hint={status.hint} className="max-w-full" />
               </div>
               <HpBar size="sm" info={hpInfo} />
               <ResourceLine hero={hero} rules={rules} />
@@ -202,6 +215,12 @@ export function PlayerHud() {
           </div>
 
           {eco.combat && <EconomyMeters eco={eco} className="mt-2 rounded-xl border border-ink-600/70 bg-ink-900/70 px-2.5 py-1.5" />}
+          {eco.combat && !canMove && (
+            <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-amber-200">
+              <Lock className="h-3 w-3 shrink-0" aria-hidden />
+              El DM ha bloqueado el movimiento de tu ficha.
+            </p>
+          )}
 
           <div className="mt-2 flex flex-wrap gap-1.5">
             {showSpells && (
@@ -438,11 +457,11 @@ function NearbyChips({ things, readOnly }: { things: NearbyThing[]; readOnly: bo
             disabled={readOnly || busy !== null}
             onClick={() => void run(thing)}
             title={`${label} · acción gratuita: no gasta acción ni movimiento`}
-            className="pointer-events-auto flex max-w-[16rem] items-center gap-1.5 rounded-full border border-emerald-500/50 bg-ink-950/90 py-1 pl-2 pr-2.5 text-xs font-semibold text-emerald-100 shadow-panel backdrop-blur transition hover:border-emerald-400 hover:bg-emerald-500/15 disabled:opacity-60"
+            className="pointer-events-auto flex max-w-[20rem] items-center gap-1.5 rounded-full border border-emerald-500/50 bg-ink-950/90 py-1 pl-2 pr-2.5 text-xs font-semibold text-emerald-100 shadow-panel backdrop-blur transition hover:border-emerald-400 hover:bg-emerald-500/15 disabled:opacity-60"
           >
             <Icon className="h-3.5 w-3.5 shrink-0 text-emerald-300" aria-hidden />
             <span className="truncate">{label}</span>
-            <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 text-[9px] font-bold uppercase tracking-wider text-emerald-200">gratis</span>
+            <span className="shrink-0 rounded-full bg-emerald-500/20 px-1.5 text-[10px] font-semibold text-emerald-200">no gasta acción</span>
           </button>
         );
       })}

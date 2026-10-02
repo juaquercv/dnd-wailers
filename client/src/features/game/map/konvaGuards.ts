@@ -82,19 +82,72 @@ export function cleanupStaleDrags(pressStarting: boolean): number {
   return cleaned;
 }
 
-/** Layers whose batched draw got lost (their flag stayed up): redraw them now. */
-export function recoverStuckLayers(stage: Konva.Stage | null | undefined): void {
-  if (!stage) return;
-  for (const layer of stage.getLayers()) {
-    const patched = layer as unknown as PatchedLayer;
-    if (!patched._waitingForDraw) continue;
-    patched._waitingForDraw = false;
-    try {
-      layer.draw();
-    } catch (err) {
-      report(err);
+/** True while Konva is dragging a node (a live token drag). */
+export function isKonvaDragging(): boolean {
+  const elements = dragElements();
+  if (!elements) return false;
+  for (const elem of elements.values()) if (elem.dragStatus === 'dragging') return true;
+  return false;
+}
+
+interface AnimationInternals {
+  animations: { func?: AnimationFunc }[];
+  animRunning: boolean;
+  _runFrames: () => void;
+  _animationLoop: () => void;
+}
+
+type AnimationFunc = (this: unknown, frame: unknown) => unknown;
+
+const REPORT_EVERY_MS = 5000;
+let lastAnimReport = -Infinity;
+
+function reportAnimation(err: unknown): void {
+  const now = performance.now();
+  if (now - lastAnimReport < REPORT_EVERY_MS) return;
+  lastAnimReport = now;
+  report(err);
+}
+
+/**
+ * Konva.Animation runs every animation (tweens, pulses, pings, spell fx) in one loop that requeues itself only
+ * after all of them ran: one throwing frame would stop every map animation for good. Each animation frame is
+ * isolated (a failing one skips its redraw) and the loop always requeues while animations remain.
+ */
+function guardAnimationLoop(util: { requestAnimFrame: (cb: FrameCallback) => void }): void {
+  const anim = Konva.Animation as unknown as AnimationInternals;
+  if (typeof anim._runFrames !== 'function' || !Array.isArray(anim.animations)) return;
+  const guarded = new WeakSet<AnimationFunc>();
+  const runFrames = anim._runFrames.bind(anim);
+  anim._runFrames = () => {
+    for (const a of anim.animations) {
+      const func = a.func;
+      if (!func || guarded.has(func)) continue;
+      const safe: AnimationFunc = function safeFrame(this: unknown, frame: unknown) {
+        try {
+          return func.call(this, frame);
+        } catch (err) {
+          reportAnimation(err);
+          return false;
+        }
+      };
+      guarded.add(safe);
+      a.func = safe;
     }
-  }
+    runFrames();
+  };
+  anim._animationLoop = () => {
+    if (anim.animations.length === 0) {
+      anim.animRunning = false;
+      return;
+    }
+    try {
+      anim._runFrames();
+    } catch (err) {
+      reportAnimation(err);
+    }
+    util.requestAnimFrame(anim._animationLoop);
+  };
 }
 
 /** Installs the guards once (idempotent). */
@@ -128,12 +181,22 @@ export function installKonvaGuards(): void {
     return this;
   };
 
+  guardAnimationLoop(util);
+
   // Runs before Konva sees the press (capture on window): a lost release must not swallow this click.
   const onPress = () => {
     cleanupStaleDrags(true);
   };
   window.addEventListener('mousedown', onPress, true);
   window.addEventListener('touchstart', onPress, true);
+  // Konva keeps dragging on mousemove without checking the buttons: with the left button up, the release was
+  // lost, so the drag ends right there instead of the token following the cursor until the next click.
+  const onMove = (e: MouseEvent) => {
+    if (typeof e.buttons !== 'number' || (e.buttons & 1) !== 0) return;
+    const elements = dragElements();
+    if (elements && elements.size > 0) cleanupStaleDrags(true);
+  };
+  window.addEventListener('mousemove', onMove, true);
   // Releases that happen outside the page (alt-tab, dialogs): finish whatever was being dragged.
   const onLostFocus = () => {
     if (document.visibilityState === 'hidden' || !document.hasFocus()) cleanupStaleDrags(true);

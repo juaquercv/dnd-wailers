@@ -1,6 +1,7 @@
 import { Crosshair, Radar, X } from 'lucide-react';
 import { SPELL_ANIMATION_LABELS } from '@wailers/shared';
 import { Kbd } from '../../../components/ui/Kbd';
+import { useHeroEconomy } from '../hud/economy';
 import { useGameUi } from './gameUi';
 import { SPELL_COLORS } from './Indicators';
 
@@ -8,9 +9,11 @@ import { SPELL_COLORS } from './Indicators';
 export function ViewportBanners() {
   const cast = useGameUi((s) => s.cast);
   const pingMode = useGameUi((s) => s.pingMode);
+  const economy = useHeroEconomy(cast?.heroId ?? null);
 
   if (cast) {
     const color = SPELL_COLORS[cast.animation];
+    const costsAction = !!economy && !economy.unlimited && economy.limited;
     return (
       <div className="pointer-events-none absolute inset-x-0 top-14 z-30 flex justify-center px-3">
         <div
@@ -26,7 +29,7 @@ export function ViewportBanners() {
               Elige el objetivo de <span style={{ color }}>«{cast.spellName}»</span>
             </p>
             <p className="truncate text-[11px] text-parchment-400">
-              Haz clic en el mapa o en una ficha · animación: {SPELL_ANIMATION_LABELS[cast.animation]} · <Kbd>Esc</Kbd> cancela
+              Haz clic en el mapa o en una ficha · {costsAction ? 'gasta 1 acción de combate' : `animación: ${SPELL_ANIMATION_LABELS[cast.animation]}`} · <Kbd>Esc</Kbd> cancela
             </p>
           </div>
           <button
