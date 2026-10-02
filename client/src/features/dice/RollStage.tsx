@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { Lock, UserRound } from 'lucide-react';
-import { targetRotation, type RollResult } from '@wailers/shared';
+import { targetRotation, type DieResult, type RollResult } from '@wailers/shared';
 import { Badge } from '../../components/ui/Badge';
 import { uiSounds } from '../audio/uiSounds';
 import { D6Cube, DieView } from './DieShapes';
 import { RouletteWheel } from './RouletteWheel';
 import { useCountUp, useElapsed, useThrottled } from './diceHooks';
+import { prettyFormula } from './dicePool';
 import { hashString, hashUnit, MODE_LABELS, rollBreakdown, rollTitle, seededRandom } from './diceUtils';
 import './dice.css';
 
@@ -37,6 +38,8 @@ export interface RollStageProps {
   wheelSize?: number;
   /** Footer hint (overlay: "Clic o Esc para continuar"). */
   hint?: ReactNode;
+  /** Dice: time until the last die lands (read once, when the stage mounts). */
+  rollMs?: number;
 }
 
 export function RollStage(props: RollStageProps) {
@@ -78,7 +81,7 @@ function RollBadges({ roll, targetName, hideVisibility, badge }: { roll: RollRes
   if (roll.formula) {
     items.push(
       <span key="f" className="chip border-gold-700/50 bg-ink-950/70 font-mono text-gold-200">
-        {roll.formula}
+        {prettyFormula(roll.formula)}
       </span>,
     );
   }
@@ -177,65 +180,173 @@ function Crack({ width }: { width: number }) {
 // Standard dice
 // ---------------------------------------------------------------------------
 
+/** Dice drawn on the table; the rest are summarised (they always count in the total). */
+const MAX_VISIBLE_DICE = 12;
+
+export const DEFAULT_OVERLAY_ROLL_MS = 3500;
+const DEFAULT_INLINE_ROLL_MS = 2400;
+const REDUCED_ROLL_MS = 450;
+
 function dieSizeFor(count: number, variant: 'overlay' | 'inline'): number {
   if (variant === 'overlay') {
-    if (count <= 2) return 124;
-    if (count <= 4) return 106;
-    if (count <= 8) return 86;
-    if (count <= 16) return 66;
-    if (count <= 32) return 52;
-    return 40;
+    if (count <= 1) return 148;
+    if (count <= 2) return 132;
+    if (count <= 4) return 112;
+    if (count <= 6) return 96;
+    if (count <= 9) return 84;
+    return 72;
   }
-  if (count <= 2) return 84;
-  if (count <= 4) return 72;
-  if (count <= 8) return 58;
-  if (count <= 16) return 46;
-  return 34;
+  if (count <= 2) return 88;
+  if (count <= 4) return 74;
+  if (count <= 6) return 64;
+  if (count <= 9) return 54;
+  return 46;
 }
 
-function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targetName, rollerColor, extra, hideVisibility, badge, hint }: RollStageProps) {
+interface DieTrack {
+  /** Index in roll.dice. */
+  index: number;
+  die: DieResult;
+  /** ms after mount when the die stops on its real value. */
+  landAt: number;
+  /** Random faces shown while rolling: value[i] from times[i]. */
+  times: number[];
+  values: number[];
+  start: { sx: string; sy: string; rot: string };
+}
+
+/** Faces shown while a die rolls: changes fast at first and slows down until it lands. */
+function faceSchedule(sides: number, final: number, landMs: number, seed: number): { times: number[]; values: number[] } {
+  const rnd = seededRandom(seed ^ 0x5bd1e995);
+  const minGap = Math.max(35, Math.min(60, landMs / 40));
+  const maxGap = Math.max(minGap * 2, Math.min(380, landMs / 7));
+  const times: number[] = [];
+  const values: number[] = [];
+  let t = 0;
+  let prev = 0;
+  while (t < landMs) {
+    const gap = minGap + (maxGap - minGap) * Math.pow(t / landMs, 2.2);
+    let v = 1 + Math.floor(rnd() * sides);
+    if (sides > 2 && v === prev) v = (v % sides) + 1;
+    times.push(t);
+    values.push(v);
+    prev = v;
+    t += gap;
+    if (t + gap * 0.5 > landMs) break;
+  }
+  // The last random face differs from the result, so the landing is noticeable.
+  const last = values.length - 1;
+  if (last >= 0 && sides > 1 && values[last] === final) values[last] = (final % sides) + 1;
+  return { times, values };
+}
+
+function faceIndexAt(track: DieTrack, elapsed: number): number {
+  let i = 0;
+  while (i + 1 < track.times.length && track.times[i + 1]! <= elapsed) i++;
+  return i;
+}
+
+function visibleIndices(dice: DieResult[], critIndex: number): number[] {
+  const out = dice.slice(0, MAX_VISIBLE_DICE).map((_, i) => i);
+  if (critIndex >= MAX_VISIBLE_DICE) out[MAX_VISIBLE_DICE - 1] = critIndex;
+  return out;
+}
+
+function buildTracks(dice: DieResult[], indices: number[], seed: number, rollMs: number, overlay: boolean, reduced: boolean): DieTrack[] {
+  const rnd = seededRandom(seed);
+  const count = indices.length;
+  const spread = count <= 1 ? 0 : Math.min(reduced ? 140 : 950, rollMs * 0.3);
+  const order = indices.map((_, k) => k);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [order[i], order[j]] = [order[j]!, order[i]!];
+  }
+  const rank: number[] = new Array<number>(count).fill(0);
+  order.forEach((k, r) => {
+    rank[k] = r;
+  });
+  return indices.map((index, k) => {
+    const die = dice[index]!;
+    const landAt = count <= 1 ? rollMs : rollMs - spread + (rank[k]! / (count - 1)) * spread;
+    const side = rnd() < 0.5 ? -1 : 1;
+    const start = overlay
+      ? { sx: `${(side * (16 + rnd() * 30)).toFixed(1)}vw`, sy: `${(-(30 + rnd() * 24)).toFixed(1)}vh`, rot: `${Math.round(side * (620 + rnd() * 560))}deg` }
+      : { sx: `${Math.round(side * (60 + rnd() * 120))}px`, sy: `${Math.round(-(110 + rnd() * 90))}px`, rot: `${Math.round(side * (480 + rnd() * 420))}deg` };
+    const schedule = faceSchedule(die.sides, die.value, landAt, (seed + index * 7919) >>> 0);
+    return { index, die, landAt, start, ...schedule };
+  });
+}
+
+function RollingIndicator({ progress, big }: { progress: number; big: boolean }) {
+  return (
+    <span className={clsx('flex flex-col items-center gap-2', big ? 'py-2' : 'py-1')}>
+      <span className={clsx('wl-dots flex items-end gap-1.5 text-gold-300', big ? 'h-12' : 'h-9')} aria-hidden>
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="h-1 w-28 overflow-hidden rounded-full bg-ink-700">
+        <span className="block h-full rounded-full bg-gold-sheen transition-[width] duration-100 ease-linear" style={{ width: `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%` }} />
+      </span>
+    </span>
+  );
+}
+
+function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targetName, rollerColor, extra, hideVisibility, badge, hint, rollMs: rollMsProp }: RollStageProps) {
   const dice = roll.dice;
-  const n = dice.length;
   const overlay = variant === 'overlay';
-  const tumbleMs = reducedMotion ? 160 : 1150;
-  const stagger = reducedMotion || n <= 1 ? 0 : Math.min(90, 520 / (n - 1));
-  const landAt = (i: number) => tumbleMs + i * stagger;
-  const allLanded = n > 0 ? landAt(n - 1) : 0;
-  const countMs = reducedMotion ? 0 : 650;
+  const [rollMs] = useState(() => (reducedMotion ? REDUCED_ROLL_MS : rollMsProp ?? (overlay ? DEFAULT_OVERLAY_ROLL_MS : DEFAULT_INLINE_ROLL_MS)));
+  const seed = useMemo(() => hashString(roll.id), [roll.id]);
+  const critIndex = useMemo(() => (roll.crit ? dice.findIndex((d) => d.sides === 20 && !d.dropped) : -1), [roll.crit, dice]);
+  const indices = useMemo(() => visibleIndices(dice, critIndex), [dice, critIndex]);
+  const tracks = useMemo(() => buildTracks(dice, indices, seed, rollMs, overlay, reducedMotion), [dice, indices, seed, rollMs, overlay, reducedMotion]);
+  const lastTrack = useMemo(() => tracks.reduce<DieTrack | null>((a, t) => (!a || t.landAt > a.landAt ? t : a), null), [tracks]);
+  const hiddenCount = dice.length - indices.length;
+
+  const allLanded = lastTrack ? lastTrack.landAt : 0;
+  const countMs = reducedMotion ? 0 : 700;
   const critAt = allLanded + countMs + (reducedMotion ? 0 : 120);
   const settleAt = critAt + (roll.crit && !reducedMotion ? 750 : 150);
 
-  const elapsed = useElapsed(settleAt + 20, 55);
+  const elapsed = useElapsed(settleAt + 20, 33);
   const allDone = elapsed >= allLanded;
-  const showDropped = elapsed >= allLanded + 160;
+  const showDropped = elapsed >= allLanded + 180;
   const critOn = roll.crit !== null && elapsed >= critAt;
   const total = useCountUp(roll.total ?? 0, allDone, countMs);
-  const size = dieSizeFor(n, variant);
-  const seed = useMemo(() => hashString(roll.id), [roll.id]);
-  const critIndex = useMemo(() => (roll.crit ? dice.findIndex((d) => d.sides === 20 && !d.dropped) : -1), [roll.crit, dice]);
+  const size = dieSizeFor(indices.length, variant);
   const breakdown = rollBreakdown(roll);
   const onSettledRef = useLatest(onSettled);
+  const perRow = indices.length <= 6 ? Math.max(1, indices.length) : Math.ceil(indices.length / 2);
+  const rowWidth = perRow * (size + (overlay ? 22 : 12)) + 24;
 
-  const starts = useMemo(() => {
-    const rnd = seededRandom(seed);
-    return dice.map(() => {
-      const side = rnd() < 0.5 ? -1 : 1;
-      return overlay
-        ? { sx: `${(side * (18 + rnd() * 30)).toFixed(1)}vw`, sy: `${(-(28 + rnd() * 26)).toFixed(1)}vh`, rot: `${Math.round(side * (540 + rnd() * 600))}deg` }
-        : { sx: `${Math.round(side * (60 + rnd() * 120))}px`, sy: `${Math.round(-(110 + rnd() * 90))}px`, rot: `${Math.round(side * (420 + rnd() * 480))}deg` };
-    });
-  }, [seed, dice, overlay]);
-
-  const flags = useRef({ shake: false, land: false, crit: false, settled: false });
+  const sfx = useRef({ shake: false, shake2: false, landed: 0, landSounds: 0, lastLandAt: 0, tickIdx: -1, crit: false, settled: false });
   useEffect(() => {
-    const f = flags.current;
+    const f = sfx.current;
     if (!f.shake) {
       f.shake = true;
-      if (n > 0) uiSounds.diceShake();
+      if (tracks.length > 0) uiSounds.diceShake();
     }
-    if (!f.land && n > 0 && elapsed >= landAt(0)) {
-      f.land = true;
-      uiSounds.diceLand();
+    if (!f.shake2 && !reducedMotion && rollMs >= 2000 && elapsed >= rollMs * 0.25) {
+      f.shake2 = true;
+      uiSounds.diceShake();
+    }
+    const landed = tracks.reduce((n, t) => n + (elapsed >= t.landAt ? 1 : 0), 0);
+    if (landed > f.landed) {
+      f.landed = landed;
+      const now = performance.now();
+      if (f.landSounds < 5 && now - f.lastLandAt > 110) {
+        f.landSounds += 1;
+        f.lastLandAt = now;
+        uiSounds.diceLand();
+      }
+    }
+    if (lastTrack && lastTrack.die.sides !== 6 && !reducedMotion && elapsed < lastTrack.landAt) {
+      const i = faceIndexAt(lastTrack, elapsed);
+      if (i !== f.tickIdx) {
+        f.tickIdx = i;
+        const next = lastTrack.times[i + 1] ?? lastTrack.landAt;
+        if (i > 0 && next - lastTrack.times[i]! >= 130) uiSounds.tick();
+      }
     }
     if (!f.crit && critOn) {
       f.crit = true;
@@ -248,8 +359,6 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
     }
   });
 
-  const tickIndex = Math.floor(elapsed / 70);
-
   return (
     <>
       {/* Outside the shaking wrapper: a transformed ancestor would turn `fixed` into a local box. */}
@@ -257,51 +366,61 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
         <div className={clsx('wl-flash-red z-0', overlay ? 'fixed inset-0' : 'absolute -inset-4 rounded-2xl')} aria-hidden />
       )}
       <div className={clsx('relative flex w-full flex-col items-center', critOn && roll.crit === 'fail' && !reducedMotion && 'wl-shake')}>
-        <div className="relative z-[1] flex w-full items-center justify-center" style={{ minHeight: n > 0 ? size + 24 : 0 }}>
+        <div className="relative z-[1] flex w-full flex-col items-center justify-center" style={{ minHeight: tracks.length > 0 ? size + 28 : 0 }}>
           {critOn && roll.crit === 'success' && (
             <>
               <div className="wl-rays" style={{ '--wl-rays-size': overlay ? '680px' : '360px' } as CSSProperties} aria-hidden />
               <div className="wl-rays-core" style={{ '--wl-rays-size': overlay ? '680px' : '360px' } as CSSProperties} aria-hidden />
             </>
           )}
-          <div className={clsx('relative flex flex-wrap items-center justify-center', overlay ? 'max-w-[min(92vw,980px)] gap-x-5 gap-y-4 px-4' : 'max-w-full gap-3 px-2')}>
-            {dice.map((die, i) => {
-              const landed = elapsed >= landAt(i);
+          <div
+            className={clsx('relative flex flex-wrap items-center justify-center', overlay ? 'gap-x-[22px] gap-y-5 px-4' : 'gap-3 px-2')}
+            style={{ maxWidth: `min(${overlay ? '94vw' : '100%'}, ${rowWidth}px)` }}
+          >
+            {tracks.map((track) => {
+              const { die, index } = track;
+              const landed = elapsed >= track.landAt;
               const dropped = die.dropped && showDropped;
-              const glow = critOn && i === critIndex ? (roll.crit === 'success' ? 'wl-die-glow-gold' : 'wl-die-glow-blood') : null;
-              const start = starts[i]!;
-              const faceSeed = (seed + i * 7919 + tickIndex * 104729) >>> 0;
-              const shown = landed ? die.value : Math.floor(seededRandom(faceSeed)() * die.sides) + 1;
+              const glow = critOn && index === critIndex ? (roll.crit === 'success' ? 'wl-die-glow-gold' : 'wl-die-glow-blood') : null;
+              const shown = landed ? die.value : track.values[faceIndexAt(track, elapsed)] ?? die.value;
               return (
                 <div
-                  key={i}
+                  key={index}
                   className="wl-die"
                   style={
                     {
                       width: size,
                       height: size,
-                      '--wl-sx': start.sx,
-                      '--wl-sy': start.sy,
-                      '--wl-rot': die.sides === 6 ? '0deg' : start.rot,
-                      animationDuration: `${Math.max(1, landAt(i))}ms`,
+                      '--wl-sx': track.start.sx,
+                      '--wl-sy': track.start.sy,
+                      '--wl-rot': die.sides === 6 ? '0deg' : track.start.rot,
+                      '--wl-hop': `${Math.round(size * (overlay ? 0.42 : 0.34))}px`,
+                      animationDuration: `${Math.max(1, Math.round(track.landAt))}ms`,
+                      animationName: reducedMotion ? 'wl-fade-in' : undefined,
                     } as CSSProperties
                   }
-                  title={die.dropped ? `${die.value} (descartado)` : String(die.value)}
+                  title={landed ? (die.dropped ? `${die.value} (descartado)` : String(die.value)) : undefined}
                 >
-                  <div className={clsx('h-full w-full transition-transform', landed && 'wl-die-land', dropped && 'wl-die-dropped', glow)}>
+                  <div className={clsx('h-full w-full', landed && 'wl-die-land', dropped && 'wl-die-dropped', glow)}>
                     {die.sides === 6 ? (
-                      <D6Cube value={die.value} size={size} durationMs={reducedMotion ? 0 : landAt(i)} seed={(seed + i * 31) >>> 0} />
+                      <D6Cube value={die.value} size={size} durationMs={reducedMotion ? 0 : track.landAt} seed={(seed + index * 31) >>> 0} />
                     ) : (
                       <DieView sides={die.sides} value={shown} size={size} />
                     )}
                   </div>
+                  {landed && !reducedMotion && <span className="wl-die-impact" aria-hidden />}
                   {dropped && <span className="wl-die-strike" aria-hidden />}
                 </div>
               );
             })}
           </div>
+          {hiddenCount > 0 && (
+            <div className={clsx('relative z-[2] rounded-full border border-gold-700/60 bg-ink-900/90 px-3 py-1 text-xs font-semibold text-gold-200 shadow-panel', overlay ? 'mt-4' : 'mt-3')}>
+              +{hiddenCount} {hiddenCount === 1 ? 'dado más' : 'dados más'} (cuentan en el total)
+            </div>
+          )}
           {critOn && roll.crit === 'success' && <Particles seed={seed} count={overlay ? 34 : 18} distance={overlay ? 300 : 150} />}
-          {critOn && roll.crit === 'fail' && <Crack width={overlay ? Math.min(420, size * Math.max(1, n) + 140) : 240} />}
+          {critOn && roll.crit === 'fail' && <Crack width={overlay ? Math.min(420, size * Math.max(1, tracks.length) + 140) : 240} />}
         </div>
 
         {critOn && (
@@ -337,18 +456,20 @@ function DiceScene({ roll, variant, reducedMotion, onSettled, onCardClick, targe
         >
           <StageHeader roll={roll} rollerColor={rollerColor} verb="lanza" extra={extra} />
           <div className="mt-2 flex flex-col items-center">
-            <span className="label mb-0">Total</span>
-            <span
-              key={allDone ? 'final' : 'rolling'}
-              className={clsx(
-                'font-display font-bold leading-none tabular-nums',
-                overlay ? 'text-6xl sm:text-7xl' : 'text-5xl',
-                allDone && 'wl-total-pop',
-                critOn && roll.crit === 'success' ? 'title-epic' : critOn && roll.crit === 'fail' ? 'text-blood-400' : 'text-parchment-50',
-              )}
-            >
-              {allDone ? total : '…'}
-            </span>
+            <span className="label mb-0">{allDone ? 'Total' : 'Rodando…'}</span>
+            {allDone ? (
+              <span
+                className={clsx(
+                  'wl-total-pop font-display font-bold leading-none tabular-nums',
+                  overlay ? 'text-6xl sm:text-7xl' : 'text-5xl',
+                  critOn && roll.crit === 'success' ? 'title-epic' : critOn && roll.crit === 'fail' ? 'text-blood-400' : 'text-parchment-50',
+                )}
+              >
+                {total}
+              </span>
+            ) : (
+              <RollingIndicator progress={allLanded > 0 ? elapsed / allLanded : 1} big={overlay} />
+            )}
           </div>
           {breakdown && allDone && <div className="mt-2 break-words font-mono text-xs text-parchment-300">{breakdown}</div>}
           <RollBadges roll={roll} targetName={targetName} hideVisibility={hideVisibility} badge={badge} />
@@ -503,7 +624,7 @@ function CustomDieScene({ roll, variant, reducedMotion, onSettled, onCardClick, 
   const onSettledRef = useLatest(onSettled);
 
   useEffect(() => {
-    const totalMs = reducedMotion ? 220 : 1750;
+    const totalMs = reducedMotion ? 220 : 3000;
     const rnd = seededRandom(seed);
     let elapsed = 0;
     let delay = 55;

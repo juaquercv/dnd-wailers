@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import clsx from 'clsx';
-import { Music, Play, Square } from 'lucide-react';
+import { Music, Play, Square, Upload } from 'lucide-react';
 import type { LibraryEntry, SoundType } from '@wailers/shared';
 import { api } from '../../../api/http';
 import { Select, toast, type SelectOption } from '../../../components/ui';
 import { getEffectiveVolume } from '../../../stores/settings';
+import { onSoundLibraryChanged } from '../../audio/soundLibrary';
+import { useSoundUploader } from '../../audio/SoundUploader';
 
 // ---------------------------------------------------------------------------
 // Shared preview player (one sound at a time across every picker)
@@ -68,6 +70,7 @@ function usePreviewId(): string | null {
 // ---------------------------------------------------------------------------
 
 const soundCache = new Map<SoundType, Promise<LibraryEntry<'sound'>[]>>();
+onSoundLibraryChanged(() => soundCache.clear());
 
 function loadSounds(soundType: SoundType): Promise<LibraryEntry<'sound'>[]> {
   let p = soundCache.get(soundType);
@@ -89,12 +92,29 @@ export interface SoundPickerProps {
   className?: string;
 }
 
-/** Library sound select (music or ambience) with a ▶ preview button. */
+/** Library sound select (music or ambience) with a ▶ preview button and "Subir…" to add a new file. */
 export function SoundPicker({ label, soundType, value, onChange, className }: SoundPickerProps) {
   const [sounds, setSounds] = useState<LibraryEntry<'sound'>[]>([]);
   const [loading, setLoading] = useState(true);
   const [extra, setExtra] = useState<LibraryEntry<'sound'> | null>(null);
+  const [nonce, setNonce] = useState(0);
   const playing = usePreviewId();
+  const uploader = useSoundUploader({
+    types: [soundType],
+    defaultType: soundType,
+    multiple: false,
+    autoCloseOnSuccess: true,
+    title: soundType === 'music' ? 'Subir música de fondo' : 'Subir ambiente',
+    onUploaded: (entries) => {
+      const first = entries[0];
+      if (!first) return;
+      stopSoundPreview();
+      setSounds((list) => (list.some((s) => s.id === first.id) ? list : [...list, first].sort((a, b) => a.name.localeCompare(b.name, 'es'))));
+      onChange(first.id);
+    },
+  });
+
+  useEffect(() => onSoundLibraryChanged(() => setNonce((n) => n + 1)), []);
 
   useEffect(() => {
     let alive = true;
@@ -106,7 +126,7 @@ export function SoundPicker({ label, soundType, value, onChange, className }: So
     return () => {
       alive = false;
     };
-  }, [soundType]);
+  }, [soundType, nonce]);
 
   // A sound picked elsewhere (other type filter, deleted list…) is fetched to show its name.
   useEffect(() => {
@@ -171,12 +191,22 @@ export function SoundPicker({ label, soundType, value, onChange, className }: So
         >
           {isPlaying ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3.5 w-3.5 fill-current" />}
         </button>
+        <button
+          type="button"
+          onClick={uploader.pick}
+          title={soundType === 'music' ? 'Subir un archivo de música y usarlo aquí' : 'Subir un archivo de ambiente y usarlo aquí'}
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-ink-500 bg-ink-700 px-2 text-[11px] font-medium text-parchment-200 transition hover:border-gold-600 hover:text-gold-200"
+        >
+          <Upload className="h-3 w-3" />
+          Subir…
+        </button>
       </div>
       {!loading && sounds.length === 0 && (
         <p className="mt-1 text-[11px] text-parchment-400">
-          No hay sonidos de este tipo en la biblioteca. Súbelos desde la sección Sonidos.
+          No hay sonidos de este tipo en la biblioteca. Pulsa «Subir…» para añadir tu propio archivo.
         </p>
       )}
+      {uploader.element}
     </div>
   );
 }

@@ -209,6 +209,8 @@ function sanitizeHeroPatch(raw: Record<string, unknown>, maxLevel: number, goldL
     d.statuses = statuses.slice(0, 40);
   }
   if (raw.visionCells !== undefined) d.visionCells = raw.visionCells === null ? null : clamp(reqNum(raw.visionCells, 'visión'), 0, 200);
+  if (raw.moveCells !== undefined) d.moveCells = raw.moveCells === null ? null : reqInt(raw.moveCells, 'movimiento por turno', 0, 200);
+  if (raw.actionsPerTurn !== undefined) d.actionsPerTurn = reqInt(raw.actionsPerTurn, 'acciones por turno', 0, 20);
   if (raw.notes !== undefined) d.notes = longText(raw.notes, 'notas', 20000);
   return out;
 }
@@ -244,6 +246,8 @@ function applyHeroPatch(hero: HeroSheet, patch: HeroPatch): void {
   data.resources.mana.current = clamp(data.resources.mana.current, 0, Math.max(0, data.resources.mana.max));
   if (d.statuses !== undefined) data.statuses = d.statuses;
   if (d.visionCells !== undefined) data.visionCells = d.visionCells;
+  if (d.moveCells !== undefined) data.moveCells = d.moveCells;
+  if (d.actionsPerTurn !== undefined) data.actionsPerTurn = d.actionsPerTurn;
   if (d.notes !== undefined) data.notes = d.notes;
 }
 

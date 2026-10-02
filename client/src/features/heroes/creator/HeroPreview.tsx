@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import { Coins, Crown, Footprints, Heart, Shield, Sparkles, Swords, Zap } from 'lucide-react';
-import { ENTRY_KIND_LABELS, formatModifier } from '@wailers/shared';
+import { ENTRY_KIND_LABELS, formatModifier, heroMoveCells } from '@wailers/shared';
 import { Avatar } from '../../../components/ui/Avatar';
 import { formatGold, formatNumber } from '../../../lib/format';
 import { CategoryChip } from '../../library/common';
@@ -75,11 +75,15 @@ export function HeroPreview({ state, sheet, ctx, ownerName, ownerColor, full = f
         !full && <p className="text-center text-[11px] italic text-parchment-500">Sin raza ni clase todavía</p>
       )}
 
-      <div className={clsx('grid gap-1.5', full ? 'grid-cols-3 sm:grid-cols-6' : 'grid-cols-3')}>
+      <div className={clsx('grid gap-1.5', full ? 'grid-cols-3 sm:grid-cols-4' : 'grid-cols-3')}>
         <Stat icon={<Heart />} label="PV" value={formatNumber(sheet.hpMax, 0)} color="#ef8f88" />
         {rules.showAc && <Stat icon={<Shield />} label="CA" value={sheet.ac} />}
         {rules.showInitiative && <Stat icon={<Swords />} label="Inic." value={formatModifier(sheet.initiativeBonus)} />}
         {full && rules.showSpeed && <Stat icon={<Footprints />} label="Vel." value={state.speed || '—'} />}
+        {full && (
+          <Stat icon={<Footprints />} label="Mov./turno" value={`${heroMoveCells({ speed: state.speed, moveCells: state.moveCells })} cas.`} />
+        )}
+        {full && <Stat icon={<Zap />} label="Acciones" value={state.actionsPerTurn} color="#c9b6ff" />}
         {full && <Stat icon={<Crown />} label="Nivel" value={state.level} color="#f3d58a" />}
         {full && rules.currency.enabled && <Stat icon={<Coins />} label={currency || 'Oro'} value={formatGold(state.gold, true, null)} color="#f3d58a" />}
       </div>

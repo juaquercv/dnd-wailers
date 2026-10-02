@@ -1,3 +1,4 @@
+import { registerActionHandlers } from './handlers/actions';
 import { registerChatHandlers } from './handlers/chat';
 import { registerHeroHandlers } from './handlers/heroes';
 import { registerLobbyHandlers } from './handlers/lobby';
@@ -36,6 +37,7 @@ const GAMEPLAY_MODULES: ReadonlyArray<[string, HandlerModule]> = [
   ['visibilidad', registerVisibilityHandlers],
   ['tiradas', registerRollHandlers],
   ['audio y efectos', registerMediaHandlers],
+  ['acciones', registerActionHandlers],
 ];
 
 /** Creates the engine (once) and subscribes it to the domain bus. */

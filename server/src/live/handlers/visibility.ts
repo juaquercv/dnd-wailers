@@ -8,16 +8,20 @@ import {
   type VisibilitySettings,
   type VisionMode,
   type ZoneLiveState,
+  type ZoneVision,
 } from '@wailers/shared';
 import {
   clamp,
   clampToLevel,
   defaultLevel,
+  effectiveFor,
   isPlayer,
   longText,
   oneOf,
   optId,
+  parseZoneVision,
   plainObject,
+  playerIds,
   playerName,
   reqBool,
   reqId,
@@ -25,10 +29,12 @@ import {
   reqText,
   requireLevel,
   requireZone,
+  toast,
   urlOrNull,
   userColor,
+  zoneVisionLabel,
 } from '../helpers';
-import { HandlerError, type HandlerCtx, type HandlerModule, type SessionManagerApi } from '../types';
+import { HandlerError, type HandlerCtx, type HandlerModule, type LiveSession, type SessionManagerApi } from '../types';
 
 /*
  * Visibility handlers (DM): global / per-player settings, fog regions, explored memory, doors,
@@ -84,11 +90,28 @@ function zoneState(state: LiveState, zoneId: string): ZoneLiveState {
   return created;
 }
 
+/** Whether each player may move their own token right now. */
+function movementPermissions(state: LiveState): Map<string, boolean> {
+  return new Map(playerIds(state).map((uid) => [uid, effectiveFor(state, uid).canMoveOwnToken]));
+}
+
+/** Tell the players whose freedom of movement the DM just took away or gave back. */
+function announceMovementChanges(manager: SessionManagerApi, session: LiveSession, before: Map<string, boolean>): void {
+  if (session.state.status !== 'playing') return;
+  for (const [uid, now] of movementPermissions(session.state)) {
+    const was = before.get(uid);
+    if (was === undefined || was === now) continue;
+    if (now) toast(manager, session, { kind: 'users', userIds: [uid] }, 'success', '🔓 El DM te devuelve la libertad de movimiento: ya puedes mover tu ficha');
+    else toast(manager, session, { kind: 'users', userIds: [uid] }, 'warning', '🔒 El DM ha bloqueado el movimiento de tu ficha');
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 function setGlobal(manager: SessionManagerApi, ctx: HandlerCtx, payload: { patch: Partial<VisibilitySettings> }): null {
   const { set } = parseVisibilityPatch(payload.patch, false);
   if (Object.keys(set).length === 0) return null;
+  const before = movementPermissions(ctx.session.state);
   manager.mutate(
     ctx.session,
     (s) => {
@@ -96,6 +119,7 @@ function setGlobal(manager: SessionManagerApi, ctx: HandlerCtx, payload: { patch
     },
     { zones: true },
   );
+  announceMovementChanges(manager, ctx.session, before);
   return null;
 }
 
@@ -103,6 +127,7 @@ function setPlayer(manager: SessionManagerApi, ctx: HandlerCtx, payload: { userI
   const state = ctx.session.state;
   const userId = reqId(payload.userId, 'jugador');
   if (!isPlayer(state, userId)) throw new HandlerError('Ese jugador no está en la partida');
+  const before = movementPermissions(state);
   if (payload.patch === null) {
     if (!state.visibility.perPlayer[userId]) return null;
     manager.mutate(
@@ -112,6 +137,7 @@ function setPlayer(manager: SessionManagerApi, ctx: HandlerCtx, payload: { userI
       },
       { zones: true },
     );
+    announceMovementChanges(manager, ctx.session, before);
     return null;
   }
   const { set, clear } = parseVisibilityPatch(payload.patch, true);
@@ -124,6 +150,34 @@ function setPlayer(manager: SessionManagerApi, ctx: HandlerCtx, payload: { userI
       else s.visibility.perPlayer[userId] = next;
     },
     { zones: true },
+  );
+  announceMovementChanges(manager, ctx.session, before);
+  return null;
+}
+
+function sameVision(a: ZoneVision | null | undefined, b: ZoneVision | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.mode === b.mode && a.radius === b.radius && a.cone === b.cone;
+}
+
+/** DM: live vision of a zone (a dark cave...). null = back to the zone default from the campaign. */
+function setZoneVision(manager: SessionManagerApi, ctx: HandlerCtx, payload: { zoneId: string; vision: ZoneVision | null }): null {
+  const zone = requireZone(manager, ctx.session, payload.zoneId);
+  const vision = parseZoneVision(payload.vision);
+  const state = ctx.session.state;
+  if (sameVision(state.zoneStates[zone.id]?.vision, vision)) return null;
+  const fallback = state.zoneVision?.[zone.id] ?? null;
+  const text = vision
+    ? `👁️ Visión en ${zone.name}: ${zoneVisionLabel(vision)}`
+    : `👁️ Visión en ${zone.name}: vuelve a la de la zona (${zoneVisionLabel(fallback)})`;
+  manager.mutate(
+    ctx.session,
+    (s) => {
+      const zs = zoneState(s, zone.id);
+      if (vision) zs.vision = vision;
+      else delete zs.vision;
+    },
+    { zones: true, log: { type: 'system', text, actorUserId: ctx.userId, visibility: 'dm' } },
   );
   return null;
 }
@@ -341,6 +395,7 @@ export const registerVisibilityHandlers: HandlerModule = (socket, manager) => {
   manager.register(socket, 'fog:reveal', (ctx, payload) => fogReveal(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'fog:resetExplored', (ctx, payload) => fogResetExplored(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'door:toggle', (ctx, payload) => doorToggle(manager, ctx, payload), { dmOnly: true });
+  manager.register(socket, 'zone:vision', (ctx, payload) => setZoneVision(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'view:dm', (ctx, payload) => viewDm(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'show:open', (ctx, payload) => showOpen(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'show:close', (ctx) => showClose(manager, ctx), { dmOnly: true });

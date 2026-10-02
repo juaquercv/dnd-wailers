@@ -212,6 +212,8 @@ export function buildZonesA(): SeedZone[] {
       weather: 'fog',
       lighting: 'dark',
       levels: [fabrica],
+      // Smoke and darkness: each hero sees a few cells around them and remembers what was explored.
+      vision: { mode: 'explored', radius: 4, cone: 360 },
       // Sin música de zona: el Himno del dragón delataría al jefe oculto; el DM lo pone a mano al revelarlo.
       musicSoundId: null,
       ambienceSoundId: soundId('sala-de-maquinas'),

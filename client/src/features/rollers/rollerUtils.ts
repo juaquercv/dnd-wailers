@@ -9,6 +9,7 @@ import {
   type RollerKind,
   type RouletteSegment,
 } from '@wailers/shared';
+import { prettyFormula } from '../dice/dicePool';
 
 /** Editor helpers for campaign dice and roulettes (validation messages in Spanish). */
 
@@ -150,13 +151,13 @@ export function validateDraft(d: RollerDraft): DraftErrors {
       if (!errors.segments) errors.segments = 'Revisa los segmentos marcados en rojo';
     }
   } else if (d.diceMode === 'formula') {
-    if (!d.formula.trim()) errors.formula = 'Escribe una fórmula, por ejemplo 2d6+3';
+    if (!d.formula.trim()) errors.formula = 'Añade al menos un dado a la tirada';
     else {
       try {
         const parsed = parseFormula(d.formula);
-        if (parsed.terms.length === 0) errors.formula = 'La fórmula debe incluir al menos un dado';
+        if (parsed.terms.length === 0) errors.formula = 'Añade al menos un dado: el bono solo no se puede tirar';
       } catch (err) {
-        errors.formula = err instanceof Error ? err.message : 'Fórmula inválida';
+        errors.formula = err instanceof Error ? err.message : 'Tirada inválida';
       }
     }
   } else {
@@ -242,7 +243,7 @@ export function matchesQuery(r: Roller, query: string): boolean {
 export function rollerSummary(r: Roller): string {
   if (r.kind === 'roulette') return `${r.segments.length} ${r.segments.length === 1 ? 'segmento' : 'segmentos'}`;
   if (r.faces && r.faces.length > 0) return `${r.faces.length} caras personalizadas`;
-  return r.formula ?? '—';
+  return prettyFormula(r.formula) || '—';
 }
 
 /** All tags used by a set of rollers, most frequent first. */

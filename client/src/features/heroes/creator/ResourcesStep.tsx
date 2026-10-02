@@ -9,6 +9,7 @@ import { TextInput } from '../../../components/ui/TextInput';
 import { formatGold } from '../../../lib/format';
 import { SectionTitle } from '../../library/common';
 import { EntryPickerModal } from '../../library/editor/fields';
+import { TurnEconomyFields } from '../../library/editor/HeroFields';
 import { SPELL_ANIMATION_COLORS, spellLevelLabel } from '../../library/meta';
 import { HIT_DICE, heroSpellFromEntry, type HitDie } from '../heroUtils';
 import type { CreatorContext, CreatorState, DerivedSheet } from './state';
@@ -89,6 +90,13 @@ export function ResourcesStep({ state, onChange, ctx, sheet, campaignId, issues 
           ))}
         <TextInput label="Velocidad" value={state.speed} placeholder="9 m" onValueChange={(speed) => onChange({ speed })} />
       </section>
+
+      <TurnEconomyFields
+        speed={state.speed}
+        moveCells={state.moveCells}
+        actionsPerTurn={state.actionsPerTurn}
+        onChange={(patch) => onChange(patch)}
+      />
 
       <section className="rounded-xl border border-blood-700/40 bg-blood-500/[0.05] p-4">
         <SectionTitle icon={<Heart />}>Puntos de vida</SectionTitle>

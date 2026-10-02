@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import {
@@ -18,6 +18,7 @@ import {
   SearchX,
   SlidersHorizontal,
   Star,
+  Upload,
   Wand2,
   X,
 } from 'lucide-react';
@@ -40,6 +41,8 @@ import { useHotkeys } from '../../lib/hotkeys';
 import { useCurrentUser } from '../../stores/auth';
 import { useSettingsStore, type LibraryView } from '../../stores/settings';
 import { useUsers } from '../../stores/users';
+import { notifySoundLibraryChanged } from '../audio/soundLibrary';
+import { AUDIO_FORMATS_LABEL, dragHasFiles, useSoundUploader } from '../audio/SoundUploader';
 import { HeroCreatorModal } from '../heroes/HeroCreatorModal';
 import { ActiveFilters } from './ActiveFilters';
 import { CategoryManager } from './CategoryManager';
@@ -231,6 +234,7 @@ export default function LibraryPage() {
     if (!ok) return;
     try {
       await api.library.remove(entry.id);
+      if (entry.kind === 'sound') notifySoundLibraryChanged();
       patch((items) => items.filter((i) => i.id !== entry.id), entry.kind === kind ? -1 : 0);
       if (openId === entry.id) closeDetail();
       toast.success(`«${entry.name}» eliminado de la biblioteca`);
@@ -270,6 +274,48 @@ export default function LibraryPage() {
       applyEntry(saved);
     }
   };
+
+  // ----- sound uploads (Sonidos tab) -------------------------------------------------
+  const soundUploader = useSoundUploader({
+    defaultType: 'music',
+    extraCategoryIds: kind === 'sound' ? filters.categoryIds : undefined,
+    onUploaded: () => reload(),
+    renderCreatedAction: (entry, close) => (
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={<Eye />}
+        onClick={() => {
+          close();
+          openEntry(entry);
+        }}
+      >
+        Ver ficha
+      </Button>
+    ),
+  });
+  const [soundDropOver, setSoundDropOver] = useState(false);
+  const soundDrop =
+    kind === 'sound'
+      ? {
+          onDragOver: (e: DragEvent<HTMLElement>) => {
+            if (!dragHasFiles(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            if (!soundDropOver) setSoundDropOver(true);
+          },
+          onDragLeave: (e: DragEvent<HTMLElement>) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            setSoundDropOver(false);
+          },
+          onDrop: (e: DragEvent<HTMLElement>) => {
+            if (!dragHasFiles(e)) return;
+            e.preventDefault();
+            setSoundDropOver(false);
+            soundUploader.openWith(Array.from(e.dataTransfer.files));
+          },
+        }
+      : {};
 
   const onHeroCreated = (hero: LibraryEntry<'hero'>) => {
     setHeroCreatorOpen(false);
@@ -405,11 +451,26 @@ export default function LibraryPage() {
         <EmptyState
           icon={<KindIcon kind={kind} />}
           title={`Todavía no hay ${lowerLabel(label.plural)}`}
-          description="La biblioteca es compartida: todo lo que crees aquí estará disponible en todas las campañas."
+          description={
+            kind === 'sound'
+              ? `Sube tu música de fondo, ambientes y efectos (${AUDIO_FORMATS_LABEL}); puedes elegir varios archivos a la vez o arrastrarlos aquí.`
+              : 'La biblioteca es compartida: todo lo que crees aquí estará disponible en todas las campañas.'
+          }
           action={
-            <Button variant="primary" icon={kind === 'hero' ? <Wand2 /> : <Plus />} onClick={openNew}>
-              {kind === 'hero' ? 'Crear héroe' : newEntryLabel(kind)}
-            </Button>
+            kind === 'sound' ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button variant="primary" icon={<Upload />} onClick={soundUploader.pick}>
+                  Subir sonidos
+                </Button>
+                <Button variant="secondary" icon={<Plus />} onClick={openNew}>
+                  {newEntryLabel(kind)}
+                </Button>
+              </div>
+            ) : (
+              <Button variant="primary" icon={kind === 'hero' ? <Wand2 /> : <Plus />} onClick={openNew}>
+                {kind === 'hero' ? 'Crear héroe' : newEntryLabel(kind)}
+              </Button>
+            )
           }
         />
       );
@@ -492,6 +553,22 @@ export default function LibraryPage() {
               </Button>
               <Button variant="primary" size="sm" icon={<Wand2 />} onClick={() => setHeroCreatorOpen(true)} title="Asistente de creación (N)">
                 Crear héroe
+              </Button>
+            </>
+          ) : kind === 'sound' ? (
+            <>
+              <Button variant="secondary" size="sm" icon={<Plus />} onClick={openNew} title={`${newEntryLabel(kind)} (N)`}>
+                <span className="hidden sm:inline">{newEntryLabel(kind)}</span>
+                <span className="sm:hidden">Nuevo</span>
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Upload />}
+                onClick={soundUploader.pick}
+                title={`Sube uno o varios archivos de audio (${AUDIO_FORMATS_LABEL})`}
+              >
+                Subir sonidos
               </Button>
             </>
           ) : (
@@ -613,7 +690,16 @@ export default function LibraryPage() {
               </div>
             </div>
 
-            <div ref={scrollRef} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto">
+            <div ref={scrollRef} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto" {...soundDrop}>
+              {soundDropOver && kind === 'sound' && (
+                <div className="pointer-events-none sticky top-0 z-20 h-0">
+                  <div className="m-3 flex h-40 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-gold-400 bg-ink-950/90 text-center shadow-modal backdrop-blur-[2px]">
+                    <Upload className="h-7 w-7 text-gold-300" />
+                    <span className="font-display text-base font-semibold text-gold-200">Suelta para subir tus sonidos</span>
+                    <span className="text-xs text-parchment-400">{AUDIO_FORMATS_LABEL}</span>
+                  </div>
+                </div>
+              )}
               {loading && search.loaded && (
                 <div className="pointer-events-none sticky top-0 z-10 h-0.5 overflow-hidden">
                   <div className="h-full w-full animate-shimmer bg-[linear-gradient(90deg,transparent,#e9c063,transparent)] bg-[length:200%_100%]" />
@@ -671,6 +757,7 @@ export default function LibraryPage() {
       />
       <HeroCreatorModal open={heroCreatorOpen} onClose={() => setHeroCreatorOpen(false)} onCreated={onHeroCreated} rules={null} ownerId={userId} />
       <CategoryManager open={categoriesOpen} kind={kind} onClose={() => setCategoriesOpen(false)} />
+      {soundUploader.element}
       <QuickSearch
         open={quickOpen}
         onClose={() => setQuickOpen(false)}

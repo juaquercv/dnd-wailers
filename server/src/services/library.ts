@@ -12,6 +12,7 @@ import {
   ZONE_TYPE_LABELS,
   buildSearchText,
   cloneZoneContent,
+  defaultVisibility,
   emptyEntryData,
   newId,
   normalizeTag,
@@ -29,7 +30,19 @@ import {
 import { bus } from '../bus';
 import { prisma } from '../db';
 import { badRequest, forbidden, notFound } from '../http/errors';
-import { entryInclude, entryToDTO, parseLevels, toJson, withDefaults, type EntryRow } from './serializers';
+import {
+  HERO_ACTIONS_PER_TURN_MAX,
+  HERO_MOVE_CELLS_MAX,
+  ZONE_VISION_LIMITS,
+  entryInclude,
+  entryToDTO,
+  normalizeEntryData,
+  parseLevels,
+  parseZoneVision,
+  toJson,
+  withDefaults,
+  type EntryRow,
+} from './serializers';
 import { buildLibrarySearch, escapeLike, facetGroups, parseLibraryQuery, searchCountSql, searchIdsSql } from './search';
 
 /*
@@ -212,6 +225,23 @@ const spellDataSchema = z
   })
   .passthrough();
 
+/** ZoneVision: default vision inside a zone (radius in grid cells, cone in degrees; both rounded). */
+export const zoneVisionSchema = z.object({
+  mode: z.enum(['all', 'explored', 'vision'], {
+    errorMap: () => ({ message: 'Modo de visión no válido (opciones: all, explored, vision)' }),
+  }),
+  radius: num
+    .min(ZONE_VISION_LIMITS.radiusMin, 'El radio de visión no puede ser negativo')
+    .max(ZONE_VISION_LIMITS.radiusMax, `El radio de visión admite como máximo ${ZONE_VISION_LIMITS.radiusMax} casillas`)
+    .transform((value) => Math.round(value))
+    .default(defaultVisibility().visionRadius),
+  cone: num
+    .min(ZONE_VISION_LIMITS.coneMin, `El cono de visión debe medir al menos ${ZONE_VISION_LIMITS.coneMin}°`)
+    .max(ZONE_VISION_LIMITS.coneMax, `El cono de visión admite como máximo ${ZONE_VISION_LIMITS.coneMax}°`)
+    .transform((value) => Math.round(value))
+    .default(ZONE_VISION_LIMITS.coneMax),
+});
+
 const zoneDataSchema = z
   .object({
     content: z
@@ -223,6 +253,7 @@ const zoneDataSchema = z
         levels: z.array(z.record(z.unknown())).max(50, 'Demasiados niveles').optional(),
         defaultLevelId: z.string().max(100).optional(),
         notes: text(20000).optional(),
+        vision: zoneVisionSchema.nullable().optional(),
       })
       .passthrough()
       .optional(),
@@ -310,6 +341,12 @@ const heroDataSchema = z
     statuses: z.array(text(60)).max(50).optional(),
     visionCells: nonNeg.max(1000).nullable().optional(),
     notes: text(20000).optional(),
+    moveCells: nonNeg.max(HERO_MOVE_CELLS_MAX, `El movimiento admite como máximo ${HERO_MOVE_CELLS_MAX} casillas`).nullable().optional(),
+    actionsPerTurn: num
+      .int('Las acciones por turno deben ser un número entero')
+      .min(0, 'No puede ser negativo')
+      .max(HERO_ACTIONS_PER_TURN_MAX, `Como máximo ${HERO_ACTIONS_PER_TURN_MAX} acciones de combate por turno`)
+      .optional(),
   })
   .passthrough();
 
@@ -353,7 +390,7 @@ export function parseEntryInput(raw: unknown): ParsedEntryInput {
 
 /** Complete data document for a kind: the given (validated) value merged over the shared defaults. */
 export function completeEntryData<K extends EntryKind>(kind: K, data: unknown): EntryDataMap[K] {
-  const merged = withDefaults(emptyEntryData(kind), data ?? {});
+  const merged = normalizeEntryData(kind, withDefaults(emptyEntryData(kind), data ?? {})) as EntryDataMap[K];
   if (kind === 'zone') return normalizeZoneData(merged as ZoneTemplateData) as EntryDataMap[K];
   return merged;
 }
@@ -362,7 +399,7 @@ function normalizeZoneData(data: ZoneTemplateData): ZoneTemplateData {
   const content = data.content;
   const levels = parseLevels(content.levels, newId('tpl'), content.defaultLevelId);
   const defaultLevelId = levels.some((l) => l.id === content.defaultLevelId) ? content.defaultLevelId : levels[0]!.id;
-  return { ...data, content: { ...content, levels, defaultLevelId } };
+  return { ...data, content: { ...content, levels, defaultLevelId, vision: parseZoneVision(content.vision) } };
 }
 
 // ---------------------------------------------------------------------------

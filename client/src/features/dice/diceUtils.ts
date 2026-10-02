@@ -1,6 +1,5 @@
 import {
   describeRoll,
-  parseFormula,
   type DiceRollOutcome,
   type RollMode,
   type RollResult,
@@ -20,10 +19,6 @@ export const VISIBILITY_SHORT: Record<RollVisibility, string> = {
   player: 'Privada',
   secret: 'Secreta',
 };
-
-export const FORMULA_EXAMPLES = ['1d20+5', '2d6+3', '4d6kh3', '1d8+1d6+2', 'd%'];
-
-export const QUICK_DICE = [4, 6, 8, 10, 12, 20, 100] as const;
 
 /** Wheel easing (CSS and JS versions must match). */
 export const WHEEL_EASING_CSS = 'cubic-bezier(0.12, 0.8, 0.18, 1)';
@@ -86,25 +81,6 @@ export function rollBreakdown(roll: RollResult): string | null {
   } catch {
     return null;
   }
-}
-
-/** Spanish validation message for a formula, or null when valid. */
-export function formulaError(formula: string): string | null {
-  if (!formula.trim()) return 'Escribe una fórmula, por ejemplo 2d6+3';
-  try {
-    parseFormula(formula);
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : 'Fórmula inválida';
-  }
-}
-
-/** Appends a flat modifier to a formula ("1d20" + 5 → "1d20+5"). */
-export function combineFormula(formula: string, modifier: number): string {
-  const base = formula.trim();
-  if (!modifier) return base;
-  const mod = modifier > 0 ? `+${modifier}` : `-${Math.abs(modifier)}`;
-  return base ? `${base}${mod}` : String(modifier);
 }
 
 /** Splits a d100 value into the "tens" (00–90) and "units" (0–9) dice faces. */

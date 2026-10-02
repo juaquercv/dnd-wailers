@@ -1,4 +1,5 @@
 import {
+  DEFAULT_ACTIONS_PER_TURN,
   POINT_BUY_BUDGET,
   STANDARD_ARRAY,
   abilityModifier,
@@ -73,6 +74,9 @@ export interface CreatorState {
   /** null = DEX modifier. */
   initiativeBonus: number | null;
   speed: string;
+  /** null = derived from the speed. */
+  moveCells: number | null;
+  actionsPerTurn: number;
   gold: number;
   /** null = suggested by the rules (per level). */
   manaMax: number | null;
@@ -123,6 +127,8 @@ export function initialState(ctx: CreatorContext): CreatorState {
     ac: null,
     initiativeBonus: null,
     speed: '9 m',
+    moveCells: null,
+    actionsPerTurn: DEFAULT_ACTIONS_PER_TURN,
     gold: Math.max(0, ctx.rules.heroCreation.startingGold || 0),
     manaMax: null,
     spells: [],
@@ -308,6 +314,9 @@ export function validate(state: CreatorState, ctx: CreatorContext, options: Orig
   if (sheet.hpMax < 1 || sheet.hpMax > 9999) out.push({ step: 'resources', message: 'Los puntos de vida máximos deben ser al menos 1.' });
   if (sheet.ac < 0 || sheet.ac > 40) out.push({ step: 'resources', message: 'La clase de armadura debe estar entre 0 y 40.' });
   if (state.gold < 0) out.push({ step: 'resources', message: 'El oro inicial no puede ser negativo.' });
+  if (state.moveCells !== null && (state.moveCells < 0 || state.moveCells > 100))
+    out.push({ step: 'resources', message: 'El movimiento por turno va de 0 a 100 casillas.' });
+  if (state.actionsPerTurn < 0 || state.actionsPerTurn > 10) out.push({ step: 'resources', message: 'Las acciones de combate por turno van de 0 a 10.' });
   return out;
 }
 
@@ -337,6 +346,8 @@ export function heroData(state: CreatorState, sheet: DerivedSheet): HeroData {
     statuses: [],
     visionCells: null,
     notes: '',
+    moveCells: state.moveCells,
+    actionsPerTurn: state.actionsPerTurn,
   };
 }
 

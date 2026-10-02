@@ -33,13 +33,27 @@ const MIME_ALIASES: Record<string, string> = {
   'audio/mp3': 'audio/mpeg',
   'audio/x-mp3': 'audio/mpeg',
   'audio/x-mpeg': 'audio/mpeg',
+  'audio/mpeg3': 'audio/mpeg',
+  'audio/x-mpeg-3': 'audio/mpeg',
+  'audio/mpg': 'audio/mpeg',
   'audio/vnd.wave': 'audio/wav',
+  'audio/x-pn-wav': 'audio/wav',
   'audio/x-m4a': 'audio/mp4',
   'audio/m4a': 'audio/mp4',
+  'audio/x-mp4': 'audio/mp4',
+  'audio/mp4a-latm': 'audio/mp4',
   'audio/x-aac': 'audio/aac',
+  'audio/aacp': 'audio/aac',
+  'audio/x-hx-aac-adts': 'audio/aac',
   'audio/x-flac': 'audio/flac',
   'audio/opus': 'audio/ogg',
+  'audio/x-ogg': 'audio/ogg',
+  'audio/vorbis': 'audio/ogg',
   'application/ogg': 'audio/ogg',
+  'video/ogg': 'audio/ogg',
+  // MediaRecorder and some OSes label audio-only .webm files as video.
+  'video/webm': 'audio/webm',
+  'audio/x-webm': 'audio/webm',
 };
 
 /** Used when the browser sends application/octet-stream (or nothing). */
@@ -52,8 +66,11 @@ const EXT_TO_MIME: Record<string, string> = {
   svg: 'image/svg+xml',
   mp3: 'audio/mpeg',
   ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/ogg',
   wav: 'audio/wav',
   webm: 'audio/webm',
+  weba: 'audio/webm',
   m4a: 'audio/mp4',
   aac: 'audio/aac',
   flac: 'audio/flac',
@@ -73,10 +90,11 @@ function resolveType(rawMime: string, filename: string): { mime: string; ext: st
     const ext = EXT_TO_MIME[originalExt] === mime ? originalExt : MIME_TO_EXT[mime];
     return ext ? { mime, ext } : null;
   }
-  if (mime === '' || mime === 'application/octet-stream') {
-    const byExt = EXT_TO_MIME[originalExt];
-    return byExt ? { mime: byExt, ext: originalExt } : null;
-  }
+  const byExt = EXT_TO_MIME[originalExt];
+  if (!byExt) return null;
+  if (mime === '' || mime === 'application/octet-stream') return { mime: byExt, ext: originalExt };
+  // Unusual audio/video labels for a known audio extension (e.g. "audio/x-mpeg3" for .mp3): trust the extension.
+  if ((mime.startsWith('audio/') || mime.startsWith('video/')) && byExt.startsWith('audio/')) return { mime: byExt, ext: originalExt };
   return null;
 }
 

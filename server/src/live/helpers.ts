@@ -15,6 +15,7 @@ import {
   snapTokenCenter,
   visibleAreas,
   allowedZoneIds,
+  usageOf,
   HIDDEN_TURN_ENTRY_NAME,
   RARITIES,
   type EntryKind,
@@ -30,10 +31,13 @@ import {
   type TokenStats,
   type TransitionElement,
   type TurnEntry,
+  type TurnUsage,
   type VisibilitySettings,
+  type Wall,
   type Zone,
   type ZoneLevel,
   type ZoneNeighbors,
+  type ZoneVision,
 } from '@wailers/shared';
 import { prisma } from '../db';
 import { entryInclude, entryToDTO, isPlainObject } from '../services/serializers';
@@ -957,4 +961,100 @@ export function inventoriesArePublic(state: LiveState, except: ReadonlyArray<str
   return playerIds(state)
     .filter((uid) => !except.includes(uid))
     .every((uid) => effectiveVisibility(state, uid).canSeeOthersInventory);
+}
+
+// ---------------------------------------------------------------------------
+// Zone vision
+// ---------------------------------------------------------------------------
+
+export const ZONE_VISION_MODES: readonly ZoneVision['mode'][] = ['all', 'explored', 'vision'];
+export const ZONE_VISION_MAX_RADIUS = 60;
+
+/** Stored zone vision (campaign document or saved state) -> valid ZoneVision, or null. Never throws. */
+export function sanitizeZoneVision(value: unknown): ZoneVision | null {
+  if (!isPlainObject(value)) return null;
+  const mode = value.mode;
+  if (typeof mode !== 'string' || !(ZONE_VISION_MODES as readonly string[]).includes(mode)) return null;
+  const radius = typeof value.radius === 'number' && Number.isFinite(value.radius) ? clamp(Math.round(value.radius), 0, ZONE_VISION_MAX_RADIUS) : 6;
+  const cone = typeof value.cone === 'number' && Number.isFinite(value.cone) ? clamp(Math.round(value.cone), 10, 360) : 360;
+  return { mode: mode as ZoneVision['mode'], radius, cone };
+}
+
+/** Zone vision from an untrusted payload (null = back to the zone default). Throws a Spanish error. */
+export function parseZoneVision(value: unknown): ZoneVision | null {
+  if (value === null || value === undefined) return null;
+  const obj = plainObject(value, 'visión de la zona');
+  return {
+    mode: oneOf(ZONE_VISION_MODES, obj.mode, 'modo de visión'),
+    radius: obj.radius === undefined ? 6 : reqInt(obj.radius, 'radio de visión', 0, ZONE_VISION_MAX_RADIUS),
+    cone: obj.cone === undefined ? 360 : reqInt(obj.cone, 'cono de visión', 10, 360),
+  };
+}
+
+/** zoneId -> default vision of each campaign zone (what the server copies into state.zoneVision). */
+export function zoneVisionMap(zones: Zone[]): Record<string, ZoneVision | null> {
+  const out: Record<string, ZoneVision | null> = {};
+  for (const zone of zones) out[zone.id] = sanitizeZoneVision(zone.vision);
+  return out;
+}
+
+function cellsText(n: number): string {
+  return n === 1 ? '1 casilla' : `${n} casillas`;
+}
+
+/** "Solo lo que tiene delante (3 casillas, cono de 90°)" style label. */
+export function zoneVisionLabel(vision: ZoneVision | null): string {
+  if (!vision || vision.mode === 'all') return 'todo visible';
+  const cone = vision.cone < 360 ? `, cono de ${vision.cone}°` : '';
+  const what = vision.mode === 'explored' ? 'lo explorado' : 'lo que tiene delante';
+  return `solo ${what} (${cellsText(vision.radius)}${cone})`;
+}
+
+// ---------------------------------------------------------------------------
+// Turn economy
+// ---------------------------------------------------------------------------
+
+/** Inside mutate: add to (or subtract from) what a hero spent this turn. Values never go below 0. */
+export function addUsage(state: LiveState, heroId: string, delta: Partial<TurnUsage>): TurnUsage {
+  const current = usageOf(state, heroId);
+  const next: TurnUsage = {
+    moved: Math.max(0, current.moved + (delta.moved ?? 0)),
+    actions: Math.max(0, current.actions + (delta.actions ?? 0)),
+    bonusMove: Math.max(0, current.bonusMove + (delta.bonusMove ?? 0)),
+    bonusActions: Math.max(0, current.bonusActions + (delta.bonusActions ?? 0)),
+  };
+  state.turn.usage ??= {};
+  state.turn.usage[heroId] = next;
+  return next;
+}
+
+/** Inside mutate: a hero's turn starts again (nothing spent, no DM bonus). */
+export function resetUsage(state: LiveState, heroId: string): void {
+  if (state.turn.usage) delete state.turn.usage[heroId];
+}
+
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
+
+function pointSegmentDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  const t = lengthSq === 0 ? 0 : clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq, 0, 1);
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** Distance in px from a point to the nearest point of a wall polyline (Infinity without segments). */
+export function distanceToWall(p: Point, wall: Pick<Wall, 'points'>): number {
+  const pts = wall.points;
+  let best = Number.POSITIVE_INFINITY;
+  if (pts.length === 2 && Number.isFinite(pts[0]) && Number.isFinite(pts[1])) return Math.hypot(p.x - pts[0]!, p.y - pts[1]!);
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const a = { x: pts[i]!, y: pts[i + 1]! };
+    const b = { x: pts[i + 2]!, y: pts[i + 3]! };
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) continue;
+    best = Math.min(best, pointSegmentDistance(p, a, b));
+  }
+  return best;
 }

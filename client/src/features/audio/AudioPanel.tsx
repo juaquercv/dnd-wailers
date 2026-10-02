@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { Disc3, Headphones, Map as MapIcon, Music, Play, Radio, RefreshCw, SlidersHorizontal, Square, Volume2, Wind, Zap } from 'lucide-react';
+import { Check, Disc3, Headphones, Map as MapIcon, Music, Play, Radio, RefreshCw, SlidersHorizontal, Square, Upload, Volume2, Wind, Zap } from 'lucide-react';
 import { SOUND_TYPE_LABELS } from '@wailers/shared';
 import { emitAck } from '../../api/socket';
+import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { IconButton } from '../../components/ui/IconButton';
 import { SearchInput } from '../../components/ui/SearchInput';
@@ -16,6 +17,7 @@ import { audioEngine, type LoopChannel } from './audioEngine';
 import { NowPlaying } from './NowPlaying';
 import { PanelSection } from './PanelSection';
 import { useSoundSearch, type SoundEntry } from './soundLibrary';
+import { AUDIO_FORMATS_LABEL, dragHasFiles, useSoundUploader } from './SoundUploader';
 import { VolumeControls } from './VolumeControls';
 
 const MASTER_DEBOUNCE_MS = 200;
@@ -24,27 +26,136 @@ const FIRE_FEEDBACK_MS = 650;
 /** Music & sound sidebar. DM: full control of the session audio. Players: what is playing + own volumes. */
 export function AudioPanel() {
   const isDm = useIsDm();
+  return isDm ? <DmAudioPanel /> : <PlayerAudioPanel />;
+}
+
+function PlayerAudioPanel() {
   return (
     <div className="scroll-thin flex h-full min-h-0 flex-col gap-5 overflow-y-auto p-3">
       <PanelSection title="Sonando ahora" icon={<Disc3 />}>
-        <NowPlaying canControl={isDm} />
+        <NowPlaying />
       </PanelSection>
-      {isDm && (
-        <>
-          <ModeSection />
-          <TrackSection />
-          <MasterVolumeSection />
-          <SoundboardSection />
-        </>
-      )}
-      <PanelSection
-        title={isDm ? 'Mi volumen' : 'Volumen'}
-        icon={<SlidersHorizontal />}
-        description={isDm ? 'Solo afecta a lo que oyes tú en este dispositivo.' : 'Ajusta lo que oyes en este dispositivo.'}
-      >
-        <VolumeControls compact={isDm} />
+      <PanelSection title="Volumen" icon={<SlidersHorizontal />} description="Ajusta lo que oyes en este dispositivo.">
+        <VolumeControls />
       </PanelSection>
     </div>
+  );
+}
+
+function DmAudioPanel() {
+  const [trackChannel, setTrackChannel] = useState<LoopChannel>('music');
+  const [over, setOver] = useState(false);
+  const uploader = useSoundUploader({
+    defaultType: 'music',
+    title: 'Subir mis sonidos',
+    renderCreatedAction: (entry) => <PlayNowButton entry={entry} />,
+    onUploaded: (entries) => {
+      const looping = entries.find((e) => e.data.soundType === 'music' || e.data.soundType === 'ambience');
+      if (looping?.data.soundType === 'music' || looping?.data.soundType === 'ambience') setTrackChannel(looping.data.soundType);
+    },
+  });
+
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!over) setOver(true);
+  };
+  const onDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setOver(false);
+  };
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    setOver(false);
+    uploader.openWith(Array.from(e.dataTransfer.files));
+  };
+
+  return (
+    <div className="relative h-full min-h-0" onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      <div className="scroll-thin flex h-full min-h-0 flex-col gap-5 overflow-y-auto p-3">
+        <PanelSection title="Sonando ahora" icon={<Disc3 />}>
+          <NowPlaying canControl />
+        </PanelSection>
+        <UploadCallout onUpload={uploader.pick} />
+        <ModeSection />
+        <TrackSection channel={trackChannel} onChannelChange={setTrackChannel} onUpload={uploader.pick} />
+        <MasterVolumeSection />
+        <SoundboardSection onUpload={uploader.pick} />
+        <PanelSection title="Mi volumen" icon={<SlidersHorizontal />} description="Solo afecta a lo que oyes tú en este dispositivo.">
+          <VolumeControls compact />
+        </PanelSection>
+      </div>
+      {over && (
+        <div className="pointer-events-none absolute inset-2 z-10 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-gold-400 bg-ink-950/85 text-center backdrop-blur-[2px]">
+          <Upload className="h-8 w-8 text-gold-300" />
+          <span className="font-display text-base font-semibold text-gold-200">Suelta para subir tus sonidos</span>
+          <span className="px-6 text-xs text-parchment-400">{AUDIO_FORMATS_LABEL}</span>
+        </div>
+      )}
+      {uploader.element}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Upload
+// ---------------------------------------------------------------------------
+
+function UploadCallout({ onUpload }: { onUpload: () => void }) {
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-gold-700/50 bg-gradient-to-br from-gold-500/[0.12] via-ink-800/60 to-ink-900/80 p-3 shadow-[inset_0_1px_0_rgba(243,213,138,0.08)]">
+      <div className="flex items-start gap-2.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gold-600/60 bg-gold-500/15 text-gold-300">
+          <Upload className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="font-display text-sm font-semibold text-gold-200">Tus propios sonidos</div>
+          <p className="text-xs leading-snug text-parchment-300">
+            Sube música de fondo, ambientes o efectos ({AUDIO_FORMATS_LABEL}). Puedes elegir varios a la vez o arrastrarlos a este panel.
+          </p>
+        </div>
+      </div>
+      <Button variant="primary" block epic icon={<Upload />} onClick={onUpload}>
+        Subir sonidos
+      </Button>
+    </div>
+  );
+}
+
+/** Plays a freshly uploaded sound for everyone (music/ambience in manual mode, effects once). */
+function PlayNowButton({ entry }: { entry: SoundEntry }) {
+  const [busy, setBusy] = useState(false);
+  const [played, setPlayed] = useState(false);
+  const soundType = entry.data.soundType;
+  const looping = soundType !== 'effect';
+
+  const run = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (soundType === 'effect') await emitAck('audio:sfx', { soundId: entry.id });
+      else await emitAck('audio:play', { channel: soundType, soundId: entry.id });
+      setPlayed(true);
+    } catch (err) {
+      toast.fromError(err, 'No se pudo reproducir el sonido');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant={played && looping ? 'secondary' : 'primary'}
+      icon={played && looping ? <Check /> : <Play />}
+      loading={busy}
+      onClick={() => void run()}
+      title={looping ? 'Poner esta pista para todos (modo manual)' : 'Lanzar el efecto para todos'}
+    >
+      {played && looping ? 'Sonando' : 'Reproducir ahora'}
+    </Button>
   );
 }
 
@@ -99,8 +210,7 @@ function ModeSection() {
 // Music / ambience pickers
 // ---------------------------------------------------------------------------
 
-function TrackSection() {
-  const [channel, setChannel] = useState<LoopChannel>('music');
+function TrackSection({ channel, onChannelChange, onUpload }: { channel: LoopChannel; onChannelChange: (c: LoopChannel) => void; onUpload: () => void }) {
   const [query, setQuery] = useState('');
   const audio = useSessionStore((s) => s.view?.state.audio ?? null);
   const { items, loading, error, reload } = useSoundSearch(channel, query);
@@ -140,13 +250,18 @@ function TrackSection() {
     <PanelSection
       title="Pistas"
       icon={<Music />}
-      aside={<IconButton icon={<RefreshCw />} title="Recargar lista" size="xs" onClick={reload} />}
+      aside={
+        <>
+          <IconButton icon={<Upload />} title="Subir pistas" size="xs" onClick={onUpload} />
+          <IconButton icon={<RefreshCw />} title="Recargar lista" size="xs" onClick={reload} />
+        </>
+      }
     >
       <Tabs
         size="sm"
         fill
         value={channel}
-        onChange={setChannel}
+        onChange={onChannelChange}
         aria-label="Canal"
         items={[
           { id: 'music', label: 'Música', icon: <Music /> },
@@ -166,7 +281,14 @@ function TrackSection() {
             compact
             icon={channel === 'music' ? <Music /> : <Wind />}
             title={query ? 'Sin resultados' : `No hay pistas de ${label}`}
-            description={query ? 'Prueba con otras palabras.' : 'Añade sonidos en la Biblioteca para usarlos aquí.'}
+            description={query ? 'Prueba con otras palabras.' : 'Sube tus propios archivos y aparecerán aquí.'}
+            action={
+              query ? undefined : (
+                <Button size="sm" variant="secondary" icon={<Upload />} onClick={onUpload}>
+                  Subir sonidos
+                </Button>
+              )
+            }
           />
         ) : (
           <ul className="flex flex-col gap-0.5">
@@ -301,7 +423,7 @@ function MasterVolumeSection() {
 // Sound effects board
 // ---------------------------------------------------------------------------
 
-function SoundboardSection() {
+function SoundboardSection({ onUpload }: { onUpload: () => void }) {
   const [query, setQuery] = useState('');
   const { items, loading, error, reload } = useSoundSearch('effect', query);
   const [fired, setFired] = useState<{ id: string; n: number } | null>(null);
@@ -326,7 +448,12 @@ function SoundboardSection() {
       title="Efectos de sonido"
       icon={<Zap />}
       description="Pulsa un efecto para que suene para todos."
-      aside={<IconButton icon={<RefreshCw />} title="Recargar efectos" size="xs" onClick={reload} />}
+      aside={
+        <>
+          <IconButton icon={<Upload />} title="Subir efectos" size="xs" onClick={onUpload} />
+          <IconButton icon={<RefreshCw />} title="Recargar efectos" size="xs" onClick={reload} />
+        </>
+      }
     >
       <SearchInput value={query} onChange={setQuery} debounceMs={250} size="sm" placeholder="Buscar efectos…" />
       {loading && items.length === 0 ? (
@@ -340,7 +467,14 @@ function SoundboardSection() {
           compact
           icon={<Zap />}
           title={query ? 'Sin resultados' : 'No hay efectos de sonido'}
-          description={query ? 'Prueba con otras palabras.' : 'Añade sonidos de tipo «Efecto» en la Biblioteca.'}
+          description={query ? 'Prueba con otras palabras.' : 'Sube tus efectos (golpes, puertas, hechizos…) y lánzalos con un clic.'}
+          action={
+            query ? undefined : (
+              <Button size="sm" variant="secondary" icon={<Upload />} onClick={onUpload}>
+                Subir efectos
+              </Button>
+            )
+          }
         />
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(6.75rem,1fr))] gap-1.5">

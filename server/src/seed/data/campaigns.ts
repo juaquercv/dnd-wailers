@@ -7,7 +7,11 @@ import { mapUrl, type SeedZone } from './zoneKit';
 import { A, buildZonesA } from './zonesA';
 import { B, buildZonesB } from './zonesB';
 
-/** The two seeded campaigns with their overview maps, spawn points, rules and visibility defaults. */
+/**
+ * The two seeded campaigns with their overview maps, spawn points, rules and visibility defaults.
+ * Every player starts seeing everything (visionMode 'all') and may move their own hero; darker places
+ * (factory, crypt, chapel, cemetery) limit vision through their zone vision instead.
+ */
 
 export interface SeedCampaign {
   id: string;
@@ -61,7 +65,7 @@ function campaignA(): SeedCampaign {
       ],
     },
     spawn: { zoneId: A.ciudad.zone, levelId: A.ciudad.level, x: GEAR_CITY.spawn.x, y: GEAR_CITY.spawn.y },
-    defaultVisibility: { ...defaultVisibility(), visionMode: 'all', enemyHp: 'bar', canSeeOthersInventory: true },
+    defaultVisibility: { ...defaultVisibility(), visionMode: 'all', enemyHp: 'bar', canSeeOthersInventory: true, canMoveOwnToken: true },
     tags: ['#steampunk', '#dirigibles', 'aventura', 'nivel 3-5', 'vapor'],
     zones: buildZonesA(),
   };
@@ -91,7 +95,7 @@ function campaignB(): SeedCampaign {
       links: [{ id: newId('link'), fromPinId: pins.cementerio.id, toPinId: pins.cripta.id, style: 'path' }],
     },
     spawn: { zoneId: B.cementerio.zone, levelId: B.cementerio.level, x: CEMETERY.spawn.x, y: CEMETERY.spawn.y },
-    defaultVisibility: { ...defaultVisibility(), visionMode: 'explored', visionRadius: 6, enemyHp: 'hidden' },
+    defaultVisibility: { ...defaultVisibility(), visionMode: 'all', visionRadius: 6, enemyHp: 'hidden', canMoveOwnToken: true },
     tags: ['terror', 'no-muertos', 'mazmorra', 'espacios de conjuro'],
     zones: buildZonesB(),
   };

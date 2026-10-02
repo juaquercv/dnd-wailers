@@ -297,6 +297,18 @@ export interface ZoneNeighbors {
 }
 
 /** The editable content of a zone (shared by campaign zones and zone templates). */
+/**
+ * Default vision inside a zone (e.g. a dark cave). Players whose hero is in the zone get this vision
+ * unless the DM set a personal vision for them. null/undefined = campaign default (everything visible).
+ */
+export interface ZoneVision {
+  mode: 'all' | 'explored' | 'vision';
+  /** Grid cells, for 'explored' and 'vision'. */
+  radius: number;
+  /** Degrees (360 = full circle). */
+  cone: number;
+}
+
 export interface ZoneContent {
   zoneType: ZoneType;
   biome: string;
@@ -305,6 +317,8 @@ export interface ZoneContent {
   levels: ZoneLevel[];
   defaultLevelId: string;
   notes: string;
+  /** Default vision in this zone; null/undefined = campaign default. */
+  vision?: ZoneVision | null;
 }
 
 export interface Zone extends ZoneContent {

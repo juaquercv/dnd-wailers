@@ -1,9 +1,12 @@
 import {
+  DEFAULT_ACTIONS_PER_TURN,
+  DEFAULT_MOVE_CELLS,
   adaptHeroToRules,
   createRuleSystem,
   emptyHeroData,
   inventoryItemFromEntry,
   newId,
+  parseSpeedCells,
   type HeroData,
   type HeroSpell,
   type InventoryItem,
@@ -50,6 +53,10 @@ export interface HeroDef {
   /** Explicit max mana ("Vapor" in the steampunk campaign); default 10 × level + 10 for casters. */
   vapor?: number;
   visionCells: number | null;
+  /** Movement per turn in grid cells; default: derived from `speed` (1 cell = 1,5 m). */
+  moveCells?: number;
+  /** Combat actions per turn; default 1. */
+  actionsPerTurn?: number;
   notes: string;
   tags: string[];
   origin?: 'A' | 'B';
@@ -349,6 +356,11 @@ function spells(def: HeroDef): HeroSpell[] {
   });
 }
 
+/** Explicit movement per turn of a seed hero: 5 cells for 7,5 m (dwarves, halflings, gnomes), 6 for 9 m, 7 for 10,5 m… */
+export function heroMoveCellsOf(def: Pick<HeroDef, 'speed' | 'moveCells'>): number {
+  return def.moveCells ?? parseSpeedCells(def.speed) ?? DEFAULT_MOVE_CELLS;
+}
+
 function heroData(def: HeroDef): HeroData {
   const base = emptyHeroData();
   let data: HeroData = {
@@ -369,6 +381,8 @@ function heroData(def: HeroDef): HeroData {
     },
     visionCells: def.visionCells,
     notes: def.notes,
+    moveCells: heroMoveCellsOf(def),
+    actionsPerTurn: def.actionsPerTurn ?? DEFAULT_ACTIONS_PER_TURN,
   };
   // Make the sheet ready for both campaign magic systems (never destroys existing values).
   data = adaptHeroToRules(data, createRuleSystem('mana'), def.level);

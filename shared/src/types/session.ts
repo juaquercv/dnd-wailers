@@ -58,6 +58,10 @@ export interface TurnState {
   order: TurnEntry[];
   currentIndex: number;
   round: number;
+  /** Combat mode: the turn economy (movement + combat actions per turn) applies. undefined = false (exploration). */
+  combat?: boolean;
+  /** heroId -> what that hero spent in its current turn. */
+  usage?: Record<string, TurnUsage>;
 }
 
 /** Creature details snapshot (stripped for players without permission). */
@@ -154,6 +158,27 @@ export interface VisibilitySettings {
 
 export interface SessionOptions {
   tradeNeedsApproval: boolean;
+  /**
+   * While combat is active (turn.combat), players move only on their own turn, limited by their hero's
+   * movement per turn, and spend combat actions (spells, using items, attacks). Default true.
+   * Free actions never cost anything: picking up items, doors, trades, chat, pings.
+   */
+  turnEconomy?: boolean;
+  /** Players may pick up item tokens next to their hero (free action). Default true. */
+  playersCanPickUp?: boolean;
+  /** Players may open/close doors next to their hero (free action). Default true. */
+  playersCanUseDoors?: boolean;
+}
+
+/** What a hero has spent in the current turn (reset when that hero's turn starts). */
+export interface TurnUsage {
+  /** Grid cells moved. */
+  moved: number;
+  /** Combat actions used. */
+  actions: number;
+  /** Extra movement / actions granted by the DM this turn. */
+  bonusMove: number;
+  bonusActions: number;
 }
 
 export interface ZoneLiveState {
@@ -164,6 +189,8 @@ export interface ZoneLiveState {
   /** Overrides of the zone defaults (null = use zone default). */
   weather: WeatherType | null;
   lighting: LightingPreset | null;
+  /** Live override of the zone vision set by the DM (null/undefined = zone default from the campaign). */
+  vision?: import('./campaign').ZoneVision | null;
 }
 
 export interface AudioState {
@@ -224,6 +251,15 @@ export interface LiveState {
   instantiatedZones: string[];
   turn: TurnState;
   zoneStates: Record<string, ZoneLiveState>;
+  /**
+   * zoneId -> default vision of that zone, copied by the server from the campaign zones (kept in sync),
+   * so the vision of each player can be computed from the state alone (see effectiveVisibility).
+   */
+  zoneVision?: Record<string, import('./campaign').ZoneVision | null>;
+  /**
+   * `global` = starting values for every player (everything visible by default); `perPlayer` = what the DM
+   * set for one player. A player's vision follows the zone their hero is in unless perPlayer sets it.
+   */
   visibility: { global: VisibilitySettings; perPlayer: Record<string, Partial<VisibilitySettings>> };
   options: SessionOptions;
   /** userId -> levelId -> base64 bitset of explored grid cells (see vision.ts). */

@@ -2,6 +2,7 @@ import {
   LIGHTING_PRESETS,
   SPELL_ANIMATIONS,
   WEATHER_TYPES,
+  checkPlayerAction,
   emptyZoneLiveState,
   normalizeText,
   type AudioState,
@@ -14,6 +15,7 @@ import {
 import { prisma } from '../../db';
 import { entryInclude, entryToDTO } from '../../services/serializers';
 import {
+  addUsage,
   clamp,
   clampToLevel,
   colorValue,
@@ -26,6 +28,7 @@ import {
   plainObject,
   playerHero,
   reqId,
+  reqBool,
   reqNum,
   reqText,
   requireHero,
@@ -251,10 +254,21 @@ function fxLighting(manager: SessionManagerApi, ctx: HandlerCtx, payload: { zone
 async function spellCast(
   manager: SessionManagerApi,
   ctx: HandlerCtx,
-  payload: { heroId?: string; tokenId?: string; spellName: string; animation: SpellAnimation; zoneId: string; levelId: string; x: number; y: number },
+  payload: {
+    heroId?: string;
+    tokenId?: string;
+    spellName: string;
+    animation: SpellAnimation;
+    zoneId: string;
+    levelId: string;
+    x: number;
+    y: number;
+    free?: boolean;
+  },
 ): Promise<null> {
   const state = ctx.session.state;
   requirePlaying(ctx);
+  if (payload.free !== undefined && payload.free !== null) reqBool(payload.free, 'gratis');
   const spellName = reqText(payload.spellName, 'hechizo', 120, 1);
   const animation = oneOf(SPELL_ANIMATIONS, payload.animation, 'animación');
   const { zone, level } = requireLevel(manager, ctx.session, payload.zoneId, payload.levelId);
@@ -280,6 +294,21 @@ async function spellCast(
   if (!ctx.isDm && caster && (caster.zoneId !== zone.id || caster.levelId !== level.id)) {
     throw new HandlerError('Solo puedes lanzar hechizos donde está tu héroe');
   }
+  // In combat a player's spell spends one combat action of their hero (checked and spent atomically).
+  // The DM's casts never spend.
+  if (!ctx.isDm && hero) {
+    const heroId = hero.id;
+    const precheck = checkPlayerAction(state, heroId);
+    if (!precheck.ok) throw new HandlerError(precheck.reason);
+    if (precheck.cost > 0) {
+      manager.mutate(ctx.session, (s) => {
+        const check = checkPlayerAction(s, heroId);
+        if (!check.ok) throw new HandlerError(check.reason);
+        addUsage(s, heroId, { actions: check.cost });
+      });
+    }
+  }
+
   const sameLevel = caster !== undefined && caster.zoneId === zone.id && caster.levelId === level.id;
   const casterName = hero?.name ?? caster?.name ?? null;
   const hiddenCaster = caster !== undefined && caster.hidden;

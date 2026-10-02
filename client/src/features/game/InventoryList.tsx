@@ -6,6 +6,7 @@ import {
   Coins,
   EyeOff,
   Gift,
+  Hand,
   HandCoins,
   Handshake,
   Minus,
@@ -33,6 +34,8 @@ import { AddItemModal } from './panels/AddItemModal';
 import { actsAsOwner, canSeeInventoryOf, partyMembers, usePanelContext, type PanelContext } from './panels/context';
 import { useItemDropTarget } from './panels/itemDrop';
 import { draftFromItem, ItemFormModal, type ItemDraft } from './panels/ItemForm';
+import { asksToConsume, ItemUseConfirm, sendItemUse } from './panels/itemUse';
+import { useHeroEconomy } from './hud/economy';
 import { TradeDialog } from './TradeDialog';
 
 export interface InventoryListProps {
@@ -64,6 +67,8 @@ export function InventoryList({ heroId, tokenId, readOnly = false }: InventoryLi
   const [editing, setEditing] = useState<InventoryItem | null>(null);
   const [trade, setTrade] = useState<{ itemId: string | null } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [using, setUsing] = useState<string | null>(null);
+  const eco = useHeroEconomy(hero?.id ?? null);
 
   const dropTarget = hero ? { heroId: hero.id } : token ? { tokenId: token.id } : {};
   const { over, dropProps } = useItemDropTarget(dropTarget, manage && !!source);

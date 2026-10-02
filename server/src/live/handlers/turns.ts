@@ -1,5 +1,7 @@
 import {
+  currentTurnEntry,
   effectiveVisibility,
+  heroIdOfEntry,
   newId,
   secureRandomInt,
   type HeroSheet,
@@ -10,7 +12,7 @@ import {
   type TurnEntry,
 } from '@wailers/shared';
 import { isPlainObject } from '../../services/serializers';
-import { playerKnowsTurnEntry } from '../helpers';
+import { playerKnowsTurnEntry, resetUsage } from '../helpers';
 import type { SessionManager } from '../SessionManager';
 import {
   HandlerError,
@@ -206,6 +208,9 @@ export function turnPointer(state: LiveState): TurnPointer {
  */
 export function landCurrentTurn(session: LiveSession, state: LiveState, opts: MutateOptions): TurnLanding | null {
   const entry = state.turn.order[state.turn.currentIndex];
+  // A new turn: the movement and combat actions of that hero are available again.
+  const startingHeroId = heroIdOfEntry(state, entry ?? null);
+  if (startingHeroId) resetUsage(state, startingHeroId);
   if (!entry || state.status !== 'playing') {
     state.turnOffer = null;
     return null;
@@ -355,13 +360,14 @@ function initiativeOf(value: unknown): number | null {
 // Handlers
 // ---------------------------------------------------------------------------
 
-function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1): null {
+function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1, before?: (state: LiveState, opts: MutateOptions) => void): null {
   if (ctx.session.state.turn.order.length === 0) throw new HandlerError(EMPTY_ORDER);
   const opts: MutateOptions = {};
   const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     ctx.session,
     (state) => {
+      before?.(state, opts);
       const length = state.turn.order.length;
       if (length === 0) throw new HandlerError(EMPTY_ORDER);
       const current = Math.min(Math.max(state.turn.currentIndex, 0), length - 1);
@@ -549,6 +555,72 @@ function setOrder(manager: SessionManager, ctx: HandlerCtx, orderRaw: unknown): 
   return null;
 }
 
+/** Whether a turn entry is the player's own turn (their hero's entry or their player entry). */
+function isOwnTurnEntry(state: LiveState, entry: TurnEntry, userId: string): boolean {
+  const heroId = state.players[userId]?.heroId ?? null;
+  return (heroId !== null && heroIdOfEntry(state, entry) === heroId) || entry.userId === userId;
+}
+
+/** Player: end their own turn (same as turn:next). The DM may use it too. */
+function endMyTurn(manager: SessionManager, ctx: HandlerCtx): null {
+  if (ctx.isDm) return moveTurn(manager, ctx, 1);
+  if (ctx.session.state.status !== 'playing') throw new HandlerError('La partida todavía no ha empezado');
+  const check = (state: LiveState): TurnEntry => {
+    const entry = currentTurnEntry(state);
+    if (!entry) throw new HandlerError(EMPTY_ORDER);
+    if (!isOwnTurnEntry(state, entry, ctx.userId)) throw new HandlerError('No es tu turno');
+    return entry;
+  };
+  check(ctx.session.state);
+  return moveTurn(manager, ctx, 1, (state, opts) => {
+    const entry = check(state);
+    const news: TurnNews = { text: `⏭️ ${entry.name} termina su turno`, data: { entryId: entry.id, round: state.turn.round } };
+    appendTurnNews(opts, state, news, () => news);
+  });
+}
+
+/**
+ * DM: start/stop combat. Starting zeroes every hero's usage and announces the current turn like any
+ * turn landing (an empty order is filled with the players first). Stopping returns to free exploration.
+ */
+function setCombat(manager: SessionManager, ctx: HandlerCtx, activeRaw: unknown): null {
+  if (typeof activeRaw !== 'boolean') throw new HandlerError('Valor no válido para «combate»');
+  const active = activeRaw;
+  const session = ctx.session;
+  if (session.state.status !== 'playing') throw new HandlerError('La partida todavía no ha empezado');
+  if ((session.state.turn.combat === true) === active) return null;
+  const opts: MutateOptions = {};
+  const out: { landing: TurnLanding | null } = { landing: null };
+  manager.mutate(
+    session,
+    (state) => {
+      state.turn.usage = {};
+      state.turn.combat = active;
+      if (!active) {
+        appendLog(opts, { type: 'turn', text: '🕊️ Fin del combate', visibility: 'all' });
+        return;
+      }
+      appendLog(opts, { type: 'turn', text: '⚔️ ¡Comienza el combate!', visibility: 'all' });
+      if (state.turn.order.length === 0) {
+        syncPlayerEntries(state);
+        if (state.turn.order.length > 0) out.landing = landFreshOrder(session, state, opts);
+      } else {
+        out.landing = landCurrentTurn(session, state, opts);
+      }
+    },
+    opts,
+  );
+  if (out.landing) announceTurnStart(manager, session, out.landing);
+  if (active && session.state.turn.order.length === 0) {
+    manager.emitEvent(
+      session,
+      { type: 'toast', level: 'warning', text: 'Combate iniciado, pero no hay nadie en el orden de turnos: añade participantes.' },
+      { kind: 'dm' },
+    );
+  }
+  return null;
+}
+
 export function registerTurnHandlers(socket: AppSocket, manager: SessionManager): void {
   const dmOnly = { dmOnly: true };
 
@@ -598,6 +670,8 @@ export function registerTurnHandlers(socket: AppSocket, manager: SessionManager)
   );
 
   manager.register(socket, 'turn:update', (ctx, payload) => updateEntry(manager, ctx, payload), dmOnly);
+  manager.register(socket, 'turn:endMine', (ctx) => endMyTurn(manager, ctx));
+  manager.register(socket, 'combat:set', (ctx, payload) => setCombat(manager, ctx, payload.active), dmOnly);
 
   manager.register(
     socket,

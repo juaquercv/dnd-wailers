@@ -8,6 +8,7 @@ import {
   Castle,
   Coins,
   Eye,
+  Footprints,
   Gem,
   Heart,
   Info,
@@ -38,6 +39,8 @@ import {
   ZONE_TYPE_LABELS,
   abilityModifier,
   formatModifier,
+  heroActionsPerTurn,
+  heroMoveCells,
   inventoryLoad,
   type AbilityScores,
   type CategoryDTO,
@@ -53,7 +56,7 @@ import {
 } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { RarityBadge, withAlpha } from '../../components/ui/Badge';
-import { formatCr, formatDate, formatDuration, formatGold, formatNumber, formatRelative, formatWeight } from '../../lib/format';
+import { formatCr, formatDate, formatDuration, formatGold, formatNumber, formatRelative, formatWeight, plural } from '../../lib/format';
 import { useCategoriesStore } from '../../stores/categories';
 import { useSessionStore } from '../../stores/session';
 import { useUser } from '../../stores/users';
@@ -705,6 +708,8 @@ function HeroBlock({ entry, compact }: { entry: HeroEntry; compact: boolean }) {
   const currency = rules?.currency.short ?? 'po';
   const load = inventoryLoad(d);
   const statuses = STATUSES.filter((s) => d.statuses?.includes(s.key));
+  const moveCells = heroMoveCells({ speed: d.speed ?? '', moveCells: d.moveCells });
+  const actionsPerTurn = heroActionsPerTurn(d);
 
   return (
     <section className="flex flex-col gap-4">
@@ -750,6 +755,15 @@ function HeroBlock({ entry, compact }: { entry: HeroEntry; compact: boolean }) {
           <Prop label="PX">{formatNumber(d.xp ?? 0, 0)}</Prop>
           <Prop label="Oro" icon={<Coins />}>
             <span className="text-gold-200">{formatGold(d.gold ?? 0, true, currency)}</span>
+          </Prop>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Prop label="Movimiento por turno" icon={<Footprints />}>
+            {plural(moveCells, 'casilla', 'casillas')}
+            {(d.moveCells === null || d.moveCells === undefined) && <span className="text-xs text-parchment-400"> · según la velocidad</span>}
+          </Prop>
+          <Prop label="Acciones de combate" icon={<Zap />}>
+            {actionsPerTurn} por turno
           </Prop>
         </div>
       </div>

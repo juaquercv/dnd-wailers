@@ -20,6 +20,7 @@ import {
   type ZoneLevel,
   type ZoneNeighbors,
   type ZoneType,
+  type ZoneVision,
 } from '@wailers/shared';
 import type { LightSpec, WallSpec } from '../assets/layouts';
 import { MAP_SPECS, type MapKey } from '../assets/maps';
@@ -111,6 +112,8 @@ export function makeZone(init: {
   ambienceSoundId?: string | null;
   notes: string;
   tags: string[];
+  /** Default vision inside the zone (null = campaign default: everything visible). */
+  vision?: ZoneVision | null;
 }): SeedZone {
   return {
     id: init.id,
@@ -130,5 +133,6 @@ export function makeZone(init: {
     ambienceSoundId: init.ambienceSoundId ?? null,
     notes: init.notes,
     tags: init.tags,
+    vision: init.vision ?? null,
   };
 }

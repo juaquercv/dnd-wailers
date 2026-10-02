@@ -53,6 +53,7 @@ export function createZoneContent(): ZoneContent {
     levels: [level],
     defaultLevelId: level.id,
     notes: '',
+    vision: null,
   };
 }
 
@@ -96,11 +97,11 @@ export function defaultVisibility(): VisibilitySettings {
 }
 
 export function defaultSessionOptions(): SessionOptions {
-  return { tradeNeedsApproval: false };
+  return { tradeNeedsApproval: false, turnEconomy: true, playersCanPickUp: true, playersCanUseDoors: true };
 }
 
 export function defaultTurnState(): TurnState {
-  return { mode: 'manual', order: [], currentIndex: 0, round: 1 };
+  return { mode: 'manual', order: [], currentIndex: 0, round: 1, combat: false, usage: {} };
 }
 
 export function defaultAudioState(): AudioState {
@@ -132,6 +133,7 @@ export function createLiveState(init: {
     instantiatedZones: [],
     turn: defaultTurnState(),
     zoneStates: {},
+    zoneVision: {},
     visibility: { global: init.visibility ?? defaultVisibility(), perPlayer: {} },
     options: defaultSessionOptions(),
     explored: {},
@@ -208,6 +210,8 @@ export function emptyHeroData(): HeroData {
     statuses: [],
     visionCells: null,
     notes: '',
+    moveCells: null,
+    actionsPerTurn: 1,
   };
 }
 

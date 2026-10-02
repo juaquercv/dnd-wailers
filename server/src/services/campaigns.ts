@@ -32,18 +32,21 @@ import {
 import { bus, type DomainEvents } from '../bus';
 import { prisma } from '../db';
 import { badRequest, forbidden, notFound } from '../http/errors';
-import { createEntry } from './library';
+import { createEntry, zoneVisionSchema } from './library';
 import {
   campaignInclude,
   campaignSummaryToDTO,
   campaignToDTO,
   isPlainObject,
+  neighborsColumn,
   parseLevels,
   parseNeighbors,
   parseOverview,
   parseRules,
   parseSpawn,
   parseVisibility,
+  parseZoneVision,
+  storedZoneVision,
   toJson,
   toNullableJson,
   zoneToDTO,
@@ -423,6 +426,7 @@ export const zoneInputSchema = z
     levels: levelsSchema,
     defaultLevelId: z.string().max(200),
     notes: z.string().max(100_000),
+    vision: zoneVisionSchema.nullable(),
   })
   .partial();
 
@@ -644,6 +648,7 @@ function contentOf(zone: Zone): ZoneContent {
     levels: zone.levels,
     defaultLevelId: zone.defaultLevelId,
     notes: zone.notes,
+    vision: zone.vision ?? null,
   };
 }
 
@@ -661,6 +666,7 @@ function templateContent(data: unknown): ZoneContent {
     levels,
     defaultLevelId: pickDefaultLevel(levels, storedDefault),
     notes: typeof raw.notes === 'string' ? raw.notes : base.notes,
+    vision: parseZoneVision(raw.vision),
   };
 }
 
@@ -774,7 +780,7 @@ function zoneRowData(draft: ZoneDraft): Prisma.ZoneCreateManyCampaignInput {
     zoneType: content.zoneType,
     biome: content.biome,
     gridPos: toNullableJson(draft.gridPos),
-    neighbors: toJson(draft.neighbors),
+    neighbors: neighborsColumn(draft.neighbors, content.vision),
     musicSoundId: draft.musicSoundId,
     ambienceSoundId: draft.ambienceSoundId,
     weather: content.weather,
@@ -907,6 +913,7 @@ async function applyNeighbors(
   campaignZones: readonly NeighborRow[],
 ): Promise<{ neighbors: ZoneNeighbors; changed: string[] }> {
   const byId = new Map<string, ZoneNeighbors>(campaignZones.map((z) => [z.id, parseNeighbors(z.neighbors)]));
+  const visions = new Map(campaignZones.map((z) => [z.id, storedZoneVision(z.neighbors)]));
   const final: ZoneNeighbors = { ...requested };
 
   const unknown: string[] = [];
@@ -955,7 +962,7 @@ async function applyNeighbors(
   dirty.delete(zoneId);
 
   for (const id of dirty) {
-    await tx.zone.update({ where: { id }, data: { neighbors: toJson(byId.get(id)) } });
+    await tx.zone.update({ where: { id }, data: { neighbors: neighborsColumn(byId.get(id)!, visions.get(id)) } });
   }
   return { neighbors: final, changed: [...dirty] };
 }
@@ -1257,6 +1264,7 @@ export async function createZone(campaignId: string, userId: string, raw: unknow
       weather: input.weather ?? content.weather,
       lighting: input.lighting ?? content.lighting,
       notes: input.notes ?? content.notes,
+      vision: input.vision !== undefined ? input.vision : (content.vision ?? null),
     };
     const order = campaignZones.reduce((max, z) => Math.max(max, z.order), -1) + 1;
     await tx.zone.create({
@@ -1282,7 +1290,7 @@ export async function createZone(campaignId: string, userId: string, raw: unknow
       const requested: ZoneNeighbors = { ...emptyNeighbors(), ...input.neighbors };
       const rows: NeighborRow[] = [...campaignZones, { id: zoneId, parentZoneId, neighbors: emptyNeighbors() }];
       const result = await applyNeighbors(tx, zoneId, emptyNeighbors(), requested, rows);
-      await tx.zone.update({ where: { id: zoneId }, data: { neighbors: toJson(result.neighbors) } });
+      await tx.zone.update({ where: { id: zoneId }, data: { neighbors: neighborsColumn(result.neighbors, finalContent.vision) } });
       changed = result.changed;
     }
     await touchCampaign(tx, campaignId);
@@ -1350,11 +1358,15 @@ export async function updateZone(zoneId: string, raw: unknown): Promise<Zone> {
       data.defaultLevelId = finalDefault;
     }
 
+    // The zone vision is stored in the neighbors document (see neighborsColumn).
+    const finalVision = input.vision !== undefined ? input.vision : (current.vision ?? null);
     if (input.neighbors) {
       const requested: ZoneNeighbors = { ...current.neighbors, ...input.neighbors };
       const result = await applyNeighbors(tx, zoneId, current.neighbors, requested, campaignZones);
-      data.neighbors = toJson(result.neighbors);
+      data.neighbors = neighborsColumn(result.neighbors, finalVision);
       for (const id of result.changed) affected.add(id);
+    } else if (input.vision !== undefined) {
+      data.neighbors = neighborsColumn(current.neighbors, finalVision);
     }
 
     const updated = await tx.zone.update({ where: { id: zoneId }, data });
@@ -1439,7 +1451,7 @@ export async function deleteZone(zoneId: string): Promise<void> {
           neighborsChanged = true;
         }
       }
-      if (neighborsChanged) data.neighbors = toJson(neighbors);
+      if (neighborsChanged) data.neighbors = neighborsColumn(neighbors, zone.vision);
       const transitions = rewriteTransitionTargets(zone.levels, (t) => (deleted.has(t.zoneId) ? null : t));
       if (transitions.changed) data.levels = toJson(transitions.levels);
       if (zone.order !== index) {

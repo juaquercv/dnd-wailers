@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/session';
 import { useSettingsStore } from '../../stores/settings';
 import { uiSounds } from '../audio/uiSounds';
 import { DieGlyph } from './DieShapes';
+import { prettyFormula } from './dicePool';
 import { MODE_LABELS } from './diceUtils';
 import { isCoveringOverlayShowing, useCoveringOverlayShowing } from './coveringOverlays';
 import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
@@ -250,7 +251,7 @@ function RequestCard({
   onRoll: () => void;
   onDecline: () => void;
 }) {
-  const what = request.formula ?? (request.rollerId ? rollerName ?? 'ruleta o dado del DM' : 'tirada');
+  const what = request.formula ? prettyFormula(request.formula) : request.rollerId ? rollerName ?? 'ruleta o dado del DM' : 'tirada';
   return (
     <div className="wl-card-in wl-prompt-glow pointer-events-auto relative flex w-[min(94vw,30rem)] items-center gap-3 rounded-2xl border border-gold-500/60 bg-ink-900/95 py-3 pl-4 pr-9 backdrop-blur">
       <span className="absolute right-1.5 top-1.5">

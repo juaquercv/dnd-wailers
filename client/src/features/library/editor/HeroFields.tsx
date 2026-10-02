@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import { Info, Library, Link2, Plus, Trash2, Wand } from 'lucide-react';
+import { Footprints, Info, Library, Link2, Plus, Swords, Trash2, Wand, Zap } from 'lucide-react';
 import {
+  CELL_METERS,
+  DEFAULT_ACTIONS_PER_TURN,
   RARITIES,
   RARITY_INFO,
   SPELL_ANIMATIONS,
@@ -9,9 +11,11 @@ import {
   STATUSES,
   createRuleSystem,
   customInventoryItem,
+  heroMoveCells,
   inventoryItemFromEntry,
   inventoryLoad,
   newId,
+  parseSpeedCells,
   slotsForLevel,
   type HeroData,
   type HeroSpell,
@@ -36,6 +40,9 @@ import { SectionTitle } from '../common';
 import { AbilityEditor, EntryPickerModal, FormGrid, ListEditor } from './fields';
 
 type HeroDraft = LibraryEntryInput<'hero'>;
+
+export const MAX_MOVE_CELLS = 100;
+export const MAX_ACTIONS_PER_TURN = 10;
 
 export interface HeroTabProps {
   draft: HeroDraft;
@@ -91,6 +98,13 @@ export function HeroStatsTab({ draft, onChange, errors }: HeroTabProps) {
         <NumberInput label="Experiencia (PX)" integer min={0} value={d.xp} error={errors['data.xp']} onChange={(xp) => set({ xp })} />
         <NumberInput label="Oro" min={0} suffix="po" value={d.gold} error={errors['data.gold']} onChange={(gold) => set({ gold })} />
       </FormGrid>
+      <TurnEconomyFields
+        speed={d.speed}
+        moveCells={d.moveCells ?? null}
+        actionsPerTurn={d.actionsPerTurn ?? DEFAULT_ACTIONS_PER_TURN}
+        errors={errors}
+        onChange={(patch) => set(patch)}
+      />
       <div>
         <SectionTitle>Características</SectionTitle>
         <div className="mt-3">
@@ -121,6 +135,76 @@ export function HeroStatsTab({ draft, onChange, errors }: HeroTabProps) {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+export interface TurnEconomyFieldsProps {
+  speed: string;
+  moveCells: number | null;
+  actionsPerTurn: number;
+  errors?: Record<string, string>;
+  onChange: (patch: { moveCells?: number | null; actionsPerTurn?: number }) => void;
+  className?: string;
+}
+
+/** "Movimiento por turno" (empty = from the speed) and "Acciones de combate por turno". */
+export function TurnEconomyFields({ speed, moveCells, actionsPerTurn, errors = {}, onChange, className }: TurnEconomyFieldsProps) {
+  const derived = heroMoveCells({ speed, moveCells: null });
+  const fromSpeed = parseSpeedCells(speed) !== null;
+  const effective = heroMoveCells({ speed, moveCells });
+  return (
+    <div className={clsx('rounded-xl border border-gold-700/40 bg-gold-500/[0.04] p-3', className)}>
+      <SectionTitle icon={<Swords />}>Turno de combate</SectionTitle>
+      <FormGrid cols={2} className="mt-3">
+        <NumberInput
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              <Footprints className="h-3.5 w-3.5 text-gold-400" aria-hidden /> Movimiento por turno (casillas)
+            </span>
+          }
+          nullable
+          integer
+          min={0}
+          max={MAX_MOVE_CELLS}
+          suffix="cas."
+          value={moveCells}
+          placeholder={String(derived)}
+          error={errors['data.moveCells']}
+          hint={
+            moveCells === null
+              ? fromSpeed
+                ? `Vacío = según la velocidad («${speed.trim()}» → ${derived} casillas).`
+                : `Vacío = ${derived} casillas (escribe la velocidad para calcularlo).`
+              : `Cada casilla son ${CELL_METERS.toString().replace('.', ',')} m. Vacía el campo para usar la velocidad.`
+          }
+          onChange={(value) => onChange({ moveCells: value })}
+        />
+        <NumberInput
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              <Zap className="h-3.5 w-3.5 text-arcane-300" aria-hidden /> Acciones de combate por turno
+            </span>
+          }
+          integer
+          min={0}
+          max={MAX_ACTIONS_PER_TURN}
+          value={actionsPerTurn}
+          error={errors['data.actionsPerTurn']}
+          hint="Atacar, lanzar un hechizo o usar un objeto. Normalmente 1."
+          onChange={(value) => onChange({ actionsPerTurn: value })}
+        />
+      </FormGrid>
+      <p className="mt-2.5 flex items-start gap-2 text-xs leading-relaxed text-parchment-400">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" />
+        <span>
+          En combate, en su turno puede moverse hasta <span className="font-semibold text-parchment-200">{effective} casillas</span> y gastar{' '}
+          <span className="font-semibold text-parchment-200">
+            {actionsPerTurn === 1 ? '1 acción de combate' : `${actionsPerTurn} acciones de combate`}
+          </span>
+          . Recoger objetos, abrir puertas o intercambiar no gastan nada.
+        </span>
+      </p>
     </div>
   );
 }

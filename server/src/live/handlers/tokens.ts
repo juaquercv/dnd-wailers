@@ -1,7 +1,11 @@
 import {
   RARITY_INFO,
+  checkPlayerMove,
+  economyApplies,
   effectiveVisibility,
+  isHeroTurn,
   isOwnHeroToken,
+  moveBudget,
   newId,
   normalizeDeg,
   type FxEvent,
@@ -14,6 +18,7 @@ import {
 } from '@wailers/shared';
 import { isPlainObject } from '../../services/serializers';
 import {
+  addUsage,
   clamp,
   clampToLevel,
   colorValue,
@@ -100,6 +105,13 @@ function tokenLogVisibility(
 function canPlayerMoveToken(ctx: HandlerCtx, token: Token): boolean {
   const state = ctx.session.state;
   return isOwnHeroToken(state, token, ctx.userId) && effectiveFor(state, ctx.userId).canMoveOwnToken;
+}
+
+/** Hero whose turn economy a player's move spends: the hero of the token, else the player's selected hero. */
+function economyHeroId(ctx: HandlerCtx, token: Token): string | null {
+  const state = ctx.session.state;
+  const heroId = token.heroId ?? state.players[ctx.userId]?.heroId ?? null;
+  return heroId && state.heroes[heroId] ? heroId : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,9 +300,16 @@ function moveToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { token
   }
   const loc = getLevel(ctx.session, token.zoneId, token.levelId);
   const point = loc ? snapPoint(loc.level, { x, y }, token.cells) : { x, y };
+  // In combat a player's hero moves only on its turn and within its movement per turn (the DM is never limited).
+  const heroId = !ctx.isDm && loc ? economyHeroId(ctx, token) : null;
   manager.mutate(ctx.session, (s) => {
     const t = s.tokens[token.id];
     if (!t) return;
+    if (heroId && loc && economyApplies(s)) {
+      const check = checkPlayerMove(s, heroId, { x: t.x, y: t.y }, point, loc.level.grid);
+      if (!check.ok) throw new HandlerError(check.reason);
+      if (check.cost > 0) addUsage(s, heroId, { moved: check.cost });
+    }
     t.x = point.x;
     t.y = point.y;
     if (facing !== undefined) t.facing = normalizeDeg(facing);
@@ -306,6 +325,9 @@ function dragToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { token
   if (!ctx.isDm) {
     requirePlaying(ctx);
     if (!canPlayerMoveToken(ctx, token)) throw new HandlerError(NO_MOVE);
+    // A move the turn economy would reject is not previewed to the others.
+    const heroId = economyHeroId(ctx, token);
+    if (heroId && economyApplies(state) && (!isHeroTurn(state, heroId) || moveBudget(state, heroId).left <= 0)) return null;
   }
   const recipients = membersExcept(state, ctx.userId).filter((uid) => {
     if (uid === state.hostUserId) return true;
@@ -316,6 +338,34 @@ function dragToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { token
   if (recipients.length === 0) return null;
   const event: SessionEvent = { type: 'tokenDrag', tokenId: token.id, x, y, userId: ctx.userId };
   manager.emitEvent(ctx.session, event, { kind: 'users', userIds: recipients });
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// token:moveMany (DM)
+// ---------------------------------------------------------------------------
+
+function moveManyTokens(manager: SessionManagerApi, ctx: HandlerCtx, payload: { moves: { tokenId: string; x: number; y: number }[] }): null {
+  const state = ctx.session.state;
+  if (!Array.isArray(payload.moves)) throw new HandlerError('Valor no válido para «movimientos»');
+  if (payload.moves.length === 0) return null;
+  if (payload.moves.length > 200) throw new HandlerError('Demasiadas fichas a la vez');
+  const targets = new Map<string, Point>();
+  for (const raw of payload.moves) {
+    const move = plainObject(raw, 'movimiento');
+    const token = requireToken(state, move.tokenId);
+    const loc = getLevel(ctx.session, token.zoneId, token.levelId);
+    const p = { x: reqNum(move.x, 'x'), y: reqNum(move.y, 'y') };
+    targets.set(token.id, loc ? snapPoint(loc.level, p, token.cells) : p);
+  }
+  manager.mutate(ctx.session, (s) => {
+    for (const [tokenId, point] of targets) {
+      const t = s.tokens[tokenId];
+      if (!t) continue;
+      t.x = point.x;
+      t.y = point.y;
+    }
+  });
   return null;
 }
 
@@ -357,6 +407,11 @@ function transferTokens(
   if (!ctx.isDm) {
     requirePlaying(ctx);
     if (tokens.length !== 1 || !canPlayerMoveToken(ctx, first)) throw new HandlerError(NO_MOVE);
+    // Doors, stairs and zone edges are interactions (no movement cost), but in combat only on the hero's turn.
+    const heroId = economyHeroId(ctx, first);
+    if (heroId && economyApplies(state) && !isHeroTurn(state, heroId)) {
+      throw new HandlerError('Combate en curso: espera a tu turno para moverte');
+    }
     const sameLevel = first.zoneId === zone.id && first.levelId === level.id;
     const viaNeighbor = direction !== null && level.id === defaultLevel(zone).id;
     const viaTransition = transitionTarget !== null;
@@ -766,6 +821,7 @@ export const registerTokenHandlers: HandlerModule = (socket, manager) => {
   manager.register(socket, 'token:placeHeroes', (ctx, payload) => placeHeroes(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'token:move', (ctx, payload) => moveToken(manager, ctx, payload));
   manager.register(socket, 'token:drag', (ctx, payload) => dragToken(manager, ctx, payload));
+  manager.register(socket, 'token:moveMany', (ctx, payload) => moveManyTokens(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'token:transfer', (ctx, payload) => transferTokens(manager, ctx, payload));
   manager.register(socket, 'token:update', (ctx, payload) => updateToken(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'token:hp', (ctx, payload) => tokenHp(manager, ctx, payload), { dmOnly: true });

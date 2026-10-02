@@ -217,6 +217,10 @@ export interface HeroData {
   /** Vision radius in grid cells (darkvision etc.); null = session default. */
   visionCells: number | null;
   notes: string;
+  /** Movement per turn in grid cells; null/undefined = derived from `speed` (see heroMoveCells in turns.ts). */
+  moveCells?: number | null;
+  /** Combat actions per turn (attack, spell, use an item...). undefined = 1. */
+  actionsPerTurn?: number;
 }
 
 export interface CategoryDTO {

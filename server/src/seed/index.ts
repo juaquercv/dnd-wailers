@@ -1,16 +1,30 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { ENTRY_KIND_LABELS, SEED_USERS, buildSearchText, normalizeTag, type CreatureData, type EntryKind, type HeroData, type SceneElement, type ZoneLevel } from '@wailers/shared';
+import {
+  DEFAULT_ACTIONS_PER_TURN,
+  ENTRY_KIND_LABELS,
+  SEED_USERS,
+  buildSearchText,
+  normalizeTag,
+  parseSpeedCells,
+  type CreatureData,
+  type EntryKind,
+  type HeroData,
+  type SceneElement,
+  type ZoneLevel,
+  type ZoneVision,
+} from '@wailers/shared';
+import { HERO_ACTIONS_PER_TURN_MAX, ZONE_VISION_LIMITS, isPlainObject, neighborsColumn, parseNeighbors } from '../services/serializers';
 import { ensureAssets } from './assets/generate';
 import { buildCampaigns, type SeedCampaign } from './data/campaigns';
 import { CATEGORY_ROWS, categoryNames } from './data/categories';
 import { CREATURE_ENTRIES } from './data/creatures';
 import { HERO_ENTRIES } from './data/heroes';
-import { CAMPAIGN_A_ID, CAMPAIGN_B_ID, LEGACY_CAMPAIGN_A } from './data/ids';
+import { CAMPAIGN_A_ID, CAMPAIGN_B_ID, LEGACY_CAMPAIGN_A, entryId } from './data/ids';
 import { ITEM_ENTRIES } from './data/items';
 import { SEED_ROLLERS, type SeedRoller } from './data/rollers';
 import { SOUND_ENTRIES } from './data/sounds';
 import { SPELL_ENTRIES } from './data/spells';
-import { TEMPLATE_ENTRIES } from './data/templates';
+import { TEMPLATE_ENTRIES, TEMPLATE_VISIONS } from './data/templates';
 import type { SeedEntry } from './data/types';
 import type { SeedZone } from './data/zoneKit';
 
@@ -22,12 +36,17 @@ import type { SeedZone } from './data/zoneKit';
  *      · fresh database → everything is created at the current version;
  *      · older version  → only content introduced after it is added (entries matched by id, or by kind + name
  *        so nothing is duplicated), the v1 fantasy campaign A is replaced by "Los Cielos de Latón", and
- *        everything else (campaign B, existing library entries, user content) is left untouched.
+ *        everything else (campaign B, existing library entries, user content) is left untouched;
+ *      · below v3 → seed-owned rows (matched by their seed ids) get the v3 fields when missing: zone visions,
+ *        movement and combat actions per turn of the seed heroes, and "everyone starts seeing everything".
  *  Inserts use deterministic ids + skipDuplicates, so an interrupted seed can safely run again.
  */
 
-export const SEED_VERSION = '2';
+export const SEED_VERSION = '3';
 const SEED_VERSION_KEY = 'seedVersion';
+
+/** Version that introduced zone visions, hero movement/actions per turn and visionMode 'all' as everyone's start. */
+const TURN_ECONOMY_SINCE = 3;
 
 /** Version that introduced each seeded campaign. */
 const CAMPAIGN_SINCE: Record<string, number> = { [CAMPAIGN_A_ID]: 2, [CAMPAIGN_B_ID]: 1 };
@@ -54,6 +73,11 @@ function allEntries(): SeedEntry[] {
 // ---------------------------------------------------------------------------
 // Validation (fails loudly on inconsistent seed data)
 // ---------------------------------------------------------------------------
+
+function validZoneVision(v: ZoneVision): boolean {
+  const L = ZONE_VISION_LIMITS;
+  return Number.isInteger(v.radius) && v.radius >= L.radiusMin && v.radius <= L.radiusMax && Number.isInteger(v.cone) && v.cone >= L.coneMin && v.cone <= L.coneMax;
+}
 
 const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' } as const;
 const STEP = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] } as const;
@@ -92,6 +116,14 @@ function validate(entries: SeedEntry[], campaigns: SeedCampaign[], rollers: Seed
       for (const it of hero.data.inventory) if (it.entryId && kindOf(it.entryId) !== 'item') errors.push(`${e.name}: objeto de inventario inexistente (${it.entryId})`);
       for (const sp of hero.data.spells) if (sp.entryId && kindOf(sp.entryId) !== 'spell') errors.push(`${e.name}: hechizo inexistente (${sp.entryId})`);
       if (!SEED_USERS.some((u) => u.id === hero.ownerId)) errors.push(`${e.name}: dueño inexistente (${hero.ownerId ?? 'ninguno'})`);
+      const move = hero.data.moveCells;
+      if (typeof move !== 'number' || !Number.isInteger(move) || move < 0) errors.push(`${e.name}: movimiento por turno inválido`);
+      const actions = hero.data.actionsPerTurn;
+      if (typeof actions !== 'number' || !Number.isInteger(actions) || actions < 0 || actions > HERO_ACTIONS_PER_TURN_MAX) errors.push(`${e.name}: acciones por turno inválidas`);
+    }
+    if (e.kind === 'zone') {
+      const vision = (e as SeedEntry<'zone'>).data.content.vision;
+      if (vision && !validZoneVision(vision)) errors.push(`${e.name}: visión de zona fuera de rango`);
     }
   }
   for (const c of campaigns) {
@@ -106,6 +138,7 @@ function validate(entries: SeedEntry[], campaigns: SeedCampaign[], rollers: Seed
     for (const z of c.zones) {
       if (z.parentZoneId && !zoneById.has(z.parentZoneId)) errors.push(`${z.name}: zona padre inexistente`);
       if (!z.levels.some((l) => l.id === z.defaultLevelId)) errors.push(`${z.name}: nivel por defecto inexistente`);
+      if (z.vision && !validZoneVision(z.vision)) errors.push(`${z.name}: visión de zona fuera de rango`);
       for (const soundRef of [z.musicSoundId, z.ambienceSoundId]) if (soundRef && kindOf(soundRef) !== 'sound') errors.push(`${z.name}: sonido inexistente ${soundRef}`);
       for (const dir of ['up', 'down', 'left', 'right'] as const) {
         const other = z.neighbors[dir];
@@ -249,7 +282,7 @@ function zoneRow(z: SeedZone, refs: EntryRefs): Prisma.ZoneCreateManyInput {
     zoneType: z.zoneType,
     biome: z.biome,
     gridPos: z.gridPos ? json(z.gridPos) : Prisma.DbNull,
-    neighbors: json(z.neighbors),
+    neighbors: neighborsColumn(z.neighbors, z.vision),
     musicSoundId: z.musicSoundId ? refs.resolve(z.musicSoundId) : null,
     ambienceSoundId: z.ambienceSoundId ? refs.resolve(z.ambienceSoundId) : null,
     weather: z.weather,
@@ -414,6 +447,69 @@ async function seedContent(prisma: PrismaClient, from: number, log: (msg: string
   );
 }
 
+/**
+ * Seed v3 on a database seeded by an older version. Only rows created by the seed (matched by their seed ids)
+ * are touched, and only with the fields v3 introduces: zone visions and the vision of the dark templates
+ * (when not set), movement and combat actions per turn of the seed heroes (when missing; movement derived from
+ * the hero's current speed) and the starting visibility of the seed campaigns (everyone sees everything and
+ * moves their own hero; darkness now comes from each zone's vision).
+ */
+async function upgradeTurnEconomy(prisma: PrismaClient, log: (msg: string) => void): Promise<void> {
+  const campaigns = buildCampaigns();
+
+  const zoneVisions = new Map<string, ZoneVision>();
+  for (const c of campaigns) for (const z of c.zones) if (z.vision) zoneVisions.set(z.id, z.vision);
+  let zones = 0;
+  const zoneRows = await prisma.zone.findMany({ where: { id: { in: [...zoneVisions.keys()] } }, select: { id: true, neighbors: true } });
+  for (const row of zoneRows) {
+    if (isPlainObject(row.neighbors) && row.neighbors.vision != null) continue;
+    await prisma.zone.update({ where: { id: row.id }, data: { neighbors: neighborsColumn(parseNeighbors(row.neighbors), zoneVisions.get(row.id)) } });
+    zones++;
+  }
+
+  let templates = 0;
+  const templateVisions = new Map(Object.entries(TEMPLATE_VISIONS).map(([key, vision]) => [entryId('zone', key), vision] as const));
+  const templateRows = await prisma.libraryEntry.findMany({ where: { id: { in: [...templateVisions.keys()] }, kind: 'zone' }, select: { id: true, data: true } });
+  for (const row of templateRows) {
+    if (!isPlainObject(row.data) || !isPlainObject(row.data.content) || row.data.content.vision != null) continue;
+    const data = { ...row.data, content: { ...row.data.content, vision: templateVisions.get(row.id) } };
+    await prisma.libraryEntry.update({ where: { id: row.id }, data: { data: json(data) } });
+    templates++;
+  }
+
+  let heroes = 0;
+  const seedHeroes = new Map(HERO_ENTRIES.map((e) => [e.id, e.data] as const));
+  const heroRows = await prisma.libraryEntry.findMany({ where: { id: { in: [...seedHeroes.keys()] }, kind: 'hero' }, select: { id: true, data: true } });
+  for (const row of heroRows) {
+    const seed = seedHeroes.get(row.id);
+    if (!seed || !isPlainObject(row.data)) continue;
+    const patch: Partial<HeroData> = {};
+    if (typeof row.data.moveCells !== 'number') {
+      const speed = typeof row.data.speed === 'string' ? row.data.speed : seed.speed;
+      patch.moveCells = parseSpeedCells(speed) ?? seed.moveCells ?? null;
+    }
+    if (typeof row.data.actionsPerTurn !== 'number') patch.actionsPerTurn = seed.actionsPerTurn ?? DEFAULT_ACTIONS_PER_TURN;
+    if (Object.keys(patch).length === 0) continue;
+    await prisma.libraryEntry.update({ where: { id: row.id }, data: { data: json({ ...row.data, ...patch }) } });
+    heroes++;
+  }
+
+  let campaignsPatched = 0;
+  const campaignRows = await prisma.campaign.findMany({ where: { id: { in: campaigns.map((c) => c.id) } }, select: { id: true, defaultVisibility: true } });
+  for (const row of campaignRows) {
+    const current = isPlainObject(row.defaultVisibility) ? row.defaultVisibility : {};
+    if (current.visionMode === 'all' && current.canMoveOwnToken === true) continue;
+    await prisma.campaign.update({ where: { id: row.id }, data: { defaultVisibility: json({ ...current, visionMode: 'all', canMoveOwnToken: true }) } });
+    campaignsPatched++;
+  }
+
+  const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+  log(
+    `Visión por zonas y economía de turnos: ${count(zones, 'zona', 'zonas')} con visión propia, ${count(templates, 'plantilla oscura', 'plantillas oscuras')}, ` +
+      `${count(heroes, 'héroe', 'héroes')} con movimiento y acciones por turno, ${count(campaignsPatched, 'campaña', 'campañas')} donde todos empiezan viéndolo todo.`,
+  );
+}
+
 export async function ensureSeeded(prisma: PrismaClient, opts: EnsureSeededOptions): Promise<void> {
   const log = opts.log ?? (() => undefined);
   await upsertUsers(prisma);
@@ -423,5 +519,6 @@ export async function ensureSeeded(prisma: PrismaClient, opts: EnsureSeededOptio
   const from = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
   if (from >= Number(SEED_VERSION)) return;
   await seedContent(prisma, from, log);
+  if (from > 0 && from < TURN_ECONOMY_SINCE) await upgradeTurnEconomy(prisma, log);
   await prisma.appMeta.upsert({ where: { key: SEED_VERSION_KEY }, create: { key: SEED_VERSION_KEY, value: SEED_VERSION }, update: { value: SEED_VERSION } });
 }

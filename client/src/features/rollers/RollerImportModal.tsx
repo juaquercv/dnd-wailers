@@ -12,6 +12,7 @@ import { Select } from '../../components/ui/Select';
 import { Spinner } from '../../components/ui/Spinner';
 import { toast } from '../../components/ui/toast';
 import { DieGlyph } from '../dice/DieShapes';
+import { prettyFormula } from '../dice/dicePool';
 import { errorMessage } from '../dice/diceUtils';
 import { MiniWheel } from '../dice/RouletteWheel';
 import { Segmented } from '../dice/Segmented';
@@ -236,7 +237,7 @@ function ImportCard({ roller, imported, busy, disabled, onImport }: { roller: Ro
         </div>
       ) : (
         <div className="mt-2.5">
-          <span className="chip border-gold-700/50 font-mono text-gold-200">{roller.formula ?? '—'}</span>
+          <span className="chip border-gold-700/50 font-mono text-gold-200">{prettyFormula(roller.formula) || '—'}</span>
         </div>
       )}
 

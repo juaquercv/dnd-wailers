@@ -11,6 +11,7 @@ import {
   newId,
   visibleAreas,
   visionCellsFor,
+  visionConeFor,
   visionTokensFor,
   type AckResult,
   type C2SEvent,
@@ -39,7 +40,7 @@ import { bus } from '../bus';
 import { prisma } from '../db';
 import { refreshSearchText } from '../services/library';
 import { entryInclude, entryToDTO, isPlainObject, logToDTO, sessionInclude, sessionSummaryToDTO, toJson, toNullableJson, type SessionRow } from '../services/serializers';
-import { anonymizedTurnEntry, playerKnowsTurnEntry } from './helpers';
+import { anonymizedTurnEntry, playerKnowsTurnEntry, zoneVisionMap } from './helpers';
 import { SessionPersistence, isMissingRecordError, parseLiveState } from './persistence';
 import {
   defaultLevel,
@@ -307,6 +308,7 @@ export class SessionManager implements SessionManagerApi {
     const { campaign, entries } = await loadCampaignRuntime(row.campaignId, sounds);
     const state = parseLiveState(row);
     await this.refreshHeroesFromLibrary(state, row.updatedAt);
+    state.zoneVision = zoneVisionMap(campaign.zones);
     const session = new RunningSession(row.id, state, campaign, entries);
     this.syncHeroMirrors(session.state);
     this.sessions.set(session.id, session);
@@ -450,7 +452,9 @@ export class SessionManager implements SessionManagerApi {
     const zoneIds = new Set<string>();
     for (const t of visionTokensFor(state, userId)) {
       zoneIds.add(t.zoneId);
-      parts.push(`${t.id}:${t.zoneId}:${t.levelId}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.facing)}:${visionCellsFor(state, t, eff, userId)}`);
+      parts.push(
+        `${t.id}:${t.zoneId}:${t.levelId}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.facing)}:${visionCellsFor(state, t, eff, userId)}:${visionConeFor(state, t, eff, userId)}`,
+      );
     }
     for (const zoneId of zoneIds) {
       const zone = session.campaign.zones.find((z) => z.id === zoneId);
@@ -1089,8 +1093,27 @@ export class SessionManager implements SessionManagerApi {
       session.reindex();
       session.visionSignatures.clear();
       this.cleanupAfterZoneReload(session);
+      this.syncZoneVision(session);
       this.broadcast(session, { zones: true });
     }
+  }
+
+  /** Inside mutate: copy the default vision of every campaign zone into the state (state.zoneVision). */
+  applyZoneVision(session: LiveSession, state: LiveState): void {
+    state.zoneVision = zoneVisionMap(session.campaign.zones);
+  }
+
+  /** After the zones changed: the state follows the zones' default visions (one mutation when they differ). */
+  private syncZoneVision(session: RunningSession): void {
+    const next = zoneVisionMap(session.campaign.zones);
+    if (stableJson(next) === stableJson(session.state.zoneVision ?? {})) return;
+    this.mutate(
+      session,
+      (state) => {
+        state.zoneVision = next;
+      },
+      { zones: true },
+    );
   }
 
   /** Tokens/states that point to deleted zones or levels after the campaign was edited. */

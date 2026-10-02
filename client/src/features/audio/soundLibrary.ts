@@ -16,6 +16,7 @@ const PAGE_SIZE = 100;
 const DEFAULT_SOUND_VOLUME = emptySoundData().volume;
 
 const searchCache = new Map<string, { at: number; items: SoundEntry[] }>();
+const changeListeners = new Set<() => void>();
 const infoCache = new Map<string, { at: number; info: SoundInfo | null }>();
 const infoPending = new Map<string, Promise<SoundInfo | null>>();
 
@@ -73,6 +74,20 @@ export async function searchSounds(soundType: SoundType, q: string): Promise<Sou
   return items;
 }
 
+/** Call after sounds are created or edited: clears the cached lists and refreshes every open sound list. */
+export function notifySoundLibraryChanged(): void {
+  searchCache.clear();
+  for (const listener of changeListeners) listener();
+}
+
+/** Runs the listener whenever notifySoundLibraryChanged() is called. */
+export function onSoundLibraryChanged(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
 export interface SoundSearchState {
   items: SoundEntry[];
   loading: boolean;
@@ -103,6 +118,8 @@ export function useSoundSearch(soundType: SoundType, q: string): SoundSearchStat
       cancelled = true;
     };
   }, [soundType, q, nonce]);
+
+  useEffect(() => onSoundLibraryChanged(() => setNonce((n) => n + 1)), []);
 
   const reload = useCallback(() => {
     searchCache.delete(cacheKey(soundType, q));
