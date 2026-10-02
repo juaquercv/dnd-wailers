@@ -509,7 +509,7 @@ function UploadDialog({
                   onMoods={(moodIds) => patchRow(row.key, { moodIds })}
                   onRemove={() => removeRow(row.key)}
                   onRetry={() => void uploadAll()}
-                  createdAction={row.entry && renderCreatedAction ? renderCreatedAction(row.entry, onClose) : null}
+                  createdAction={row.entry && renderCreatedAction ? renderCreatedAction(row.entry, () => void close()) : null}
                 />
               ))}
             </ul>

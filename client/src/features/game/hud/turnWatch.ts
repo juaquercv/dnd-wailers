@@ -1,20 +1,12 @@
 import { create } from 'zustand';
 import { sessionBus } from '../../../lib/eventBus';
 import { useSessionStore } from '../../../stores/session';
+import type { OwnTurnMark } from './economyCore';
 
 /**
  * Players who may not see the turn order still receive the 'turnStart' of their own turn. This store
- * remembers it (round + the currentIndex of the first state after the event) so the HUD knows the turn is
- * theirs until the index or the round changes.
+ * remembers it so the HUD knows the turn is theirs until the index or the round changes (markIsCurrent).
  */
-export interface OwnTurnMark {
-  round: number;
-  /** currentIndex once the state of that turn arrived (null until then). */
-  index: number | null;
-  /** State version when the event arrived. */
-  version: number;
-}
-
 export const useOwnTurnMark = create<{ mark: OwnTurnMark | null }>(() => ({ mark: null }));
 
 sessionBus.on('turnStart', (event) => {
@@ -36,9 +28,3 @@ useSessionStore.subscribe((s) => {
   if (!mark || mark.index !== null || state.version <= mark.version) return;
   useOwnTurnMark.setState({ mark: { ...mark, index: state.turn.currentIndex } });
 });
-
-/** True while the remembered turn is still the current one. */
-export function markIsCurrent(mark: OwnTurnMark | null, turn: { round: number; currentIndex: number }): boolean {
-  if (!mark || mark.round !== turn.round) return false;
-  return mark.index === null || mark.index === turn.currentIndex;
-}

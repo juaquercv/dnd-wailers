@@ -18,6 +18,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { toast } from '../../../components/ui/toast';
 import { emitUiEvent } from '../../../lib/uiEvents';
 import { LibraryBrowser } from '../../library/LibraryBrowser';
+import { useHeroEconomy } from '../hud/economy';
 import { send } from './actions';
 
 export const SPELL_ANIMATION_ICONS: Record<SpellAnimation, string> = {
@@ -84,6 +85,8 @@ export function SpellList({ hero, rules, canCast, canSpend, manage, campaignId }
   );
   const mode = rules.magic.mode;
   const mana = hero.data.resources.mana;
+  const eco = useHeroEconomy(hero.id);
+  const castBlock = eco?.actionBlock ?? null;
 
   const updateSpells = (next: HeroSpell[]) => send('hero:update', { heroId: hero.id, patch: { spells: next } });
 
@@ -172,6 +175,7 @@ export function SpellList({ hero, rules, canCast, canSpend, manage, campaignId }
                     <span className="flex items-center gap-2 text-[10px] text-parchment-400">
                       <span>{spellLevelLabel(spell.level)}</span>
                       {cost && <span className="text-arcane-300">{cost}</span>}
+                      {eco?.limited && <span className="text-blood-300" title="En combate, lanzar gasta 1 acción de combate">1 acción</span>}
                       {!spell.prepared && <span className="italic">no preparado</span>}
                     </span>
                   </button>
@@ -187,7 +191,14 @@ export function SpellList({ hero, rules, canCast, canSpend, manage, campaignId }
                     />
                   )}
                   {canCast && (
-                    <Button size="sm" variant="secondary" icon={<WandSparkles />} onClick={() => cast(spell)} title="Elegir objetivo en el mapa (solo animación)">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={<WandSparkles />}
+                      disabled={!!castBlock}
+                      onClick={() => cast(spell)}
+                      title={castBlock ?? 'Elegir objetivo en el mapa (solo animación)'}
+                    >
                       Lanzar
                     </Button>
                   )}

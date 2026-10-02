@@ -427,7 +427,7 @@ function NearbyChips({ things, readOnly }: { things: NearbyThing[]; readOnly: bo
     setBusy(null);
   };
   return (
-    <div className="pointer-events-auto flex max-w-full animate-fade-in flex-wrap items-center gap-1.5" role="group" aria-label="Cerca de ti">
+    <div className="pointer-events-none flex max-w-full animate-fade-in flex-wrap items-center gap-1.5" role="group" aria-label="Cerca de ti">
       {things.slice(0, 4).map((thing) => {
         const Icon = thing.kind === 'item' ? Hand : thing.open ? DoorClosed : DoorOpen;
         const label = thing.kind === 'item' ? `Recoger ${thing.token.name}` : thing.open ? 'Cerrar la puerta' : 'Abrir la puerta';
@@ -438,7 +438,7 @@ function NearbyChips({ things, readOnly }: { things: NearbyThing[]; readOnly: bo
             disabled={readOnly || busy !== null}
             onClick={() => void run(thing)}
             title={`${label} · acción gratuita: no gasta acción ni movimiento`}
-            className="flex max-w-[16rem] items-center gap-1.5 rounded-full border border-emerald-500/50 bg-ink-950/90 py-1 pl-2 pr-2.5 text-xs font-semibold text-emerald-100 shadow-panel backdrop-blur transition hover:border-emerald-400 hover:bg-emerald-500/15 disabled:opacity-60"
+            className="pointer-events-auto flex max-w-[16rem] items-center gap-1.5 rounded-full border border-emerald-500/50 bg-ink-950/90 py-1 pl-2 pr-2.5 text-xs font-semibold text-emerald-100 shadow-panel backdrop-blur transition hover:border-emerald-400 hover:bg-emerald-500/15 disabled:opacity-60"
           >
             <Icon className="h-3.5 w-3.5 shrink-0 text-emerald-300" aria-hidden />
             <span className="truncate">{label}</span>

@@ -148,7 +148,7 @@ export function DicePoolBuilder({ pool, onChange, mode = 'normal', onModeChange,
                 <span className="font-mono text-[13px] font-semibold text-gold-200">{prettyFormula(formula)}</span>
                 {range && (
                   <span className="text-[11px] text-parchment-400">
-                    {range.min === range.max ? `siempre ${range.min}` : `de ${range.min} a ${range.max}`}
+                    {range.min === range.max ? `siempre ${range.min}` : `entre ${range.min} y ${range.max}`}
                   </span>
                 )}
               </>
@@ -159,18 +159,10 @@ export function DicePoolBuilder({ pool, onChange, mode = 'normal', onModeChange,
         </div>
       </div>
 
-      {onModeChange && (
-        <div>
-          <div className="mb-1 flex items-baseline justify-between gap-2">
-            <span className="label mb-0">Modo</span>
-            {!advantageOk && <span className="text-[10px] text-parchment-400">Ventaja y desventaja: solo con un único d20</span>}
-          </div>
-          <Segmented
-            value={effectivePoolMode(pool, mode)}
-            onChange={onModeChange}
-            ariaLabel="Modo de tirada"
-            options={MODE_OPTIONS.map((o) => (o.value === 'normal' ? o : { ...o, disabled: !advantageOk }))}
-          />
+      {onModeChange && advantageOk && (
+        <div className="animate-fade-in">
+          <span className="label">Modo</span>
+          <Segmented value={mode} onChange={onModeChange} ariaLabel="Modo de tirada" options={MODE_OPTIONS} />
         </div>
       )}
     </div>

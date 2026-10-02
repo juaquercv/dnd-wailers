@@ -1,15 +1,27 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { BedDouble, ChevronDown, Coins, Dices, Shield, Sparkles, Star, Tent, Users } from 'lucide-react';
-import type { HeroSheet as HeroSheetData, RuleSystem, SessionPlayer } from '@wailers/shared';
+import { BedDouble, ChevronDown, Coins, Dices, Footprints, Lock, Shield, Sparkles, Star, Tent, Users } from 'lucide-react';
+import {
+  economyApplies,
+  effectiveVisibility,
+  isHeroTurn,
+  type HeroSheet as HeroSheetData,
+  type LiveState,
+  type RuleSystem,
+  type SessionPlayer,
+  type VisibilitySettings,
+} from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { Button } from '../../components/ui/Button';
 import { Checkbox } from '../../components/ui/Checkbox';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { Stepper } from '../../components/ui/Stepper';
+import { Toggle } from '../../components/ui/Toggle';
+import { toast } from '../../components/ui/toast';
 import { formatGold, formatNumber } from '../../lib/format';
-import { send } from './panels/actions';
+import { send, sendAll } from './panels/actions';
+import { CombatBar, UsageChip } from './panels/CombatControls';
 import { canEditResources, canSeeInventoryOf, partyMembers, usePanelContext, viewerOwnsHero, type PanelContext } from './panels/context';
 import { HeroChips } from './panels/HeroChips';
 import { HpBar } from './panels/HpBar';
@@ -74,6 +86,8 @@ export function PartyPanel() {
   return (
     // Bulk bar on top and its own scroll area below (when the parent gives a height; otherwise it just grows).
     <div className="flex h-full min-h-0 flex-col gap-3">
+      {manage && <CombatBar className="shrink-0" />}
+      {manage && <MovementControl state={state} members={members} />}
       {manage && (
         <div className="shrink-0 rounded-lg border border-ink-600/80 bg-ink-900/95 px-2 py-2 shadow-panel">
           <div className="flex items-center gap-2">
@@ -129,6 +143,87 @@ export function PartyPanel() {
       </div>
 
       {manage && <RollRequestDialog open={rollTargets !== null} targets={rollTargets ?? []} onClose={() => setRollTargets(null)} />}
+    </div>
+  );
+}
+
+/** null removes the player's own value so they follow the setting for everyone (wire protocol of vis:setPlayer). */
+function setPlayerMove(state: LiveState, player: SessionPlayer, allow: boolean): Promise<boolean> {
+  const sameAsAll = allow === state.visibility.global.canMoveOwnToken;
+  const wire: Record<string, unknown> = { canMoveOwnToken: sameAsAll ? null : allow };
+  return send(
+    'vis:setPlayer',
+    { userId: player.userId, patch: wire as Partial<VisibilitySettings> },
+    { success: allow ? `${player.name} puede mover su ficha` : `${player.name} ya no puede mover su ficha`, error: 'No se pudo cambiar el permiso de movimiento' },
+  );
+}
+
+function hasOwnMoveSetting(state: LiveState, userId: string): boolean {
+  return typeof state.visibility.perPlayer[userId]?.canMoveOwnToken === 'boolean';
+}
+
+/** DM: freedom of movement for everyone, with the players that have their own setting. */
+function MovementControl({ state, members }: { state: LiveState; members: { player: SessionPlayer; hero: HeroSheetData }[] }) {
+  const all = state.visibility.global.canMoveOwnToken;
+  const own = members.filter((m) => hasOwnMoveSetting(state, m.player.userId));
+  const equalize = () =>
+    void sendAll(
+      own.map((m) => () => send('vis:setPlayer', { userId: m.player.userId, patch: { canMoveOwnToken: null } as unknown as Partial<VisibilitySettings> })),
+    ).then((ok) => {
+      if (ok) toast.success(all ? 'Ahora todos pueden mover su ficha' : 'Ahora nadie puede mover su ficha');
+    });
+  return (
+    <div className={clsx('shrink-0 rounded-xl border px-2.5 py-2', all ? 'border-emerald-600/40 bg-emerald-500/5' : 'border-amber-500/50 bg-amber-500/10')}>
+      <Toggle
+        size="sm"
+        labelFirst
+        checked={all}
+        onChange={(v) =>
+          void send('vis:setGlobal', { patch: { canMoveOwnToken: v } }, { success: v ? 'Todos pueden mover su ficha' : 'Movimiento bloqueado para todos', error: 'No se pudo cambiar el movimiento' })
+        }
+        label={
+          <span className="flex items-center gap-1.5 font-semibold">
+            {all ? <Footprints className="h-3.5 w-3.5 text-emerald-300" aria-hidden /> : <Lock className="h-3.5 w-3.5 text-amber-300" aria-hidden />}
+            {all ? 'Los jugadores pueden mover su ficha' : 'Movimiento de los jugadores bloqueado'}
+          </span>
+        }
+        description={
+          own.length > 0
+            ? `${own.length === 1 ? `${own[0]!.player.name} tiene` : `${own.length} jugadores tienen`} su propio permiso (abajo, en su tarjeta).`
+            : 'Para todos a la vez. Cambia a un jugador concreto en su tarjeta.'
+        }
+      />
+      {own.length > 0 && (
+        <button type="button" onClick={equalize} className="mt-1 text-[11px] font-semibold text-gold-300 underline-offset-2 hover:text-gold-200 hover:underline">
+          Aplicar a todos por igual
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** DM: per-player freedom of movement, live. */
+function MoveToggle({ state, player }: { state: LiveState; player: SessionPlayer }) {
+  const canMove = effectiveVisibility(state, player.userId).canMoveOwnToken;
+  const own = hasOwnMoveSetting(state, player.userId);
+  return (
+    <div
+      className={clsx(
+        'flex items-center gap-2 rounded-lg border px-2 py-1',
+        canMove ? 'border-emerald-600/40 bg-emerald-500/5' : 'border-amber-500/60 bg-amber-500/10',
+      )}
+    >
+      {canMove ? <Footprints className="h-3.5 w-3.5 shrink-0 text-emerald-300" aria-hidden /> : <Lock className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />}
+      <span className={clsx('min-w-0 flex-1 truncate text-xs font-semibold', canMove ? 'text-emerald-100' : 'text-amber-100')}>
+        {canMove ? 'Puede moverse' : 'No puede moverse'}
+        <span className="ml-1.5 text-[10px] font-normal text-parchment-400">{own ? '· solo este jugador' : '· como todos'}</span>
+      </span>
+      <Toggle
+        size="sm"
+        checked={canMove}
+        onChange={(v) => void setPlayerMove(state, player, v)}
+        title={canMove ? `Bloquear el movimiento de ${player.name}` : `Dejar que ${player.name} mueva su ficha`}
+      />
     </div>
   );
 }
@@ -190,13 +285,15 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
     if (delta !== 0) void send('hero:adjust', { heroId: hero.id, field, delta });
   };
   const mode = rules.magic.mode;
+  const state = ctx.state;
+  const heroTurn = !!state && state.turn.combat === true && isHeroTurn(state, hero.id);
 
   return (
     <article
       {...dropProps}
       className={clsx(
         'relative overflow-hidden rounded-xl border bg-gradient-to-b from-ink-800/90 to-ink-900/90 transition',
-        selected ? 'border-gold-500/70 shadow-[0_0_0_1px_rgba(233,192,99,0.3)]' : 'border-ink-600/80',
+        selected ? 'border-gold-500/70 shadow-[0_0_0_1px_rgba(233,192,99,0.3)]' : heroTurn ? 'border-gold-600/60' : 'border-ink-600/80',
         over && 'ring-2 ring-gold-400/70 ring-offset-2 ring-offset-ink-900',
       )}
     >
@@ -211,6 +308,11 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
                 {hero.name}
               </h4>
               {mine && <span className="shrink-0 rounded-full bg-gold-500/20 px-1.5 text-[10px] font-bold uppercase tracking-wider text-gold-200">Tú</span>}
+              {heroTurn && (
+                <span className="shrink-0 animate-pop rounded-full border border-gold-400/70 bg-gold-500/20 px-1.5 text-[10px] font-bold uppercase tracking-wider text-gold-100">
+                  Su turno
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-1.5 text-[11px]">
               <span className="truncate font-medium" style={{ color: player.color }}>
@@ -226,6 +328,9 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
               )}
             </div>
             <HeroChips heroId={hero.id} categoryIds={hero.categoryIds} maxFacets={2} size="xs" className="mt-1" />
+            {state && economyApplies(state) && (
+              <UsageChip state={state} heroId={hero.id} heroName={hero.name} manage={manage} current={heroTurn} className="mt-1" />
+            )}
           </div>
           <button
             type="button"
@@ -239,6 +344,7 @@ function PartyCard({ ctx, player, hero, selected, onSelect, expanded, onToggleEx
         </div>
 
         <div className="space-y-1.5">
+          {manage && state && <MoveToggle state={state} player={player} />}
           <HpBar
             size="sm"
             showText={!manage}

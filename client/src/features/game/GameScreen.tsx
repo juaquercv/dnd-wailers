@@ -9,6 +9,7 @@ import { FxOverlay } from '../fx/FxOverlay';
 import { QuickSearch } from '../library/QuickSearch';
 import { EdgeNavigator } from './EdgeNavigator';
 import { GameMap } from './GameMap';
+import { PlayerHud } from './hud/PlayerHud';
 import { OverviewModal } from './OverviewModal';
 import { ProjectionOverlay } from './ProjectionOverlay';
 import { SceneScreen } from './SceneScreen';
@@ -56,6 +57,7 @@ export function GameScreen() {
   const campaignId = useSessionStore((s) => s.campaign?.id ?? s.view?.state.campaignId ?? undefined);
   const viewAsUserId = useSessionStore((s) => s.viewAsUserId);
   const viewAsName = useSessionStore((s) => (s.viewAsUserId ? s.view?.state.players[s.viewAsUserId]?.name ?? null : null));
+  const combat = useSessionStore((s) => s.view?.state.status === 'playing' && s.view.state.turn.combat === true);
   const pendingDmTrades = useSessionStore((s) => (s.view?.role === 'dm' ? s.view.state.trades.filter((t) => t.status === 'pending_dm').length : 0));
   const { effective, isPreview } = useDisplayState();
   const wide = useMediaQuery('(min-width: 1024px)');
@@ -241,6 +243,10 @@ export function GameScreen() {
           {!sceneMode && <EdgeNavigator />}
           <ProjectionOverlay />
           {!sceneMode && <ViewportBanners />}
+          {combat && (
+            <div aria-hidden className="pointer-events-none absolute inset-0 z-[5] animate-fade-in shadow-[inset_0_0_90px_-24px_rgba(196,61,51,0.65)]" />
+          )}
+          {(!isDm || isPreview) && <PlayerHud />}
           {isDm && isPreview && sceneMode && (
             <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center">
               <span className="flex items-center gap-2 rounded-full border border-arcane-500/50 bg-ink-950/85 px-3 py-1 text-xs text-arcane-100">

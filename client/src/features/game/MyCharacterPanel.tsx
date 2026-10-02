@@ -2,14 +2,18 @@ import { Crosshair, Crown, UserRound } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { emitUiEvent } from '../../lib/uiEvents';
+import { useHeroEconomy } from './hud/economy';
+import { EconomyMeters, turnStatus, TurnStatusPill } from './hud/EconomyMeters';
 import { heroTokenOf, usePanelContext } from './panels/context';
 import { HeroSheet } from './HeroSheet';
 import { TradesPanel } from './TradesPanel';
 
-/** Player sidebar: own sheet (spells with "Lanzar"), quick camera centering and trades. */
+/** Player sidebar: turn status, own sheet (spells with "Lanzar", items with "Usar"), camera centering and trades. */
 export function MyCharacterPanel() {
   const ctx = usePanelContext();
   const { state } = ctx;
+  const heroId = state && ctx.viewerId ? state.players[ctx.viewerId]?.heroId ?? null : null;
+  const eco = useHeroEconomy(ctx.isDm && !ctx.isPreview ? null : heroId);
 
   if (!state) return null;
 
@@ -24,7 +28,6 @@ export function MyCharacterPanel() {
     );
   }
 
-  const heroId = ctx.viewerId ? state.players[ctx.viewerId]?.heroId ?? null : null;
   const hero = heroId ? state.heroes[heroId] ?? null : null;
 
   if (!hero) {
@@ -39,9 +42,17 @@ export function MyCharacterPanel() {
   }
 
   const token = heroTokenOf(state, hero.id);
+  const status = eco ? turnStatus(eco, ctx.effective?.canMoveOwnToken ?? true) : null;
 
   return (
     <div className="space-y-4">
+      {eco && status && (
+        <div className="space-y-2 rounded-xl border border-ink-600/80 bg-ink-800/50 px-2.5 py-2">
+          <TurnStatusPill tone={status.tone} text={status.text} hint={status.hint} />
+          <p className="text-[11px] leading-snug text-parchment-400">{status.hint}</p>
+          <EconomyMeters eco={eco} />
+        </div>
+      )}
       <Button
         variant="secondary"
         size="sm"

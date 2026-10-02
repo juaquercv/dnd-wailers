@@ -509,7 +509,7 @@ function RequestForm({ players, rollers }: { players: PlayerOption[]; rollers: R
 
   const sourceOptions: SegmentedOption<'dice' | 'roller'>[] = [
     { value: 'dice', label: 'Dados', icon: <Dices /> },
-    { value: 'roller', label: 'Ruleta o dado especial', icon: <Sparkles /> },
+    { value: 'roller', label: 'De la campaña', icon: <Sparkles />, title: 'Una ruleta o un dado especial de la campaña' },
   ];
 
   return (

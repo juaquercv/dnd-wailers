@@ -4,6 +4,7 @@ import {
   blockingSegments,
   cellsForSize,
   customInventoryItem,
+  defaultVisibility,
   effectiveVisibility,
   hexAt,
   hexToPixel,
@@ -969,13 +970,14 @@ export function inventoriesArePublic(state: LiveState, except: ReadonlyArray<str
 
 export const ZONE_VISION_MODES: readonly ZoneVision['mode'][] = ['all', 'explored', 'vision'];
 export const ZONE_VISION_MAX_RADIUS = 60;
+const DEFAULT_ZONE_VISION_RADIUS = defaultVisibility().visionRadius;
 
 /** Stored zone vision (campaign document or saved state) -> valid ZoneVision, or null. Never throws. */
 export function sanitizeZoneVision(value: unknown): ZoneVision | null {
   if (!isPlainObject(value)) return null;
   const mode = value.mode;
   if (typeof mode !== 'string' || !(ZONE_VISION_MODES as readonly string[]).includes(mode)) return null;
-  const radius = typeof value.radius === 'number' && Number.isFinite(value.radius) ? clamp(Math.round(value.radius), 0, ZONE_VISION_MAX_RADIUS) : 6;
+  const radius = typeof value.radius === 'number' && Number.isFinite(value.radius) ? clamp(Math.round(value.radius), 0, ZONE_VISION_MAX_RADIUS) : DEFAULT_ZONE_VISION_RADIUS;
   const cone = typeof value.cone === 'number' && Number.isFinite(value.cone) ? clamp(Math.round(value.cone), 10, 360) : 360;
   return { mode: mode as ZoneVision['mode'], radius, cone };
 }
@@ -986,7 +988,7 @@ export function parseZoneVision(value: unknown): ZoneVision | null {
   const obj = plainObject(value, 'visión de la zona');
   return {
     mode: oneOf(ZONE_VISION_MODES, obj.mode, 'modo de visión'),
-    radius: obj.radius === undefined ? 6 : reqInt(obj.radius, 'radio de visión', 0, ZONE_VISION_MAX_RADIUS),
+    radius: obj.radius === undefined ? DEFAULT_ZONE_VISION_RADIUS : reqInt(obj.radius, 'radio de visión', 0, ZONE_VISION_MAX_RADIUS),
     cone: obj.cone === undefined ? 360 : reqInt(obj.cone, 'cono de visión', 10, 360),
   };
 }

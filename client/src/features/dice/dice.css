@@ -76,24 +76,24 @@
 .wl-die-impact {
   position: absolute;
   left: 50%;
-  bottom: -4%;
-  width: 120%;
-  height: 22%;
-  margin-left: -60%;
+  bottom: -10%;
+  width: 150%;
+  height: 34%;
+  margin-left: -75%;
   border-radius: 9999px;
-  border: 2px solid rgba(243, 213, 138, 0.55);
-  background: radial-gradient(ellipse at center, rgba(233, 192, 99, 0.22), transparent 70%);
+  background: radial-gradient(closest-side, rgba(252, 241, 210, 0.55) 0%, rgba(233, 192, 99, 0.28) 45%, rgba(233, 192, 99, 0) 100%);
   pointer-events: none;
-  animation: wl-impact 520ms ease-out both;
+  z-index: -1;
+  animation: wl-impact 560ms ease-out both;
 }
 
 @keyframes wl-impact {
   0% {
-    transform: scale(0.4);
-    opacity: 0.95;
+    transform: scale(0.35, 0.5);
+    opacity: 1;
   }
   100% {
-    transform: scale(1.35);
+    transform: scale(1.25, 1);
     opacity: 0;
   }
 }

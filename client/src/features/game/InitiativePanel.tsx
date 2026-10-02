@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Crosshair,
   EyeOff,
+  Footprints,
   GripVertical,
   HeartPulse,
   Minus,
@@ -24,6 +25,7 @@ import {
   Plus,
   RefreshCw,
   Shuffle,
+  SkipForward,
   Skull,
   Swords,
   Trash2,
@@ -33,7 +35,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { tokenHp, type HeroSheet, type LiveState, type SessionZone, type Token, type TurnEntry } from '@wailers/shared';
+import { economyApplies, tokenHp, type HeroSheet, type LiveState, type SessionZone, type Token, type TurnEntry } from '@wailers/shared';
 import { Avatar } from '../../components/ui/Avatar';
 import { Button } from '../../components/ui/Button';
 import { useContextMenu, type ContextMenuItem } from '../../components/ui/ContextMenu';
@@ -45,6 +47,7 @@ import { emitUiEvent } from '../../lib/uiEvents';
 import { useSessionStore } from '../../stores/session';
 import { isTurnEntryMasked } from './map/fog';
 import { send } from './panels/actions';
+import { CombatBar, UsageChip } from './panels/CombatControls';
 import { heroTokenOf, partyMembers, usePanelContext, type PanelContext } from './panels/context';
 import { HpBar, type HpInfo } from './panels/HpBar';
 import { PromptDialog, type PromptField } from './panels/PromptDialog';
@@ -232,6 +235,19 @@ export function InitiativePanel() {
   const rowMenu = (v: EntryView): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [{ heading: true, label: v.name }];
     items.push({ label: 'Dar el turno', icon: <Play />, onClick: () => void send('turn:setCurrent', { entryId: v.entry.id }) });
+    if (v.hero && economyApplies(state)) {
+      const heroId = v.hero.id;
+      const heroName = v.hero.name;
+      items.push({
+        label: 'Turno del héroe',
+        icon: <Footprints />,
+        children: [
+          { label: 'Reiniciar movimiento y acciones', onClick: () => void send('usage:adjust', { heroId, reset: true }, { success: `${heroName}: turno reiniciado` }) },
+          { label: '+1 acción de combate', onClick: () => void send('usage:adjust', { heroId, bonusActionsDelta: 1 }, { success: `${heroName}: +1 acción` }) },
+          { label: '+3 casillas', onClick: () => void send('usage:adjust', { heroId, bonusMoveDelta: 3 }, { success: `${heroName}: +3 casillas` }) },
+        ],
+      });
+    }
     if (v.token) items.push({ label: 'Centrar en la ficha', icon: <Crosshair />, onClick: () => centerOn(v) });
     items.push({ label: 'Cambiar iniciativa…', icon: <Swords />, onClick: () => setPrompt({ kind: 'initiative', entry: v.entry }) });
     items.push({ label: 'Renombrar…', icon: <Pencil />, onClick: () => setPrompt({ kind: 'rename', entry: v.entry }) });
@@ -353,6 +369,7 @@ export function InitiativePanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col outline-none" tabIndex={manage ? 0 : undefined} onKeyDown={onKeyDown} aria-label="Iniciativa">
+      <CombatBar className="mb-2 shrink-0" />
       <div className="mb-2 flex shrink-0 items-center gap-2">
         <div className="relative flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-full border border-gold-600/70 bg-gradient-to-b from-ink-700 to-ink-900 shadow-glow-gold" title="Ronda actual">
           <span className="text-[8px] font-semibold uppercase leading-none tracking-[0.15em] text-gold-400">Ronda</span>
@@ -379,6 +396,20 @@ export function InitiativePanel() {
         )}
         {manage && <IconButton icon={<UserPlus />} title="Añadir a la iniciativa" size="sm" variant="secondary" onClick={openAddMenu} />}
       </div>
+
+      {myTurn && !ctx.isDm && state.turn.combat === true && (
+        <Button
+          size="sm"
+          variant="primary"
+          epic
+          block
+          icon={<SkipForward />}
+          className="mb-2 shrink-0"
+          onClick={() => void send('turn:endMine', {}, { success: 'Turno terminado', error: 'No se pudo terminar el turno' })}
+        >
+          Terminar mi turno
+        </Button>
+      )}
 
       {manage && missingPlayers.length > 0 && views.length > 0 && (
         <div role="status" className="mb-2 flex shrink-0 animate-fade-in items-start gap-2 rounded-lg border border-gold-600/50 bg-gold-500/10 px-2.5 py-2 text-[11px] leading-snug text-parchment-200">
@@ -550,17 +581,22 @@ function InitiativeRow({ view, index, current, manage, ctx, editingInit, onEditI
         <Avatar name={view.masked ? '?' : view.name} imageUrl={view.imageUrl} color={view.color} size="sm" ring={current} />
       </button>
 
-      <button type="button" className="min-w-0 flex-1 text-left" onClick={onClick} disabled={!view.token}>
-        <span className="flex items-center gap-1">
-          {typeIcon && <span className="shrink-0 text-parchment-400">{typeIcon}</span>}
-          <span className={clsx('truncate text-sm font-medium', current ? 'text-gold-100' : 'text-parchment-100', isOwn && 'underline decoration-gold-500/60 underline-offset-2')}>
-            {view.name}
+      <div className="min-w-0 flex-1">
+        <button type="button" className="block w-full min-w-0 text-left" onClick={onClick} disabled={!view.token}>
+          <span className="flex items-center gap-1">
+            {typeIcon && <span className="shrink-0 text-parchment-400">{typeIcon}</span>}
+            <span className={clsx('truncate text-sm font-medium', current ? 'text-gold-100' : 'text-parchment-100', isOwn && 'underline decoration-gold-500/60 underline-offset-2')}>
+              {view.name}
+            </span>
+            {token?.hidden && manage && <EyeOff className="h-3 w-3 shrink-0 text-parchment-400" aria-label="Oculta a los jugadores" />}
           </span>
-          {token?.hidden && manage && <EyeOff className="h-3 w-3 shrink-0 text-parchment-400" aria-label="Oculta a los jugadores" />}
-        </span>
-        {view.hp && view.hp.ratio !== null && !view.masked && <HpBar info={view.hp} size="xs" className="mt-1" />}
-        {view.statuses.length > 0 && !view.masked && <StatusIcons statuses={view.statuses} size="xs" max={5} className="mt-1" />}
-      </button>
+          {view.hp && view.hp.ratio !== null && !view.masked && <HpBar info={view.hp} size="xs" className="mt-1" />}
+          {view.statuses.length > 0 && !view.masked && <StatusIcons statuses={view.statuses} size="xs" max={5} className="mt-1" />}
+        </button>
+        {view.hero && ctx.state && economyApplies(ctx.state) && (
+          <UsageChip state={ctx.state} heroId={view.hero.id} heroName={view.hero.name} manage={manage} current={current} className="mt-1" />
+        )}
+      </div>
 
       <InitiativeValue value={entry.initiative} editable={manage} editing={editingInit} onEditing={onEditInit} entryId={entry.id} current={current} />
 

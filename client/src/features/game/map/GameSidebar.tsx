@@ -48,7 +48,7 @@ const TAB_DEFS: Record<GameSidebarTab, TabDef> = {
   log: { id: 'log', label: 'Registro', title: 'Registro de la partida', icon: ScrollText, layout: 'fill-padded' },
   audio: { id: 'audio', label: 'Audio', title: 'Música y sonido', icon: Music, layout: 'fill' },
   effects: { id: 'effects', label: 'Efectos', title: 'Efectos y clima', icon: Wand2, layout: 'fill' },
-  visibility: { id: 'visibility', label: 'Visión', title: 'Visibilidad', icon: Eye, layout: 'scroll' },
+  visibility: { id: 'visibility', label: 'Visión', title: 'Lo que ven los jugadores', icon: Eye, layout: 'scroll' },
   library: { id: 'library', label: 'Biblioteca', title: 'Biblioteca', icon: BookOpen, layout: 'fill' },
 };
 

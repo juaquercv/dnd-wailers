@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent, type MouseEvent } from 'react';
+import { useMemo, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
   ArrowLeftRight,
@@ -156,6 +156,20 @@ export function InventoryList({ heroId, tokenId, readOnly = false }: InventoryLi
   const totalValue = items.reduce((sum, it) => sum + (it.value || 0) * it.quantity, 0);
   const from = source.kind === 'hero' ? { heroId: source.hero.id } : { tokenId: source.tokenId };
 
+  // Using an item only logs it (and spends a combat action / one unit): the DM applies the effect.
+  const heroSource = source.kind === 'hero' ? source.hero : null;
+  const canUse = !!heroSource && (manage || owner);
+  const useBlock = eco && !eco.unlimited ? eco.actionBlock : null;
+  const useCostNote = eco && !eco.unlimited && eco.limited ? 'Gasta 1 acción de combate de este turno.' : null;
+  const startUse = (item: InventoryItem) => {
+    if (!heroSource) return;
+    if (asksToConsume(item)) {
+      setUsing((cur) => (cur === item.id ? null : item.id));
+      return;
+    }
+    void sendItemUse(heroSource.id, item, false, manage ? heroSource.name : undefined);
+  };
+
   return (
     <div
       {...dropProps}
@@ -218,6 +232,20 @@ export function InventoryList({ heroId, tokenId, readOnly = false }: InventoryLi
               onEdit={() => setEditing(item)}
               onRemove={() => void removeItem(item)}
               onOffer={() => setTrade({ itemId: item.id })}
+              onUse={canUse ? () => startUse(item) : undefined}
+              useBlock={useBlock}
+              useCost={!!useCostNote}
+              confirm={
+                heroSource && using === item.id ? (
+                  <ItemUseConfirm
+                    heroId={heroSource.id}
+                    item={item}
+                    costNote={useCostNote}
+                    heroName={manage ? heroSource.name : undefined}
+                    onDone={() => setUsing(null)}
+                  />
+                ) : null
+              }
             />
           ))}
         </ul>
@@ -277,9 +305,35 @@ interface InventoryRowProps {
   onEdit: () => void;
   onRemove: () => void;
   onOffer: () => void;
+  /** Use the item (owner or DM, hero inventories only). */
+  onUse?: () => void;
+  /** Why it cannot be used now (turn economy). */
+  useBlock: string | null;
+  /** Using it spends a combat action right now. */
+  useCost: boolean;
+  /** Inline "¿Gastar una unidad?" confirmation. */
+  confirm: ReactNode;
 }
 
-function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, expanded, onToggleExpand, onQuantity, onEdit, onRemove, onOffer }: InventoryRowProps) {
+function InventoryRow({
+  item,
+  ctx,
+  source,
+  from,
+  manage,
+  owner,
+  currencyShort,
+  expanded,
+  onToggleExpand,
+  onQuantity,
+  onEdit,
+  onRemove,
+  onOffer,
+  onUse,
+  useBlock,
+  useCost,
+  confirm,
+}: InventoryRowProps) {
   const menu = useContextMenu();
   const [quantity, setQuantity] = useDraft(item.quantity, onQuantity, 380);
   const rarity = item.rarity ? RARITY_INFO[item.rarity] : null;
@@ -309,8 +363,17 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
     });
 
   const menuItems = (): ContextMenuItem[] => {
-    if (!manage) return owner ? [{ label: 'Ofrecer en intercambio', icon: <Handshake />, onClick: onOffer }] : [];
+    const useEntry: ContextMenuItem | null = onUse
+      ? { label: useCost ? 'Usar (1 acción)' : 'Usar', icon: <Hand />, disabled: !!useBlock, onClick: onUse }
+      : null;
+    if (!manage) {
+      const own: ContextMenuItem[] = [];
+      if (useEntry) own.push(useEntry);
+      if (owner) own.push({ label: 'Ofrecer en intercambio', icon: <Handshake />, onClick: onOffer });
+      return own;
+    }
     const list: ContextMenuItem[] = [{ heading: true, label: item.name }];
+    if (useEntry) list.push({ ...useEntry, label: 'Usar (queda registrado)' });
     if (giveTargets.length > 0) {
       list.push({
         label: source.kind === 'hero' ? 'Dar a…' : 'Entregar a…',
@@ -359,7 +422,7 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
     <li
       draggable={manage}
       onDragStart={manage ? onDragStart : undefined}
-      onContextMenu={manage || owner ? openMenu : undefined}
+      onContextMenu={manage || owner || onUse ? openMenu : undefined}
       className={clsx(
         'group rounded-lg border bg-ink-800/60 transition',
         expanded ? 'border-gold-700/50 bg-ink-800' : 'border-ink-600/60 hover:border-ink-500 hover:bg-ink-800/90',
@@ -431,6 +494,19 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
         ) : (
           <div className="flex shrink-0 items-center gap-1">
             {item.quantity !== 1 && <span className="text-xs font-semibold tabular-nums text-parchment-200">×{formatNumber(item.quantity, 0)}</span>}
+            {onUse && (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<Hand />}
+                disabled={!!useBlock}
+                title={useBlock ?? (useCost ? 'Usar (gasta 1 acción de combate; el DM aplica el efecto)' : 'Usar (queda registrado; el DM aplica el efecto)')}
+                onClick={onUse}
+                className="!px-2"
+              >
+                Usar
+              </Button>
+            )}
             {owner && (
               <IconButton
                 icon={<Handshake />}
@@ -443,6 +519,7 @@ function InventoryRow({ item, ctx, source, from, manage, owner, currencyShort, e
           </div>
         )}
       </div>
+      {confirm && <div className="px-2 pb-2">{confirm}</div>}
       {expanded && (
         <div className="animate-fade-in space-y-1 border-t border-ink-600/60 px-3 py-2 text-xs leading-relaxed text-parchment-300">
           {item.description ? <p className="whitespace-pre-line">{item.description}</p> : <p className="italic text-parchment-400">Sin descripción.</p>}
@@ -477,7 +554,7 @@ function sameLibraryData(item: InventoryItem, draft: ItemDraft): boolean {
   );
 }
 
-function ItemThumb({ item }: { item: InventoryItem }) {
+export function ItemThumb({ item }: { item: InventoryItem }) {
   const [broken, setBroken] = useState(false);
   const color = item.rarity ? RARITY_INFO[item.rarity].color : '#a8946b';
   if (item.imageUrl && !broken) {
