@@ -15,7 +15,11 @@ export interface SessionTrack {
 
 export interface SessionAudioInfo {
   status: SessionStatus | null;
-  /** Audio only plays while the session is in progress (not in the lobby). */
+  /**
+   * Audio only plays while the session is in progress (not in the lobby) and this client is still in it:
+   * a kicked player, or one whose session was paused / ended, keeps the last view (status 'playing') on
+   * screen behind the notice, but the store is no longer 'joined'.
+   */
   active: boolean;
   mode: AudioState['mode'];
   /** Zone this client is viewing (source of the tracks in 'zone' mode). */
@@ -37,6 +41,8 @@ function track(url: string, soundId: string | null, name: string | null, info: S
  */
 export function useSessionAudio(): SessionAudioInfo {
   const status = useSessionStore((s) => s.view?.state.status ?? null);
+  // Stays 'joined' during socket reconnections, so a brief disconnect does not cut the music.
+  const inSession = useSessionStore((s) => s.status === 'joined');
   const audio = useSessionStore((s) => s.view?.state.audio ?? null);
   const zone = useSessionStore((s) => (s.viewZone ? s.zonesById[s.viewZone.zoneId] ?? null : null));
   const mode: AudioState['mode'] = audio?.mode ?? 'zone';
@@ -57,12 +63,12 @@ export function useSessionAudio(): SessionAudioInfo {
     }
     return {
       status,
-      active: status === 'playing',
+      active: inSession && status === 'playing',
       mode,
       zoneName: zone?.name ?? null,
       music,
       ambience,
       master: audio?.master ?? 1,
     };
-  }, [status, audio, zone, mode, musicInfo, ambienceInfo]);
+  }, [status, inSession, audio, zone, mode, musicInfo, ambienceInfo]);
 }

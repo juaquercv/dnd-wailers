@@ -2,6 +2,7 @@ import type { LayerId, ZoneLevel } from '@wailers/shared';
 import { isAnyModalOpen, toast } from '../../components/ui';
 import { useHotkeys, type HotkeyHandler } from '../../lib/hotkeys';
 import { useEditorStore, type SelectionItem } from './editorStore';
+import { currentSaveError, hasSaveError, hasUnsavedWork, retrySave } from './shell/campaignSave';
 import { EDITOR_TOOLS } from './shell/tools';
 
 export interface EditorHotkeysOptions {
@@ -174,12 +175,20 @@ const saveBindings: Record<string, HotkeyHandler> = {
     // Always swallow Ctrl+S (never the browser "save page" dialog), even while typing.
     e.preventDefault();
     if (isAnyModalOpen()) return;
-    const s = useEditorStore.getState();
-    const nothingPending = s.dirtyZoneIds.length === 0 && s.saveState === 'saved';
-    void s.saveNow().then(() => {
-      if (useEditorStore.getState().saveState === 'error') toast.error('No se pudieron guardar los cambios');
-      else if (nothingPending) toast.success('Todo está guardado', { duration: 1800 });
-    });
+    const failed = () => toast.error('No se pudieron guardar los cambios', { description: currentSaveError() ?? undefined });
+    if (hasSaveError()) {
+      // Same as "Reintentar": zones and the campaign fields kept from a failed save.
+      void retrySave().then((ok) => (ok ? toast.success('Cambios guardados') : failed()));
+      return;
+    }
+    const nothingPending = !hasUnsavedWork();
+    void useEditorStore
+      .getState()
+      .saveNow()
+      .then(() => {
+        if (hasSaveError()) failed();
+        else if (nothingPending) toast.success('Todo está guardado', { duration: 1800 });
+      });
   },
 };
 

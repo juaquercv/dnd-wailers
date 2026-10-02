@@ -210,7 +210,7 @@ function DmDetails({ ctx, state, token, onClose }: { ctx: PanelContext; state: L
 
   const remove = async () => {
     const ok = await confirm({
-      title: isHero ? 'Retirar del mapa' : 'Eliminar ficha',
+      title: isHero ? `¿Retirar a ${token.name} del mapa?` : 'Eliminar ficha',
       message: isHero
         ? `La ficha de ${token.name} desaparecerá del mapa. Su hoja de personaje no se toca.`
         : `${token.name} se eliminará de la partida${token.loot.length > 0 ? ' junto con su botín registrado' : ''}.`,
@@ -218,7 +218,8 @@ function DmDetails({ ctx, state, token, onClose }: { ctx: PanelContext; state: L
       danger: true,
     });
     if (!ok) return;
-    if (await send('token:remove', { tokenId: token.id }, { success: `${token.name} eliminada` })) onClose();
+    const success = isHero ? `${token.name} se retira del mapa` : `Ficha eliminada: ${token.name}`;
+    if (await send('token:remove', { tokenId: token.id }, { success })) onClose();
   };
 
   return (

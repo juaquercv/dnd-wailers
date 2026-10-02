@@ -10,6 +10,7 @@ import {
   type Segment,
   type ZoneLevel,
 } from '@wailers/shared';
+import { usePublishAmbientLighting } from './ambientLighting';
 import { clamp, hashString, withAlpha } from './mapUtils';
 
 export interface TokenLight {
@@ -89,6 +90,8 @@ export function LightingOverlay({ level, lighting, lights, tokenLights, animate 
   const darkness = clamp(info.darkness, 0, 1);
   const width = Math.max(1, level.background.width);
   const height = Math.max(1, level.background.height);
+  // The lower floors of the 2.5D stack (LevelStack) are outside this rect: they take the same base darkness.
+  usePublishAmbientLighting(info.tint, darkness);
 
   const doorKey = doorStates
     ? Object.keys(doorStates)
@@ -148,6 +151,10 @@ export function LightingOverlay({ level, lighting, lights, tokenLights, animate 
       c.save();
       c.fillStyle = withAlpha(info.tint, darkness);
       c.fillRect(0, 0, width, height);
+      // Light belongs to the current level: its glow never spills onto the lower floors peeking out around it.
+      c.beginPath();
+      c.rect(0, 0, width, height);
+      c.clip();
 
       const lit = sources.map((s, i) => {
         const wave = flickering && s.flicker > 0 ? flickerWave(t, s.seed) * s.flicker : 0;

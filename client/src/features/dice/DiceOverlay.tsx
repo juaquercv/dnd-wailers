@@ -6,6 +6,7 @@ import { useSessionEvent } from '../../lib/eventBus';
 import { useSessionStore } from '../../stores/session';
 import { useSettingsStore } from '../../stores/settings';
 import { RollStage } from './RollStage';
+import { setOverlayShowing } from './coveringOverlays';
 import { useUserLookup, useViewportSize } from './diceHooks';
 import { rollTitle } from './diceUtils';
 import { clearPendingRolls, markRollsPending, markRollsRevealed } from './rollReveal';
@@ -43,22 +44,24 @@ export function DiceOverlay() {
   const updateQueue = useCallback((fn: (q: RollResult[]) => RollResult[]) => {
     const next = fn(queueRef.current);
     queueRef.current = next;
+    // Published synchronously: a `turnStart` handled in the same tick must already see it.
+    setOverlayShowing('dice', next.length > 0);
     setQueue(next);
   }, []);
 
   useEffect(() => {
-    queueRef.current = [];
-    setQueue([]);
+    updateQueue(() => []);
     setSettledAt(null);
     setLeaving(false);
     leavingRef.current = false;
     seen.current = new Set();
     clearPendingRolls();
-  }, [sessionId]);
+  }, [sessionId, updateQueue]);
 
   useEffect(
     () => () => {
       if (leaveTimer.current !== null) window.clearTimeout(leaveTimer.current);
+      setOverlayShowing('dice', false);
       clearPendingRolls();
     },
     [],
@@ -72,11 +75,10 @@ export function DiceOverlay() {
     }
     leavingRef.current = false;
     markRollsRevealed(queueRef.current.map((r) => r.id));
-    queueRef.current = [];
-    setQueue([]);
+    updateQueue(() => []);
     setSettledAt(null);
     setLeaving(false);
-  }, []);
+  }, [updateQueue]);
 
   // A hidden tab cannot animate (timers and frames are throttled): stop the show and do not pile
   // up stale animations; the results stay in the history.

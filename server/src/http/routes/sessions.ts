@@ -18,6 +18,9 @@ import { HttpError, badRequest, conflict, forbidden, notFound } from '../errors'
 const LOG_TYPES: readonly LogType[] = ['chat', 'roll', 'system', 'hp', 'item', 'turn', 'move', 'loot', 'trade', 'fx', 'audio'];
 const LOG_LIMIT_DEFAULT = 200;
 const LOG_LIMIT_MAX = 1000;
+/** Rows read per query while collecting visible log lines (post-filtered requests only). */
+const LOG_SCAN_BATCH_MIN = 100;
+const LOG_SCAN_BATCH_MAX = 2000;
 const NAME_MAX = 120;
 
 const createBody = z.object({
@@ -83,6 +86,46 @@ function logVisibilityFilter(state: LiveState, userId: string): Prisma.SessionLo
   // Public rolls of other players (when canSeeOthersRolls is off) are post-filtered with canSeeLog,
   // because rolls the DM requested stay visible and that depends on the JSON data.
   return filters;
+}
+
+/**
+ * Newest `limit` lines that pass canSeeLog, newest first. Reads older rows in keyset batches
+ * (createdAt, id) until enough visible lines are collected or the log is exhausted, so lines the
+ * post-filter hides never shorten the page.
+ */
+async function visibleLogLines(
+  where: Prisma.SessionLogWhereInput,
+  state: LiveState,
+  userId: string,
+  limit: number,
+  batchSize: number,
+): Promise<LogEntry[]> {
+  const visible: LogEntry[] = [];
+  let cursor: { createdAt: Date; id: string } | null = null;
+  for (;;) {
+    const page: Prisma.SessionLogWhereInput = cursor
+      ? {
+          AND: [
+            where,
+            { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] },
+          ],
+        }
+      : where;
+    const rows = await prisma.sessionLog.findMany({
+      where: page,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: batchSize,
+    });
+    for (const row of rows) {
+      const entry = logToDTO(row);
+      if (!canSeeLog(state, entry, userId)) continue;
+      visible.push(entry);
+      if (visible.length >= limit) return visible;
+    }
+    const last = rows[rows.length - 1];
+    if (!last || rows.length < batchSize) return visible;
+    cursor = { createdAt: last.createdAt, id: last.id };
+  }
 }
 
 export async function registerSessionRoutes(app: FastifyInstance): Promise<void> {
@@ -162,14 +205,10 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
 
     const and: Prisma.SessionLogWhereInput[] = [...logVisibilityFilter(state, userId)];
     if (type) and.push({ type });
+    // Without the post-filter every row the query returns is visible, so one batch of `limit` suffices.
     const postFilter = userId !== state.hostUserId && !effectiveVisibility(state, userId).canSeeOthersRolls;
-    const rows = await prisma.sessionLog.findMany({
-      where: { sessionId: id, AND: and },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: postFilter ? Math.min(limit * 3, LOG_LIMIT_MAX * 3) : limit,
-    });
-    const entries = rows.map(logToDTO);
-    const visible = postFilter ? entries.filter((e) => canSeeLog(state, e, userId)).slice(0, limit) : entries;
+    const batchSize = postFilter ? Math.min(Math.max(limit * 2, LOG_SCAN_BATCH_MIN), LOG_SCAN_BATCH_MAX) : limit;
+    const visible = await visibleLogLines({ sessionId: id, AND: and }, state, userId, limit, batchSize);
     return visible.reverse();
   });
 

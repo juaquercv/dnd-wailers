@@ -60,23 +60,65 @@ export function allowedZoneIds(state: LiveState, zones: Zone[], userId: string):
 }
 
 /**
- * Vision radius in grid cells for a token seen through by `userId`: the explicit perPlayer visionRadius
- * of that player when the DM set one, else hero data.visionCells when set, else the effective (global)
- * radius. Without `userId` the perPlayer override is not considered.
+ * Player who plays a hero token: the player who selected that hero, else the token owner when they are
+ * in the session. null for non-hero tokens and heroes nobody plays.
+ */
+export function heroTokenPlayerId(state: LiveState, token: Token): string | null {
+  if (token.kind !== 'hero') return null;
+  if (token.heroId) {
+    const byHero = Object.values(state.players).find((p) => p.heroId === token.heroId);
+    if (byHero) return byHero.userId;
+  }
+  return token.ownerUserId && state.players[token.ownerUserId] ? token.ownerUserId : null;
+}
+
+/**
+ * Player whose vision settings shape what a token sees: `userId` for their own hero tokens, else the
+ * player of that hero (sharedVision looks through the teammate's eyes, not the viewer's).
+ */
+function visionOwnerOf(state: LiveState, token: Token, userId?: string): string | null {
+  if (userId !== undefined && isOwnHeroToken(state, token, userId)) return userId;
+  return heroTokenPlayerId(state, token);
+}
+
+function finiteOverride(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Vision radius in grid cells of a vision token, as seen by `userId` (`eff` = effectiveVisibility of
+ * `userId`). The radius belongs to the hero, not to the viewer: the perPlayer visionRadius of the player
+ * of that hero (the viewer for their own token) when the DM set one, else hero data.visionCells when
+ * set, else the radius in force for that player (eff for own tokens, the global radius otherwise).
  */
 export function visionCellsFor(state: LiveState, token: Token, eff: VisibilitySettings, userId?: string): number {
-  const override = userId !== undefined ? state.visibility.perPlayer[userId]?.visionRadius : undefined;
-  if (typeof override === 'number' && Number.isFinite(override)) return Math.max(0, override);
+  const owner = visionOwnerOf(state, token, userId);
+  const override = owner !== null ? finiteOverride(state.visibility.perPlayer[owner]?.visionRadius) : null;
+  if (override !== null) return Math.max(0, override);
   const hero = token.heroId ? state.heroes[token.heroId] : undefined;
   const cells = hero?.data.visionCells;
   if (typeof cells === 'number' && Number.isFinite(cells)) return Math.max(0, cells);
-  return Math.max(0, eff.visionRadius);
+  const fallback = owner !== null && owner === userId ? eff.visionRadius : state.visibility.global.visionRadius;
+  return Math.max(0, fallback);
+}
+
+/**
+ * Vision cone in degrees of a vision token, as seen by `userId`: like the radius it belongs to the hero,
+ * so own tokens use `eff.visionCone` and a teammate's token the cone in force for that teammate
+ * (their perPlayer visionCone, else the global cone).
+ */
+export function visionConeFor(state: LiveState, token: Token, eff: VisibilitySettings, userId?: string): number {
+  const owner = visionOwnerOf(state, token, userId);
+  if (owner !== null && owner === userId) return eff.visionCone;
+  const override = owner !== null ? finiteOverride(state.visibility.perPlayer[owner]?.visionCone) : null;
+  return override ?? state.visibility.global.visionCone;
 }
 
 /**
  * Current visibility polygons per levelId for a player, from visionTokensFor: radius = visionCellsFor
- * (perPlayer radius, else hero data.visionCells, else global radius), converted with the level grid; cone and
- * token.facing; blocking walls honoring zoneStates[zoneId].doors. {} when visionMode is 'all' or 'none'.
+ * and cone = visionConeFor (both follow the hero of each token: its player's perPlayer override, else hero
+ * data.visionCells / global value), converted with the level grid; token.facing; blocking walls honoring
+ * zoneStates[zoneId].doors. {} when visionMode is 'all' or 'none'.
  */
 export function visibleAreas(state: LiveState, zones: Zone[], userId: string): Record<string, number[][]> {
   const eff = effectiveVisibility(state, userId);
@@ -96,7 +138,7 @@ export function visibleAreas(state: LiveState, zones: Zone[], userId: string): R
     }
     const radius = cellsToPx(visionCellsFor(state, token, eff, userId), level.grid);
     const polygon = computeVisibilityPolygon(
-      { x: token.x, y: token.y, radius, cone: eff.visionCone, facing: token.facing },
+      { x: token.x, y: token.y, radius, cone: visionConeFor(state, token, eff, userId), facing: token.facing },
       segments,
       { width: level.background.width, height: level.background.height },
     );
@@ -139,6 +181,27 @@ function tokenForPlayer(token: Token, eff: VisibilitySettings): Token {
   return t;
 }
 
+/**
+ * perPlayer overrides a player receives: their own entry, plus (with sharedVision) only the visionRadius
+ * and visionCone of the other players, which shape what their heroes see (visionCellsFor/visionConeFor).
+ */
+function perPlayerForPlayer(state: LiveState, userId: string, eff: VisibilitySettings): Record<string, Partial<VisibilitySettings>> {
+  const out: Record<string, Partial<VisibilitySettings>> = {};
+  const own = state.visibility.perPlayer[userId];
+  if (own) out[userId] = { ...own };
+  if (!eff.sharedVision) return out;
+  for (const [id, overrides] of Object.entries(state.visibility.perPlayer)) {
+    if (id === userId || !overrides) continue;
+    const shape: Partial<VisibilitySettings> = {};
+    const radius = finiteOverride(overrides.visionRadius);
+    const cone = finiteOverride(overrides.visionCone);
+    if (radius !== null) shape.visionRadius = radius;
+    if (cone !== null) shape.visionCone = cone;
+    if (radius !== null || cone !== null) out[id] = shape;
+  }
+  return out;
+}
+
 /** Name players see for an initiative entry whose creature is hidden from them. */
 export const HIDDEN_TURN_ENTRY_NAME = 'Criatura desconocida';
 
@@ -167,7 +230,8 @@ function turnEntryForPlayer(state: LiveState, entry: TurnEntry): TurnEntry {
  *  - explored: only own entry. rollRequests: only own. trades: only those involving the player.
  *  - turn.order: [] unless canSeeInitiative (currentIndex/round kept); entries of hidden creatures are
  *    anonymized ('Criatura desconocida', no portrait, no initiative) but keep their place.
- *  - visibility.perPlayer: only own entry. turnOffer: null unless own.
+ *  - visibility.perPlayer: own entry; with sharedVision also the other players' visionRadius/visionCone
+ *    (only those fields), so the client computes the same visibleAreas. turnOffer: null unless own.
  *  - projection: null unless targets is 'all' or includes the player.
  *  - zoneStates kept. Never mutates the input.
  * Also: while the session is in the lobby players receive no tokens (campaign hidden until start);
@@ -204,7 +268,6 @@ export function buildPlayerView(state: LiveState, zones: Zone[], userId: string)
   }
 
   const ownExplored = state.explored[userId];
-  const ownPerPlayer = state.visibility.perPlayer[userId];
   const projection = state.projection;
   const projectionVisible =
     projection !== null && (projection.targets === 'all' || (Array.isArray(projection.targets) && projection.targets.includes(userId)));
@@ -222,7 +285,7 @@ export function buildPlayerView(state: LiveState, zones: Zone[], userId: string)
     zoneStates: structuredClone(state.zoneStates),
     visibility: {
       global: { ...state.visibility.global },
-      perPlayer: ownPerPlayer ? { [userId]: { ...ownPerPlayer } } : {},
+      perPlayer: perPlayerForPlayer(state, userId, eff),
     },
     options: { ...state.options },
     explored: ownExplored ? { [userId]: { ...ownExplored } } : {},

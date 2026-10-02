@@ -15,6 +15,7 @@ import {
 import Konva from 'konva';
 import { Stage } from 'react-konva';
 import { MapCamera, MAX_SCALE, MIN_SCALE } from './camera';
+import { AmbientLightingContext, createAmbientLightingStore, type AmbientLightingStore } from './ambientLighting';
 import { MapViewContext, type MapViewState } from './mapView';
 import { clamp, PAN_CURSOR_ATTR } from './mapUtils';
 
@@ -134,6 +135,9 @@ export const MapStage = forwardRef<MapStageHandle, MapStageProps>(function MapSt
   const cameraRef = useRef<MapCamera | null>(null);
   if (!cameraRef.current) cameraRef.current = new MapCamera();
   const camera = cameraRef.current;
+  const ambientRef = useRef<AmbientLightingStore | null>(null);
+  if (!ambientRef.current) ambientRef.current = createAmbientLightingStore();
+  const ambient = ambientRef.current;
 
   const propsRef = useRef(props);
   propsRef.current = props;
@@ -559,7 +563,11 @@ export const MapStage = forwardRef<MapStageHandle, MapStageProps>(function MapSt
           onTouchEnd={handleTouchEnd}
           onDragStart={handleDragStart}
         >
-          {childrenReady && <MapViewContext.Provider value={camera}>{children}</MapViewContext.Provider>}
+          {childrenReady && (
+            <MapViewContext.Provider value={camera}>
+              <AmbientLightingContext.Provider value={ambient}>{children}</AmbientLightingContext.Provider>
+            </MapViewContext.Provider>
+          )}
         </Stage>
       )}
     </div>

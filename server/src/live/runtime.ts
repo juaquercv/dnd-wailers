@@ -379,8 +379,8 @@ export function heroTokenFor(hero: HeroSheet, player: Pick<SessionPlayer, 'userI
   };
 }
 
-/** Live hero sheet from a library hero, adapted to the campaign rules (nothing is removed). */
-export function heroSheetFromEntry(entry: LibraryEntry, rules: RuleSystem): HeroSheet {
+/** Live hero sheet from a library hero, with its data exactly as stored (no rule adaptation). */
+export function storedHeroSheet(entry: LibraryEntry): HeroSheet {
   const level = typeof entry.level === 'number' && Number.isFinite(entry.level) && entry.level > 0 ? Math.round(entry.level) : 1;
   return {
     id: entry.id,
@@ -389,6 +389,12 @@ export function heroSheetFromEntry(entry: LibraryEntry, rules: RuleSystem): Hero
     imageUrl: entry.imageUrl,
     level,
     categoryIds: [...entry.categoryIds],
-    data: adaptHeroToRules(entry.data as HeroData, rules, level),
+    data: structuredClone(entry.data as HeroData),
   };
+}
+
+/** Live hero sheet from a library hero, adapted to the campaign rules (nothing is removed). */
+export function heroSheetFromEntry(entry: LibraryEntry, rules: RuleSystem): HeroSheet {
+  const sheet = storedHeroSheet(entry);
+  return { ...sheet, data: adaptHeroToRules(sheet.data, rules, sheet.level) };
 }

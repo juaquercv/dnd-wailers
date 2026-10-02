@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Campaign, UpdateCampaignRequest } from '@wailers/shared';
+import type { UpdateCampaignRequest } from '@wailers/shared';
 import { useEditorStore } from '../editorStore';
 
 /**
@@ -25,46 +25,41 @@ export async function saveCampaign(patch: UpdateCampaignRequest): Promise<boolea
   }
 }
 
-/** Every editable campaign field (used to re-send the whole campaign after a failed save). */
-export function fullCampaignPatch(c: Campaign): UpdateCampaignRequest {
-  return {
-    name: c.name,
-    description: c.description,
-    coverUrl: c.coverUrl,
-    tags: c.tags,
-    rules: c.rules,
-    overview: c.overview,
-    spawn: c.spawn,
-    defaultVisibility: c.defaultVisibility,
-  };
+/** True while a zone or campaign save failed and its changes are still unsaved. */
+export function hasSaveError(): boolean {
+  const s = useEditorStore.getState();
+  return s.saveState === 'error' || s.campaignSaveError !== null;
 }
 
-/** True while anything is unsaved or being saved. */
+/** Message of the current save error (zones first, then campaign), or null. */
+export function currentSaveError(): string | null {
+  const s = useEditorStore.getState();
+  return s.saveState === 'error' ? s.saveError : s.campaignSaveError;
+}
+
+/** True while anything is unsaved or being saved (including campaign fields kept from a failed save). */
 export function hasUnsavedWork(): boolean {
   const s = useEditorStore.getState();
   return (
     s.dirtyZoneIds.length > 0 ||
     s.saveState === 'dirty' ||
     s.saveState === 'saving' ||
-    s.saveState === 'error' ||
+    hasSaveError() ||
     useCampaignSaveStore.getState().pending
   );
 }
 
-/** Retry after a save error: flush dirty zones and re-send the campaign. Resolves true on success. */
+/**
+ * Retry after a save error: flush the dirty zones, then send again the campaign fields kept from a failed
+ * save. Resolves true when everything is saved.
+ */
 export async function retrySave(): Promise<boolean> {
   const store = useEditorStore;
-  const before = store.getState();
-  store.setState({ saveState: before.dirtyZoneIds.length > 0 ? 'dirty' : 'saving', saveError: null });
-  if (before.dirtyZoneIds.length > 0) await store.getState().saveNow();
-  if (store.getState().saveState === 'error') return false;
-  const campaign = store.getState().campaign;
-  if (campaign) {
-    store.setState({ saveState: 'saving' });
-    if (!(await saveCampaign(fullCampaignPatch(campaign)))) return false;
-  }
-  const after = store.getState();
-  if (after.saveState === 'error') return false;
-  store.setState({ saveState: after.dirtyZoneIds.length > 0 ? 'dirty' : 'saved', saveError: null });
-  return true;
+  if (!(await store.getState().saveNow())) return false;
+  // Every dirty zone was just saved: a zone error left over from before is stale.
+  const zones = store.getState();
+  if (zones.saveState === 'error') store.setState({ saveState: zones.dirtyZoneIds.length > 0 ? 'dirty' : 'saved', saveError: null });
+  // An empty patch sends the kept fields (the store merges them into every campaign save).
+  if (store.getState().campaignSaveError !== null && !(await saveCampaign({}))) return false;
+  return !hasSaveError();
 }

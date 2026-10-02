@@ -16,7 +16,7 @@ import {
   type ZoneLevel,
   type ZoneNeighbors,
 } from '@wailers/shared';
-import { api } from '../../api/http';
+import { api, ApiRequestError } from '../../api/http';
 
 export type EditorTool =
   | 'select'
@@ -84,8 +84,14 @@ interface EditorState {
   layerLocked: Record<LayerId, boolean>;
   history: Record<string, ZoneHistory>;
   dirtyZoneIds: string[];
+  /** Zone autosave state ('error' while a zone save failed; the zones stay dirty and are sent again). */
   saveState: SaveState;
   saveError: string | null;
+  /**
+   * Set while campaign fields from a failed save are still unsaved. They are kept and sent again with the
+   * next campaign save, a retry, or after the next successful zone autosave when the failure was an outage.
+   */
+  campaignSaveError: string | null;
 
   load: (campaignId: string) => Promise<void>;
   setMode: (mode: EditorMode) => void;
@@ -120,8 +126,8 @@ interface EditorState {
   canUndo: () => boolean;
   canRedo: () => boolean;
 
-  /** Flush pending saves now. */
-  saveNow: () => Promise<void>;
+  /** Flush pending zone saves now. Resolves true when every dirty zone was saved. */
+  saveNow: () => Promise<boolean>;
 
   createZone: (opts?: { parentZoneId?: string | null; name?: string; templateEntryId?: string }) => Promise<Zone | null>;
   duplicateZone: (zoneId: string) => Promise<void>;
@@ -148,8 +154,17 @@ let campaignSaveWaiters: ((ok: boolean) => void)[] = [];
 /** Campaign patches whose request is still in flight (kept on top of reloaded campaigns). */
 let inFlightCampaignPatch: UpdateCampaignRequest = {};
 let campaignFlushes = 0;
+/** Campaign fields whose save failed and that were put back into pendingCampaignPatch (unsaved until a save succeeds). */
+const failedCampaignFields = new Set<string>();
+/** Whether the last campaign failure looked like an outage (no connection, 5xx): retried after the next zone save. */
+let campaignFailureRetryable = false;
+/** Field -> number of the latest campaign flush that sent it (an older failed flush never re-queues a newer value). */
+const campaignFieldFlush = new Map<string, number>();
+let campaignFlushSeq = 0;
+/** Bumped by load(): saves of a previously loaded campaign no longer touch the editor state. */
+let loadGeneration = 0;
 /** Zone saves run one after another: a save requested while another is in flight waits for it. */
-let saveChain: Promise<void> = Promise.resolve();
+let saveChain: Promise<unknown> = Promise.resolve();
 /** zoneId -> neighbors as last known on the server. */
 const savedNeighbors = new Map<string, ZoneNeighbors>();
 
@@ -246,6 +261,49 @@ function sortZones(zones: Zone[]): Zone[] {
   return [...zones].sort((a, b) => a.order - b.order);
 }
 
+/** Transition targets of a zone keyed by element id. */
+function transitionTargets(zone: Zone): Map<string, SpawnPoint | null> {
+  const out = new Map<string, SpawnPoint | null>();
+  for (const level of zone.levels) for (const el of level.elements) if (el.type === 'transition') out.set(el.id, el.target);
+  return out;
+}
+
+/**
+ * Dirty zones in save order: a zone goes after the dirty zones its transitions lead to, because the server
+ * moves a transition whose target level does not exist yet (e.g. a level created in the same batch).
+ */
+function zoneSaveOrder(ids: string[], zones: Zone[]): string[] {
+  const byId = new Map(zones.map((z) => [z.id, z]));
+  const batch = new Set(ids);
+  const order: string[] = [];
+  const seen = new Set<string>();
+  const visit = (id: string) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const zone = byId.get(id);
+    if (zone) for (const target of transitionTargets(zone).values()) if (target && target.zoneId !== id && batch.has(target.zoneId)) visit(target.zoneId);
+    order.push(id);
+  };
+  for (const id of ids) visit(id);
+  return order;
+}
+
+/** True when the server stored a different target for a transition whose target level matches `concerned`. */
+function targetsMoved(sent: Zone, saved: Zone, concerned: (zoneId: string, levelId: string) => boolean): boolean {
+  const stored = transitionTargets(saved);
+  for (const [id, target] of transitionTargets(sent)) {
+    if (!target || !concerned(target.zoneId, target.levelId)) continue;
+    const now = stored.get(id);
+    if (!now || now.zoneId !== target.zoneId || now.levelId !== target.levelId) return true;
+  }
+  return false;
+}
+
+function isOutage(err: unknown): boolean {
+  const status = err instanceof ApiRequestError ? err.status : 0;
+  return status === 0 || status >= 500;
+}
+
 export const useEditorStore = create<EditorState>((set, get) => {
   const scheduleAutosave = () => {
     if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -270,24 +328,58 @@ export const useEditorStore = create<EditorState>((set, get) => {
     if (get().campaignId === campaignId) set({ campaign: { ...fresh, ...inFlightCampaignPatch, ...pendingCampaignPatch } as Campaign });
   };
 
-  const flushZones = async (): Promise<void> => {
+  /**
+   * Saves one zone. Links the server changed (reciprocity) replace the stale local ones in every direction not
+   * edited again meanwhile, and are written into the zone's undo snapshots (undoing never reverts them).
+   */
+  const saveZone = async (id: string): Promise<{ sent: Zone; saved: Zone; neighborsSent: boolean } | null> => {
+    const sent = get().zones.find((z) => z.id === id);
+    if (!sent) return null;
+    const body = zoneSaveBody(sent);
+    // The server's zone schema accepts partial neighbors (merged with the stored ones).
+    const saved = await api.zones.update(id, body as ZoneInput);
+    savedNeighbors.set(id, { ...saved.neighbors });
+    set((s) => {
+      const editedAgain = s.dirtyZoneIds.includes(id);
+      let history = s.history;
+      const zones = s.zones.map((z) => {
+        if (z.id !== id) return z;
+        const neighbors = { ...z.neighbors };
+        for (const dir of NEIGHBOR_DIRS) if (z.neighbors[dir] === sent.neighbors[dir]) neighbors[dir] = saved.neighbors[dir];
+        const next: Zone = { ...z, neighbors, updatedAt: editedAgain ? z.updatedAt : saved.updatedAt };
+        history = carryIntoHistory(history, id, placementDiff(z, next));
+        return next;
+      });
+      return { zones, history };
+    });
+    // Neighbor edits are made reciprocal server-side, so other zones change too.
+    return { sent, saved, neighborsSent: !!body.neighbors };
+  };
+
+  const flushZones = async (): Promise<boolean> => {
     const ids = get().dirtyZoneIds;
-    if (ids.length === 0) return;
+    if (ids.length === 0) return true;
     set({ saveState: 'saving', saveError: null, dirtyZoneIds: [] });
     let neighborsTouched = false;
     try {
-      for (const id of ids) {
-        const zone = get().zones.find((z) => z.id === id);
-        if (!zone) continue;
-        const body = zoneSaveBody(zone);
-        // Neighbor edits are made reciprocal server-side, so other zones change too.
-        if (body.neighbors) neighborsTouched = true;
-        // The server's zone schema accepts partial neighbors (merged with the stored ones).
-        const saved = await api.zones.update(id, body as ZoneInput);
-        savedNeighbors.set(id, { ...saved.neighbors });
-        set((s) => ({
-          zones: s.zones.map((z) => (z.id === id && !s.dirtyZoneIds.includes(id) ? { ...z, neighbors: saved.neighbors, updatedAt: saved.updatedAt } : z)),
-        }));
+      const order = zoneSaveOrder(ids, get().zones);
+      const unsaved = new Set(order);
+      // The server moves a transition into a level it does not know yet: one into a level of a zone saved later
+      // in this batch (only possible in a cycle, see zoneSaveOrder) is sent again once that zone is saved.
+      const levelNotSavedYet = (zoneId: string, levelId: string) =>
+        unsaved.has(zoneId) && !!get().zones.find((z) => z.id === zoneId)?.levels.some((l) => l.id === levelId);
+      const again: string[] = [];
+      for (const id of order) {
+        unsaved.delete(id);
+        const result = await saveZone(id);
+        if (!result) continue;
+        if (result.neighborsSent) neighborsTouched = true;
+        if (targetsMoved(result.sent, result.saved, levelNotSavedYet)) again.push(id);
+      }
+      for (const id of again) {
+        // Edited again meanwhile: its next autosave sends the transition anyway.
+        if (get().dirtyZoneIds.includes(id)) continue;
+        if ((await saveZone(id))?.neighborsSent) neighborsTouched = true;
       }
       if (neighborsTouched) await get().refreshZones();
       // A removed level (e.g. an undone "new level") makes the server move the spawn that was on it.
@@ -297,12 +389,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
         await syncCampaign().catch((err: unknown) => console.warn('[editor] No se pudo recargar la campaña:', err));
       }
       set((s) => ({ saveState: s.dirtyZoneIds.length ? 'dirty' : 'saved' }));
+      // The server answers again: send the campaign fields kept from a save that failed during the outage.
+      const campaignId = get().campaignId;
+      if (campaignId && campaignFailureRetryable && !campaignSaveTimer && Object.keys(pendingCampaignPatch).some((f) => failedCampaignFields.has(f))) {
+        campaignSaveTimer = setTimeout(() => void flushCampaign(campaignId), 0);
+      }
+      return true;
     } catch (err) {
       set((s) => ({
         saveState: 'error',
         saveError: err instanceof Error ? err.message : String(err),
         dirtyZoneIds: Array.from(new Set([...s.dirtyZoneIds, ...ids])),
       }));
+      return false;
     }
   };
 
@@ -312,26 +411,48 @@ export const useEditorStore = create<EditorState>((set, get) => {
     const waiters = campaignSaveWaiters;
     pendingCampaignPatch = {};
     campaignSaveWaiters = [];
+    const generation = loadGeneration;
+    const seq = ++campaignFlushSeq;
+    for (const field of Object.keys(body)) campaignFieldFlush.set(field, seq);
+    /** Fields of this flush that no newer flush has sent since. */
+    const latestFields = () => Object.keys(body).filter((field) => campaignFieldFlush.get(field) === seq);
+    const stillOpen = () => generation === loadGeneration && get().campaignId === campaignId;
     inFlightCampaignPatch = { ...inFlightCampaignPatch, ...body };
     campaignFlushes += 1;
     const settle = () => {
+      // load() resets this bookkeeping when another campaign is opened.
+      if (generation !== loadGeneration) return;
       campaignFlushes -= 1;
       if (campaignFlushes === 0) inFlightCampaignPatch = {};
     };
     let ok = true;
+    let zonesFailed = false;
     try {
       // A spawn on a just-created level or zone needs that zone on the server first.
-      if (body.spawn) await get().saveNow();
+      if (body.spawn) zonesFailed = !(await get().saveNow());
       const saved = await api.campaigns.update(campaignId, body);
       settle();
-      // Patches made while the request was in flight stay on top until their own save.
-      if (get().campaignId === campaignId) {
-        set({ campaign: { ...saved, ...inFlightCampaignPatch, ...pendingCampaignPatch } as Campaign });
+      // Patches made while the request was in flight (or kept from a failed save) stay on top until their own save.
+      if (stillOpen()) {
+        for (const field of latestFields()) failedCampaignFields.delete(field);
+        set({
+          campaign: { ...saved, ...inFlightCampaignPatch, ...pendingCampaignPatch } as Campaign,
+          ...(failedCampaignFields.size === 0 ? { campaignSaveError: null } : {}),
+        });
       }
     } catch (err) {
       settle();
       ok = false;
-      set({ saveState: 'error', saveError: err instanceof Error ? err.message : String(err) });
+      if (stillOpen()) {
+        // Nothing is dropped: the unsaved fields go back under the newer pending edits and are sent again later.
+        const retry = Object.fromEntries(latestFields().map((field) => [field, body[field as keyof UpdateCampaignRequest]])) as UpdateCampaignRequest;
+        for (const field of Object.keys(retry)) failedCampaignFields.add(field);
+        pendingCampaignPatch = { ...retry, ...pendingCampaignPatch };
+        if (failedCampaignFields.size > 0) {
+          campaignFailureRetryable = zonesFailed || isOutage(err);
+          set({ campaignSaveError: err instanceof Error ? err.message : String(err) });
+        }
+      }
     }
     for (const resolve of waiters) resolve(ok);
   };
@@ -367,16 +488,38 @@ export const useEditorStore = create<EditorState>((set, get) => {
     dirtyZoneIds: [],
     saveState: 'saved',
     saveError: null,
+    campaignSaveError: null,
 
     load: async (campaignId) => {
+      const previous = get().campaignId;
+      if (previous && previous !== campaignId) {
+        set({ loading: true, loadError: null });
+        // Unsaved work of the previously open campaign gets a last save before its state is replaced.
+        await get().saveNow();
+        if (campaignSaveTimer) clearTimeout(campaignSaveTimer);
+        campaignSaveTimer = null;
+        // Also when only callers wait (an empty retry patch): they must always get an answer.
+        if (Object.keys(pendingCampaignPatch).length > 0 || campaignSaveWaiters.length > 0) await flushCampaign(previous);
+        // Nothing of the previous campaign may be sent to (or shown on) the next one.
+        loadGeneration += 1;
+        pendingCampaignPatch = {};
+        inFlightCampaignPatch = {};
+        campaignFlushes = 0;
+        failedCampaignFields.clear();
+        campaignFieldFlush.clear();
+        campaignFailureRetryable = false;
+        set({ saveState: 'saved', saveError: null, campaignSaveError: null });
+      }
       set({ loading: true, loadError: null, campaignId, history: {}, dirtyZoneIds: [], selection: [] });
       try {
-        const [campaign, zones] = await Promise.all([api.campaigns.get(campaignId), api.campaigns.zones(campaignId)]);
+        const [fresh, zones] = await Promise.all([api.campaigns.get(campaignId), api.campaigns.zones(campaignId)]);
+        if (get().campaignId !== campaignId) return;
         const sorted = sortZones(zones);
         rememberNeighbors(sorted);
         const first = sorted[0] ?? null;
         set({
-          campaign,
+          // Fields kept from a failed save of this campaign stay on top until they are saved.
+          campaign: { ...fresh, ...inFlightCampaignPatch, ...pendingCampaignPatch } as Campaign,
           zones: sorted,
           loading: false,
           currentZoneId: first?.id ?? null,
@@ -384,7 +527,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
           saveState: 'saved',
         });
       } catch (err) {
-        set({ loading: false, loadError: err instanceof Error ? err.message : String(err) });
+        if (get().campaignId === campaignId) set({ loading: false, loadError: err instanceof Error ? err.message : String(err) });
       }
     },
 

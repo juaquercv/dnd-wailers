@@ -168,6 +168,9 @@ function dmItems(
   const allLit = targets.every((t) => t.light !== null);
   const allInInitiative = targets.every((t) => isInInitiative(state, t));
   const playerId = n === 1 ? playerForToken(state, token) : null;
+  // A hero token is only taken off the map (its sheet stays); other tokens are deleted.
+  const heroCount = targets.filter((t) => t.kind === 'hero').length;
+  const removeLabel = heroCount === n ? 'Retirar del mapa' : heroCount > 0 ? 'Quitar del mapa' : 'Eliminar';
 
   const items: ContextMenuItem[] = [{ heading: true, label: heading }];
   if (living.length > 0) {
@@ -249,7 +252,7 @@ function dmItems(
     { label: 'Botín y detalles', icon: <Backpack />, onClick: () => emitUiEvent('open-token', { tokenId: token.id }) },
     { label: 'Centrar', icon: <LocateFixed />, onClick: () => emitUiEvent('center-on-token', { tokenId: token.id }) },
     { label: `Duplicar${suffix}`, icon: <Copy />, onClick: () => void duplicateTokens(targets) },
-    { label: `Eliminar${suffix}`, icon: <Trash2 />, danger: true, shortcut: 'Supr', onClick: () => void removeTokens(targets, true) },
+    { label: `${removeLabel}${suffix}`, icon: <Trash2 />, danger: true, shortcut: 'Supr', onClick: () => void removeTokens(targets, true) },
   );
   return items;
 }

@@ -195,7 +195,10 @@ function tradeOffer(
   const currency = currencyShort(ctx);
   const gold = payload.gold === undefined || payload.gold === null ? 0 : round2(reqNum(payload.gold, currencyName(ctx)));
   if (gold < 0) throw new HandlerError(`La cantidad de ${currencyInText(ctx)} no puede ser negativa`);
-  if (gold > fromHero.data.gold) throw new HandlerError(`No tienes tanto ${currency} (tienes ${fromHero.data.gold})`);
+  if (gold > fromHero.data.gold) {
+    // Works for singular and plural currency names («oro», «coronas de latón»).
+    throw new HandlerError(`No tienes esa cantidad de ${currencyInText(ctx)} (tienes ${fromHero.data.gold} ${currency})`);
+  }
   if (items.length === 0 && gold <= 0) throw new HandlerError(`Añade algún objeto o una cantidad de ${currencyInText(ctx)} al intercambio`);
   const note = optText(payload.note, 'nota', 300) ?? '';
 

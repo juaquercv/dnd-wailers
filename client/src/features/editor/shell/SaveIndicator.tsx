@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { CircleAlert, CloudUpload, Check, RotateCw } from 'lucide-react';
 import { Spinner, toast } from '../../../components/ui';
 import { useEditorStore } from '../editorStore';
-import { retrySave, useCampaignSaveStore } from './campaignSave';
+import { currentSaveError, retrySave, useCampaignSaveStore } from './campaignSave';
 
 export type SaveStatus = 'saved' | 'saving' | 'dirty' | 'error';
 
@@ -13,12 +13,14 @@ const STATUS_LABELS: Record<Exclude<SaveStatus, 'error'>, string> = {
   dirty: 'Cambios sin guardar',
 };
 
-/** Combined zone + campaign save status. */
+/** Combined zone + campaign save status ('error' while a zone or campaign save failed and is still unsaved). */
 export function useSaveStatus(): { status: SaveStatus; error: string | null } {
   const saveState = useEditorStore((s) => s.saveState);
   const saveError = useEditorStore((s) => s.saveError);
+  const campaignSaveError = useEditorStore((s) => s.campaignSaveError);
   const campaignPending = useCampaignSaveStore((s) => s.pending);
   if (saveState === 'error') return { status: 'error', error: saveError };
+  if (campaignSaveError !== null) return { status: 'error', error: campaignSaveError };
   if (saveState === 'saving' || campaignPending) return { status: 'saving', error: null };
   if (saveState === 'dirty') return { status: 'dirty', error: null };
   return { status: 'saved', error: null };
@@ -34,7 +36,7 @@ export function SaveIndicator({ className }: { className?: string }) {
     try {
       const ok = await retrySave();
       if (ok) toast.success('Cambios guardados');
-      else toast.error('Sigue sin poder guardarse', { description: useEditorStore.getState().saveError ?? undefined });
+      else toast.error('Sigue sin poder guardarse', { description: currentSaveError() ?? undefined });
     } finally {
       setRetrying(false);
     }

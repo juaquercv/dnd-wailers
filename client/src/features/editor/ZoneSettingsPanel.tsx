@@ -19,7 +19,7 @@ import {
 import { Button, EmptyState, Field, Select, TagInput, TextArea, TextInput, toast, type SelectOption } from '../../components/ui';
 import { useCategories } from '../../stores/categories';
 import { useCurrentEditorZone, useEditorStore } from './editorStore';
-import { saveCampaign } from './shell/campaignSave';
+import { currentSaveError, saveCampaign } from './shell/campaignSave';
 import { FieldGrid } from './shell/controls';
 import { PanelSection } from './shell/PanelSection';
 import { SoundPicker } from './shell/SoundPicker';
@@ -236,7 +236,7 @@ function SpawnInfo({ zone }: { zone: Zone }) {
             onClick={() => {
               void saveCampaign({ spawn: null }).then((ok) => {
                 if (ok) toast.info('Punto de aparición eliminado');
-                else toast.error('No se pudo quitar el punto de aparición', { description: useEditorStore.getState().saveError ?? undefined });
+                else toast.error('No se pudo quitar el punto de aparición', { description: currentSaveError() ?? undefined });
               });
             }}
           >

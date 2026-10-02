@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import clsx from 'clsx';
 import { CornerDownLeft, History, Search, SearchX } from 'lucide-react';
 import { ENTRY_KINDS, ENTRY_KIND_LABELS, fuzzyScore, type EntryKind, type LibraryEntry, type LibraryQuery } from '@wailers/shared';
@@ -28,6 +29,17 @@ export interface QuickSearchProps {
 const TOTAL = 12;
 /** One ranked page across kinds; wide enough that a few entries of other kinds rarely crowd it out. */
 const MIXED_PAGE = 24;
+
+/**
+ * ↑/↓ and Tab/→/← pressed while the list still shows an older query: row offset from the top result and
+ * action index on that row (unbounded; wrapped like the live keys once the new results are known).
+ */
+interface PendingNav {
+  row: number;
+  action: number;
+}
+const NO_NAV: PendingNav = { row: 0, action: 0 };
+const wrap = (n: number, len: number) => ((n % len) + len) % len;
 
 /** Ctrl+K palette: instant fuzzy search across kinds; ↑/↓ select, Intro runs, Tab cycles actions, Esc closes. */
 export function QuickSearch(props: QuickSearchProps) {
@@ -96,8 +108,10 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
-  /** Intro pressed before the results for this query arrived: run the first result when they do. */
+  /** Intro pressed before the results for this query arrived: run the chosen action when they do. */
   const pendingEnter = useRef<string | null>(null);
+  /** Navigation keys pressed before the results for the current query arrived, replayed on them. */
+  const pendingNav = useRef<PendingNav>(NO_NAV);
 
   const runAction = (entry: LibraryEntry, action: QuickAction | undefined) => {
     if (!action) return;
@@ -118,19 +132,31 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
           .then((items) => {
             if (my !== seq.current) return;
             const ranked = items.filter((i) => allowed.includes(i.kind));
-            setResults(ranked);
-            setResultsQuery(key);
-            setError(null);
-            setSelected(0);
-            setActionIndex(0);
+            // Keys pressed while this answer was on its way apply to it, exactly as if typed afterwards.
+            const nav = pendingNav.current;
+            pendingNav.current = NO_NAV;
+            const flatRanked = groupByKind(ranked).flatMap((g) => g.items);
+            const row = flatRanked.length > 0 ? wrap(nav.row, flatRanked.length) : 0;
+            const entry = flatRanked[row];
+            const actions = entry ? latest.current.actionsFor(entry) : [];
+            const actionAt = actions.length > 0 ? wrap(nav.action, actions.length) : 0;
+            // Commit now: a key handled before a deferred render would still see the list as stale and be
+            // recorded into the navigation consumed above, i.e. lost.
+            flushSync(() => {
+              setResults(ranked);
+              setResultsQuery(key);
+              setError(null);
+              setSelected(row);
+              setActionIndex(actionAt);
+            });
             if (pendingEnter.current === key) {
               pendingEnter.current = null;
-              const first = groupByKind(ranked)[0]?.items[0];
-              if (first) latest.current.runAction(first, latest.current.actionsFor(first)[0]);
+              if (entry) latest.current.runAction(entry, actions[actionAt]);
             }
           })
           .catch((err: unknown) => {
             if (my !== seq.current) return;
+            pendingNav.current = NO_NAV;
             if (pendingEnter.current === key) pendingEnter.current = null;
             setResults([]);
             setResultsQuery(key);
@@ -145,6 +171,16 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
     return () => clearTimeout(timer);
   }, [q, allowed]);
 
+  // Closing the palette cancels a search in flight and an Intro still waiting for it.
+  useEffect(
+    () => () => {
+      seq.current += 1;
+      pendingEnter.current = null;
+      pendingNav.current = NO_NAV;
+    },
+    [],
+  );
+
   // Grouped by kind in rank order, flattened for keyboard navigation.
   const groups = useMemo(() => groupByKind(results), [results]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -158,11 +194,18 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
     el?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
 
+  // While the list still shows an older query, navigation is recorded and replayed on the new results
+  // (see the search effect), so a fast "type, Tab, Intro" runs the action picked on the right entry.
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    const caret = e.currentTarget.selectionStart ?? 0;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      if (flat.length === 0) return;
       const dir = e.key === 'ArrowDown' ? 1 : -1;
+      if (stale) {
+        pendingNav.current = { row: pendingNav.current.row + dir, action: 0 };
+        return;
+      }
+      if (flat.length === 0) return;
       setSelected((s) => (s + dir + flat.length) % flat.length);
       setActionIndex(0);
     } else if (e.key === 'Enter') {
@@ -174,15 +217,22 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
         return;
       }
       if (current) runAction(current, currentActions[actionIndex] ?? currentActions[0]);
-    } else if (e.key === 'Tab' || (e.key === 'ArrowRight' && (e.currentTarget.selectionStart ?? 0) >= q.length)) {
+    } else if (e.key === 'Tab' || (e.key === 'ArrowRight' && caret >= q.length)) {
+      const dir = e.shiftKey ? -1 : 1;
+      if (stale) {
+        e.preventDefault();
+        e.stopPropagation();
+        pendingNav.current = { ...pendingNav.current, action: pendingNav.current.action + dir };
+        return;
+      }
       if (currentActions.length === 0) return;
       e.preventDefault();
       e.stopPropagation();
-      const dir = e.shiftKey ? -1 : 1;
       setActionIndex((i) => (i + dir + currentActions.length) % currentActions.length);
-    } else if (e.key === 'ArrowLeft' && actionIndex > 0 && (e.currentTarget.selectionStart ?? 0) === 0) {
+    } else if (e.key === 'ArrowLeft' && caret === 0 && (stale ? pendingNav.current.action !== 0 : actionIndex > 0)) {
       e.preventDefault();
-      setActionIndex((i) => Math.max(0, i - 1));
+      if (stale) pendingNav.current = { ...pendingNav.current, action: pendingNav.current.action - 1 };
+      else setActionIndex((i) => Math.max(0, i - 1));
     }
   };
 
@@ -206,6 +256,7 @@ function Palette({ onClose, kinds, campaignId, placeholder, actionsFor }: QuickS
             value={q}
             onChange={(e) => {
               pendingEnter.current = null;
+              pendingNav.current = NO_NAV;
               setQ(e.target.value);
             }}
             onKeyDown={onKeyDown}

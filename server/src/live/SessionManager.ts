@@ -39,6 +39,7 @@ import { bus } from '../bus';
 import { prisma } from '../db';
 import { refreshSearchText } from '../services/library';
 import { entryInclude, entryToDTO, isPlainObject, logToDTO, sessionInclude, sessionSummaryToDTO, toJson, toNullableJson, type SessionRow } from '../services/serializers';
+import { anonymizedTurnEntry, playerKnowsTurnEntry } from './helpers';
 import { SessionPersistence, isMissingRecordError, parseLiveState } from './persistence';
 import {
   defaultLevel,
@@ -52,6 +53,7 @@ import {
   loadZones,
   resolveSpawn,
   soundRefFromEntry,
+  storedHeroSheet,
   tokenElementEntryIds,
   tokenFromElement,
   toSessionZone,
@@ -161,13 +163,21 @@ export function isRequestedRollData(data: unknown): boolean {
   return isPlainObject(data) && typeof data.requestId === 'string' && data.requestId !== '';
 }
 
+/**
+ * A player's private copy of a line the DM already has in full (e.g. turn news when not every player
+ * may see the initiative or knows every creature): the DM does not receive it a second time.
+ */
+function isPlayerCopy(data: unknown): boolean {
+  return isPlainObject(data) && data.playerCopy === true;
+}
+
 /** Whether `userId` may receive a log line of this session (same rules for live emission and REST). */
 export function canSeeLog(
   state: LiveState,
   entry: Pick<LogEntry, 'type' | 'visibility' | 'actorUserId' | 'targetUserId'> & { data?: unknown },
   userId: string,
 ): boolean {
-  if (userId === state.hostUserId) return true;
+  if (userId === state.hostUserId) return !(entry.visibility === 'user' && isPlayerCopy(entry.data));
   if (!state.players[userId]) return false;
   if (entry.visibility === 'dm') return false;
   if (entry.visibility === 'user') return entry.targetUserId === userId || entry.actorUserId === userId;
@@ -296,7 +306,7 @@ export class SessionManager implements SessionManagerApi {
     const sounds = await this.getSounds();
     const { campaign, entries } = await loadCampaignRuntime(row.campaignId, sounds);
     const state = parseLiveState(row);
-    await this.refreshHeroesFromLibrary(state, campaign.rules);
+    await this.refreshHeroesFromLibrary(state, row.updatedAt);
     const session = new RunningSession(row.id, state, campaign, entries);
     this.syncHeroMirrors(session.state);
     this.sessions.set(session.id, session);
@@ -305,9 +315,12 @@ export class SessionManager implements SessionManagerApi {
 
   /**
    * The hero sheets of a stored snapshot may be older than the library (the hero kept playing in other
-   * sessions or campaigns meanwhile). Every live change is written back, so the library copy wins.
+   * sessions or campaigns, or was edited, after this snapshot was saved): then the library copy wins.
+   * A snapshot saved after the library row keeps its sheet (e.g. the server stopped before a debounced
+   * write-back landed). Sheets are taken as stored: rules were applied when the hero joined the game,
+   * and values the DM set by hand (e.g. mana 0) must not change on a reload.
    */
-  private async refreshHeroesFromLibrary(state: LiveState, rules: RuleSystem): Promise<void> {
+  private async refreshHeroesFromLibrary(state: LiveState, snapshotAt: Date): Promise<void> {
     const ids = Object.keys(state.heroes);
     if (ids.length === 0) return;
     // Write-backs still in flight (e.g. of this very session, just unloaded) land first.
@@ -316,8 +329,14 @@ export class SessionManager implements SessionManagerApi {
     for (const row of rows) {
       const stored = state.heroes[row.id];
       if (!stored) continue;
-      const fresh = heroSheetFromEntry(entryToDTO(row), rules);
-      state.heroes[row.id] = { ...fresh, ownerId: fresh.ownerId || stored.ownerId };
+      const entry = entryToDTO(row);
+      if (row.updatedAt.getTime() > snapshotAt.getTime()) {
+        const fresh = storedHeroSheet(entry);
+        state.heroes[row.id] = { ...fresh, ownerId: fresh.ownerId || stored.ownerId };
+      } else {
+        // Categories are never written back: the library is their only source.
+        stored.categoryIds = [...entry.categoryIds];
+      }
     }
   }
 
@@ -512,10 +531,15 @@ export class SessionManager implements SessionManagerApi {
       return { role: 'dm', meUserId: userId, state, effective: state.visibility.global };
     }
     if (!state.players[userId]) return null;
+    const playerState = buildPlayerView(state, session.campaign.zones, userId);
+    // Creatures the player does not see on the map (out of sight, another zone, under fog) stay anonymous.
+    playerState.turn.order = playerState.turn.order.map((entry) =>
+      playerKnowsTurnEntry(session, userId, entry) ? entry : anonymizedTurnEntry(entry),
+    );
     return {
       role: 'player',
       meUserId: userId,
-      state: buildPlayerView(state, session.campaign.zones, userId),
+      state: playerState,
       effective: effectiveVisibility(state, userId),
     };
   }
@@ -731,12 +755,7 @@ export class SessionManager implements SessionManagerApi {
     running.broadcastTimer = null;
     if (running.persistTimer) clearTimeout(running.persistTimer);
     running.persistTimer = null;
-    for (const [key, pending] of [...this.heroTimers]) {
-      if (pending.session !== running) continue;
-      clearTimeout(pending.timer);
-      this.heroTimers.delete(key);
-      this.writeHeroNow(running, pending.heroId);
-    }
+    this.flushSessionHeroWriteBacks(running);
     this.removeSockets(running, () => true);
     running.unloaded = true;
     this.sessions.delete(running.id);
@@ -846,11 +865,18 @@ export class SessionManager implements SessionManagerApi {
     }, PERSIST_DELAY_MS);
   }
 
+  /**
+   * Persist now («Guardar», pause, end, resume). Pending hero write-backs of the session are written too
+   * and awaited, so once this resolves both the session and the library hold what the DM saved.
+   */
   async persist(session: LiveSession): Promise<void> {
     const running = this.asRunning(session);
     if (running.persistTimer) clearTimeout(running.persistTimer);
     running.persistTimer = null;
+    this.flushSessionHeroWriteBacks(running);
+    const heroWrites = [...this.heroWrites];
     await this.persistence.save(running);
+    await Promise.all(heroWrites);
   }
 
   async persistAll(): Promise<void> {
@@ -911,6 +937,16 @@ export class SessionManager implements SessionManagerApi {
       this.writeHeroNow(running, heroId);
     }, HERO_WRITE_BACK_MS);
     this.heroTimers.set(key, { timer, session: running, heroId });
+  }
+
+  /** Write every pending hero sheet of a session now (the writes are tracked in heroWrites). */
+  private flushSessionHeroWriteBacks(session: RunningSession): void {
+    for (const [key, pending] of [...this.heroTimers]) {
+      if (pending.session !== session) continue;
+      clearTimeout(pending.timer);
+      this.heroTimers.delete(key);
+      this.writeHeroNow(session, pending.heroId);
+    }
   }
 
   /** Write a pending hero sheet now (call before removing a hero from the state). */
@@ -1165,19 +1201,33 @@ export class SessionManager implements SessionManagerApi {
   }
 
   private onRollersChanged(campaignId: string, rollers: Roller[]): void {
+    const existing = new Set(rollers.map((r) => r.id));
     const offerable = new Set(rollers.filter((r) => r.active && r.isTurnRoll).map((r) => r.id));
     for (const session of this.sessionsOfCampaign(campaignId)) {
       session.campaign.rollers = [...rollers];
       this.io.to(`session:${session.id}:dm`).emit('session:rollers', session.campaign.rollers);
       // A pending turn offer keeps only rollers that still exist and are still active turn rollers.
       const offer = session.state.turnOffer;
-      if (offer && offer.rollerIds.some((id) => !offerable.has(id))) {
-        this.mutate(session, (state) => {
-          const current = state.turnOffer;
-          if (!current) return;
+      const staleOffer = offer !== null && offer.rollerIds.some((id) => !offerable.has(id));
+      // Requests for a roller that no longer exists could never be rolled: they are withdrawn.
+      const withdrawn = session.state.rollRequests.filter((r) => r.rollerId !== null && !existing.has(r.rollerId));
+      if (!staleOffer && withdrawn.length === 0) continue;
+      const withdrawnIds = new Set(withdrawn.map((r) => r.id));
+      this.mutate(session, (state) => {
+        const current = state.turnOffer;
+        if (current) {
           const rollerIds = current.rollerIds.filter((id) => offerable.has(id));
           state.turnOffer = rollerIds.length > 0 ? { ...current, rollerIds } : null;
-        });
+        }
+        if (withdrawnIds.size > 0) state.rollRequests = state.rollRequests.filter((r) => !withdrawnIds.has(r.id));
+      });
+      for (const request of withdrawn) {
+        if (!session.state.players[request.targetUserId]) continue;
+        this.emitEvent(
+          session,
+          { type: 'toast', level: 'info', text: `El DM retira la petición: ${request.label}` },
+          { kind: 'users', userIds: [request.targetUserId] },
+        );
       }
     }
   }

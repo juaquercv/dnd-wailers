@@ -10,7 +10,7 @@ import { uiSounds } from '../audio/uiSounds';
 import { DieSvg } from './DieShapes';
 import { useElapsed } from './diceHooks';
 import { hashString, ordinal, seededRandom } from './diceUtils';
-import { setInitiativeDrawShowing } from './initiativeDrawState';
+import { setOverlayShowing } from './coveringOverlays';
 import './dice.css';
 
 /** The d20 face and the bonus behind a draw's total (`roll` = natural + bonus). */
@@ -37,8 +37,8 @@ export function InitiativeDrawOverlay() {
   useEffect(() => setEvent(null), [sessionId]);
 
   // Let other prompts (the "¡Tu turno!" banner) wait until the draw is gone.
-  useEffect(() => setInitiativeDrawShowing(event !== null), [event]);
-  useEffect(() => () => setInitiativeDrawShowing(false), []);
+  useEffect(() => setOverlayShowing('initiativeDraw', event !== null), [event]);
+  useEffect(() => () => setOverlayShowing('initiativeDraw', false), []);
 
   // Hidden tabs cannot animate: skip the show (the turn order panel already has the result).
   useEffect(() => {
@@ -52,7 +52,7 @@ export function InitiativeDrawOverlay() {
   useSessionEvent('initiativeDraw', (e) => {
     if (e.draws.length === 0 || document.visibilityState === 'hidden') return;
     // Set synchronously: the server sends `turnStart` right after this event, in the same tick.
-    setInitiativeDrawShowing(true);
+    setOverlayShowing('initiativeDraw', true);
     const state = useSessionStore.getState().view?.state ?? null;
     const details = new Map<string, DrawDetail>();
     for (const draw of e.draws) {

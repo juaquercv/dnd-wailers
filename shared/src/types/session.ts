@@ -132,10 +132,11 @@ export interface VisibilitySettings {
   visionMode: VisionMode;
   /**
    * Vision radius in grid cells. Hero visionCells overrides the global value when set; a radius set
-   * explicitly for a player (perPlayer) overrides both for that player's vision.
+   * explicitly for a player (perPlayer) overrides both for that player's hero, also when teammates look
+   * through it with sharedVision.
    */
   visionRadius: number;
-  /** Cone aperture in degrees (360 = full circle). Cone points to token.facing. */
+  /** Cone aperture in degrees (360 = full circle). Cone points to token.facing; a perPlayer cone applies to that player's hero. */
   visionCone: number;
   /** Players see what any party member sees. */
   sharedVision: boolean;

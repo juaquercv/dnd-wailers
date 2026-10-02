@@ -247,26 +247,58 @@ export function duplicateTokens(tokens: Token[]): Promise<number> {
   return sendMany('token:duplicate', tokens.map((t) => ({ tokenId: t.id })), 'No se pudo duplicar la ficha');
 }
 
+/**
+ * Confirmation texts for removing tokens. A hero token is only taken off the map (its sheet stays),
+ * so heroes get "Retirar" wording; other tokens are deleted.
+ */
+function removalTexts(tokens: Token[]): { title: string; message: string; confirmLabel: string } {
+  const heroes = tokens.filter((t) => t.kind === 'hero').length;
+  const n = tokens.length;
+  const single = n === 1 ? tokens[0]!.name : null;
+  if (heroes === n) {
+    return {
+      title: single ? `¿Retirar a ${single} del mapa?` : `¿Retirar ${n} héroes del mapa?`,
+      message: single
+        ? 'La ficha del héroe desaparecerá del mapa (su hoja de personaje no se borra). Podrás volver a colocarla.'
+        : 'Las fichas de los héroes desaparecerán del mapa (sus hojas de personaje no se borran). Podrás volver a colocarlas.',
+      confirmLabel: 'Retirar',
+    };
+  }
+  if (heroes === 0) {
+    return {
+      title: single ? `¿Eliminar a ${single}?` : `¿Eliminar ${n} fichas?`,
+      message: single
+        ? 'La ficha desaparecerá del mapa y de la iniciativa. Su botín registrado se perderá.'
+        : 'Las fichas desaparecerán del mapa y de la iniciativa. Su botín registrado se perderá.',
+      confirmLabel: 'Eliminar',
+    };
+  }
+  return {
+    title: `¿Quitar ${n} fichas del mapa?`,
+    message:
+      `${heroes === 1 ? 'El héroe se retira' : `Los ${heroes} héroes se retiran`} del mapa sin tocar su hoja de personaje. ` +
+      'Las demás fichas se eliminan de la partida y de la iniciativa; su botín registrado se perderá.',
+    confirmLabel: 'Quitar del mapa',
+  };
+}
+
 /** Removes tokens; asks for confirmation when `confirm` is true (always for heroes). */
 export async function removeTokens(tokens: Token[], confirm: boolean): Promise<void> {
   if (tokens.length === 0) return;
   const hasHero = tokens.some((t) => t.kind === 'hero');
   if (confirm || hasHero) {
-    const ok = await askConfirm({
-      title: tokens.length === 1 ? `¿Eliminar a ${tokens[0]!.name}?` : `¿Eliminar ${tokens.length} fichas?`,
-      message: hasHero
-        ? 'La ficha del héroe desaparecerá del mapa (su hoja de personaje no se borra). Podrás volver a colocarla.'
-        : 'Las fichas desaparecerán del mapa y de la iniciativa. Su botín registrado se perderá.',
-      confirmLabel: 'Eliminar',
-      danger: true,
-    });
+    const ok = await askConfirm({ ...removalTexts(tokens), danger: true });
     if (!ok) return;
   }
-  const ok = await sendMany('token:remove', tokens.map((t) => ({ tokenId: t.id })), 'No se pudo eliminar la ficha');
+  const ok = await sendMany('token:remove', tokens.map((t) => ({ tokenId: t.id })), 'No se pudo quitar la ficha del mapa');
   if (ok > 0) {
     const store = useSessionStore.getState();
     const removed = new Set(tokens.map((t) => t.id));
     store.selectTokens(store.selectedTokenIds.filter((id) => !removed.has(id)));
+    const only = tokens.length === 1 ? tokens[0]! : null;
+    toast.success(
+      only ? (only.kind === 'hero' ? `${only.name} se retira del mapa` : `Ficha eliminada: ${only.name}`) : `${ok} ${ok === 1 ? 'ficha quitada' : 'fichas quitadas'} del mapa`,
+    );
   }
 }
 

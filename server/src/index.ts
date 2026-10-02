@@ -102,6 +102,8 @@ async function main(): Promise<void> {
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  // Closing the console window on Windows sends SIGHUP.
+  process.once('SIGHUP', () => void shutdown('SIGHUP'));
 
   await app.listen({ host: config.host, port: config.port });
   const address = app.server.address();

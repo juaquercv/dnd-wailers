@@ -82,7 +82,7 @@ export function CampaignSettingsPanel({ campaign, zones, onChange }: CampaignSet
     try {
       await api.campaigns.remove(campaign.id);
       // Nothing left to autosave for a deleted campaign.
-      useEditorStore.setState({ dirtyZoneIds: [], saveState: 'saved', saveError: null });
+      useEditorStore.setState({ dirtyZoneIds: [], saveState: 'saved', saveError: null, campaignSaveError: null });
       toast.success(`«${campaign.name}» eliminada`);
       navigate('/campanas', { replace: true });
     } catch (err) {

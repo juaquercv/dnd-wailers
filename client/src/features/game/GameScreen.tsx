@@ -178,11 +178,12 @@ export function GameScreen() {
     const view = s.view;
     if (!view) return;
     if (sceneMode) {
-      // No map to aim at: the spell goes off where the caster stands.
+      // No map to aim at: the spell goes off where the caster stands, which the client only knows
+      // when the view carries the caster's own hero token.
       const state = view.state;
       const own = Object.values(state.tokens).find((t) => t.kind === 'hero' && (t.heroId === req.heroId || isOwnHeroToken(state, t, view.meUserId)));
       if (!own) {
-        toast.info('Tu ficha no está en el mapa: el DM debe colocarla para apuntar el hechizo');
+        toast.info('Tu ficha no está a la vista: pide al DM que lance el hechizo por ti o que coloque tu ficha en el mapa');
         return;
       }
       void send(

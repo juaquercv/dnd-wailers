@@ -13,7 +13,7 @@ import { useContextMenu } from '../../../components/ui/ContextMenu';
 import { toast } from '../../../components/ui/toast';
 import { isEditableTarget } from '../../../lib/hotkeys';
 import { useEditorStore, type EditorTool, type SelectionItem } from '../editorStore';
-import { saveCampaign } from '../shell/campaignSave';
+import { currentSaveError, saveCampaign } from '../shell/campaignSave';
 import { resetCanvasUi, setCanvasDraft, setCanvasPointer, useCanvasUi, type PolyTool } from './canvasUiStore';
 import { buildCanvasMenu, buildElementMenu, hiddenPatch, isInlineEditable } from './elementMenu';
 import {
@@ -208,7 +208,7 @@ function syncedName(current: string, defaultName: string, previous: string, next
  */
 async function commitSpawn(spawn: SpawnPoint | null): Promise<boolean> {
   const ok = await saveCampaign({ spawn });
-  if (!ok) toast.error('No se pudo guardar el punto de aparición', { description: store().saveError ?? undefined });
+  if (!ok) toast.error('No se pudo guardar el punto de aparición', { description: currentSaveError() ?? undefined });
   return ok;
 }
 

@@ -15,6 +15,7 @@ import {
   snapTokenCenter,
   visibleAreas,
   allowedZoneIds,
+  HIDDEN_TURN_ENTRY_NAME,
   RARITIES,
   type EntryKind,
   type HeroSheet,
@@ -28,6 +29,7 @@ import {
   type TokenKind,
   type TokenStats,
   type TransitionElement,
+  type TurnEntry,
   type VisibilitySettings,
   type Zone,
   type ZoneLevel,
@@ -878,15 +880,33 @@ export function playerSeesZone(session: LiveSession, userId: string, zoneId: str
   return entry.mode !== 'none' && entry.allowed.has(zoneId);
 }
 
+/**
+ * Whether a point of a level lies inside a fog region the DM has not revealed in this session. Players'
+ * maps mask those regions (and every non-hero token in them), like the client's isHiddenByFog.
+ */
+export function pointUnderFog(session: LiveSession, zoneId: string, levelId: string, p: Point): boolean {
+  const zone = session.campaign.zones.find((z) => z.id === zoneId);
+  const level = zone?.levels.find((l) => l.id === levelId);
+  if (!level || level.fogRegions.length === 0) return false;
+  const revealed = new Set(session.state.zoneStates[zoneId]?.revealedFog ?? []);
+  const polygons = level.fogRegions.filter((r) => !revealed.has(r.id) && r.points.length >= 6).map((r) => r.points);
+  return polygons.length > 0 && pointInAnyPolygon(p, polygons);
+}
+
+/** Whether a player currently sees a point of a level: zone allowed, in sight (vision modes) and not under fog. */
 export function playerSeesPoint(session: LiveSession, userId: string, zoneId: string, levelId: string, p: Point): boolean {
   if (session.state.status === 'lobby') return false;
   const entry = playerViewEntry(session, userId);
   if (entry.mode === 'none' || !entry.allowed.has(zoneId)) return false;
+  if (pointUnderFog(session, zoneId, levelId, p)) return false;
   if (entry.mode === 'all') return true;
   return pointInAnyPolygon(p, entry.areas[levelId] ?? []);
 }
 
-/** Whether a player currently receives a token on the map (same rules as buildPlayerView). */
+/**
+ * Whether a player sees a token on their map: the tokens buildPlayerView sends them, minus non-hero
+ * tokens under an unrevealed fog region (the client masks those).
+ */
 export function playerSeesToken(
   session: LiveSession,
   userId: string,
@@ -913,6 +933,22 @@ export function tokenNewsVisibility(
   extra?: (userId: string) => boolean,
 ): 'all' | 'dm' {
   return visibilityForPlayers(session.state, (uid) => playerSeesToken(session, uid, token) && (extra ? extra(uid) : true));
+}
+
+/**
+ * Whether a player may know who a turn entry is: player and hero entries and entries without a token
+ * always; a creature/NPC entry only while the player sees its token on the map (not hidden, in sight,
+ * not under unrevealed fog). Same rule as the client's initiative panel.
+ */
+export function playerKnowsTurnEntry(session: LiveSession, userId: string, entry: TurnEntry): boolean {
+  if (entry.type === 'player' || entry.heroId || !entry.tokenId) return true;
+  const token = session.state.tokens[entry.tokenId];
+  return token !== undefined && playerSeesToken(session, userId, token);
+}
+
+/** A turn entry as a player who must not know it receives it: same id, token and place, no identity. */
+export function anonymizedTurnEntry(entry: TurnEntry): TurnEntry {
+  return { ...entry, type: 'creature', name: HIDDEN_TURN_ENTRY_NAME, imageUrl: null, initiative: null };
 }
 
 /** Whether every player except `except` may see other heroes' inventories (and so does the session default). */

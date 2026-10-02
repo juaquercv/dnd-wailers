@@ -14,6 +14,7 @@ import { toast } from '../../../components/ui/toast';
 import { useDisplayState, useSessionStore } from '../../../stores/session';
 import { markSelfExit } from '../../lobby/lobbyUi';
 import { ZoneNavigator } from '../ZoneNavigator';
+import { currencyNoun, joinWords } from '../panels/currencyText';
 import { send } from './actions';
 
 export interface GameTopBarProps {
@@ -50,6 +51,7 @@ export function GameTopBar({ onQuickSearch, onShowToPlayers, onOverview }: GameT
   const isDm = useSessionStore((s) => s.view?.role === 'dm');
   const sessionName = useSessionStore((s) => s.view?.state.name ?? '');
   const campaignName = useSessionStore((s) => s.campaign?.name ?? '');
+  const rules = useSessionStore((s) => s.campaign?.rules ?? null);
   const hostUserId = useSessionStore((s) => s.view?.state.hostUserId ?? null);
   const playersRecord = useSessionStore((s) => s.view?.state.players);
   const viewAsUserId = useSessionStore((s) => s.viewAsUserId);
@@ -104,9 +106,11 @@ export function GameTopBar({ onQuickSearch, onShowToPlayers, onOverview }: GameT
   };
 
   const endSession = async () => {
+    const money = currencyNoun(rules);
+    const progress = joinWords(['inventario', ...(money ? [money] : []), ...(rules?.xpEnabled ? ['experiencia'] : [])]);
     const ok = await confirm({
       title: 'Terminar la sesión',
-      message: 'La partida terminará para todos y no se podrá reanudar. Los héroes conservan su progreso (inventario, oro y experiencia).',
+      message: `La partida terminará para todos y no se podrá reanudar. Los héroes conservan su progreso (${progress}).`,
       confirmLabel: 'Terminar sesión',
       danger: true,
       icon: <Ban className="h-5 w-5" />,

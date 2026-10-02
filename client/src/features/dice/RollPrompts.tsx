@@ -14,7 +14,7 @@ import { useSettingsStore } from '../../stores/settings';
 import { uiSounds } from '../audio/uiSounds';
 import { DieGlyph } from './DieShapes';
 import { MODE_LABELS } from './diceUtils';
-import { isInitiativeDrawShowing, useInitiativeDrawShowing } from './initiativeDrawState';
+import { isCoveringOverlayShowing, useCoveringOverlayShowing } from './coveringOverlays';
 import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
 import { MiniWheel } from './RouletteWheel';
 import './dice.css';
@@ -50,9 +50,9 @@ export function RollPrompts() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [banner, setBanner] = useState<TurnBanner | null>(null);
-  /** Banner held back while the initiative draw covers the screen (it would play unseen underneath). */
+  /** Banner held back while the initiative draw or a roll covers the screen (it would play unseen underneath). */
   const [queuedBanner, setQueuedBanner] = useState<(TurnBanner & { entryId: string }) | null>(null);
-  const drawShowing = useInitiativeDrawShowing();
+  const covered = useCoveringOverlayShowing();
 
   useSessionEvent('rollRequest', (event) => {
     if (event.request.targetUserId === meRef.current) uiSounds.notify();
@@ -65,7 +65,7 @@ export function RollPrompts() {
       return;
     }
     const next = { key: Date.now(), round: event.round, name: event.entry.name };
-    if (isInitiativeDrawShowing()) {
+    if (isCoveringOverlayShowing()) {
       setBanner(null);
       setQueuedBanner({ ...next, entryId: event.entry.id });
       return;
@@ -75,16 +75,16 @@ export function RollPrompts() {
     setBanner(next);
   });
 
-  // Play the held-back banner once the draw closes, if it is still this player's turn.
+  // Play the held-back banner once the screen is clear again, if it is still this player's turn.
   useEffect(() => {
-    if (drawShowing || !queuedBanner) return;
+    if (covered || !queuedBanner) return;
     setQueuedBanner(null);
     const turn = useSessionStore.getState().view?.state.turn;
     const current = turn && turn.order.length > 0 ? turn.order[turn.currentIndex] : undefined;
     if (current && current.id !== queuedBanner.entryId) return;
     uiSounds.turnStart();
     setBanner({ key: Date.now(), round: queuedBanner.round, name: queuedBanner.name });
-  }, [drawShowing, queuedBanner]);
+  }, [covered, queuedBanner]);
 
   useEffect(() => {
     if (!banner) return;

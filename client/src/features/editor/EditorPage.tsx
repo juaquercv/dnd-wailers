@@ -39,7 +39,7 @@ import { LevelsPanel } from './LevelsPanel';
 import { OverviewEditor } from './OverviewEditor';
 import { PropertiesPanel } from './PropertiesPanel';
 import { RulesEditor } from './RulesEditor';
-import { hasUnsavedWork, retrySave, saveCampaign } from './shell/campaignSave';
+import { currentSaveError, hasSaveError, hasUnsavedWork, retrySave, saveCampaign } from './shell/campaignSave';
 import { InlineEdit } from './shell/InlineEdit';
 import { SaveIndicator, useSaveStatus } from './shell/SaveIndicator';
 import { SideTabs, type SideTab } from './shell/SideTabs';
@@ -116,16 +116,16 @@ function EditorTopBar({ campaign }: { campaign: Campaign }) {
   const save = async () => {
     setSaving(true);
     try {
-      if (useEditorStore.getState().saveState === 'error') {
+      if (hasSaveError()) {
         const ok = await retrySave();
         if (ok) toast.success('Cambios guardados');
-        else toast.error('No se pudieron guardar los cambios', { description: useEditorStore.getState().saveError ?? undefined });
+        else toast.error('No se pudieron guardar los cambios', { description: currentSaveError() ?? undefined });
         return;
       }
       const nothingPending = !hasUnsavedWork();
       await useEditorStore.getState().saveNow();
-      if (useEditorStore.getState().saveState === 'error') {
-        toast.error('No se pudieron guardar los cambios', { description: useEditorStore.getState().saveError ?? undefined });
+      if (hasSaveError()) {
+        toast.error('No se pudieron guardar los cambios', { description: currentSaveError() ?? undefined });
       } else {
         toast.success(nothingPending ? 'Todo está guardado' : 'Cambios guardados', { duration: 1800 });
       }

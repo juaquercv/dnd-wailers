@@ -2,6 +2,7 @@ import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import type Konva from 'konva';
 import { Group, Line, Rect } from 'react-konva';
 import { LAYER_IDS, type FogRegion, type LayerId, type SceneElementType, type ZoneContent, type ZoneLevel } from '@wailers/shared';
+import { useAmbientLighting } from './ambientLighting';
 import { LevelBackgroundGroup } from './LevelBackground';
 import { MapLayerShell } from './MapLayer';
 import { useMapViewSource } from './mapView';
@@ -107,11 +108,14 @@ const StackFog = memo(function StackFog({
  * `LevelStack`: lower floors of the zone drawn below the current one (2.5D). Each floor shrinks 4 % per level of depth
  * around the viewport center, rests a little lower than the floor above (so it peeks out under its bottom edge) and lags
  * behind while panning (parallax), sliding out past the edge being looked at. Floors get darker with depth, cast a drop
- * shadow and keep a faint rim so dark maps stay readable. Hidden elements, notes and tokens of lower floors are never
- * drawn, and their unrevealed fog regions are opaque unless `viewer` is 'dm'.
+ * shadow and keep a faint rim so dark maps stay readable. On top of that, they take the base darkness of the
+ * LightingOverlay of the same MapStage (zone lighting, without its light holes), so a floor below is never brighter than
+ * the one being viewed. Hidden elements, notes and tokens of lower floors are never drawn, and their unrevealed fog
+ * regions are opaque unless `viewer` is 'dm'.
  */
 export function LevelStack({ zone, currentLevelId, viewOffset, viewer = 'player', revealedFog = NO_REVEALED }: LevelStackProps) {
   const source = useMapViewSource();
+  const ambient = useAmbientLighting();
   const current = zone.levels.find((l) => l.id === currentLevelId) ?? null;
   const groupNodes = useRef(new Map<string, Konva.Group>());
   const viewOffsetRef = useRef(viewOffset);
@@ -205,6 +209,9 @@ export function LevelStack({ zone, currentLevelId, viewOffset, viewer = 'player'
               listening={false}
               perfectDrawEnabled={false}
             />
+            {ambient && (
+              <Rect width={width} height={height} fill={ambient.tint} opacity={clamp(ambient.darkness, 0, 1)} listening={false} />
+            )}
           </Group>
         );
       })}

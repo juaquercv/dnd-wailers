@@ -214,7 +214,7 @@ function CreateSessionModal({
             <ul className="mt-2 space-y-1.5">
               {activeMine.map((s) => (
                 <li key={s.id} className="flex items-center gap-2">
-                  <SessionStatusBadge status={s.status} size="xs" />
+                  <SessionStatusBadge status={s.status} size="xs" short />
                   <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
                   <Button size="sm" variant="secondary" iconRight={<ArrowRight />} onClick={() => navigate(`/sesion/${s.id}`)} disabled={busy}>
                     Continuar
@@ -253,7 +253,7 @@ function SavedSessionRow({
   return (
     <li className="flex flex-col gap-3 rounded-lg border border-ink-600/80 bg-ink-900/70 p-3 transition hover:border-ink-500 md:flex-row md:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">
-        <SessionStatusBadge status={session.status} size="xs" className="mt-0.5" />
+        <SessionStatusBadge status={session.status} size="xs" short className="mt-0.5" />
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold text-parchment-50" title={session.name}>
             {session.name}
@@ -670,7 +670,7 @@ export default function HostPage() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-display font-semibold text-parchment-50">{s.name}</span>
                     <span className="mt-0.5 flex items-center gap-2 text-xs text-parchment-300">
-                      <SessionStatusBadge status={s.status} size="xs" />
+                      <SessionStatusBadge status={s.status} size="xs" short />
                       <span className="truncate">{s.campaignName}</span>
                       <span className="inline-flex shrink-0 items-center gap-1">
                         <Users className="h-3 w-3" aria-hidden />

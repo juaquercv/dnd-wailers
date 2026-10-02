@@ -188,7 +188,7 @@ export default function MainMenu() {
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-parchment-300">
                   <span className="truncate">{lastSession.campaignName}</span>
                   <Badge tone={lastSession.status === 'playing' ? 'emerald' : 'sky'} size="xs" dot>
-                    {lastSession.status === 'playing' ? 'Jugando' : 'En el lobby'}
+                    {lastSession.status === 'playing' ? 'Jugando' : 'En la sala de espera'}
                   </Badge>
                   <span className="inline-flex items-center gap-1">
                     <Users className="h-3 w-3" />

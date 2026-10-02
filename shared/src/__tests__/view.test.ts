@@ -5,11 +5,13 @@ import {
   buildPlayerView,
   effectiveVisibility,
   filterZoneForPlayer,
+  heroTokenPlayerId,
   isOwnHero,
   isOwnHeroToken,
   tokenHp,
   visibleAreas,
   visionCellsFor,
+  visionConeFor,
   visionTokensFor,
 } from '../view';
 import { pointInAnyPolygon } from '../vision';
@@ -72,6 +74,18 @@ describe('vision sources and allowed zones', () => {
     withVisibility(state, { sharedVision: false });
     state.tokens.t_juan!.hidden = true;
     expect(visionTokensFor(state, 'juan').map((t) => t.id)).toEqual(['t_juan']);
+  });
+
+  it('finds the player of a hero token: who selected the hero, else the owner in the session', () => {
+    const { state } = fixture();
+    expect(heroTokenPlayerId(state, state.tokens.t_juan!)).toBe('juan');
+    expect(heroTokenPlayerId(state, { ...state.tokens.t_juan!, ownerUserId: null })).toBe('juan');
+    state.players.patrick!.heroId = 'h_juan';
+    state.players.juan!.heroId = null;
+    expect(heroTokenPlayerId(state, state.tokens.t_juan!)).toBe('patrick');
+    expect(heroTokenPlayerId(state, { ...state.tokens.t_pat!, heroId: null })).toBe('patrick');
+    expect(heroTokenPlayerId(state, { ...state.tokens.t_pat!, heroId: null, ownerUserId: 'nadie' })).toBeNull();
+    expect(heroTokenPlayerId(state, state.tokens.t_gob!)).toBeNull();
   });
 
   it('recognises own hero tokens by owner or selected hero', () => {
@@ -157,6 +171,76 @@ describe('visibleAreas', () => {
     // Another player's override does not change juan's vision.
     state.visibility.perPlayer = { patrick: { visionRadius: 1 } };
     expect(pointInAnyPolygon({ x: 850, y: 500 }, visibleAreas(state, zones, 'juan').lvl_A!)).toBe(true);
+  });
+
+  it('with shared vision, the radius follows the hero, not the viewer', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { visionMode: 'vision', sharedVision: true, visionRadius: 6 });
+    state.heroes.h_pat!.data.visionCells = 8;
+    const sees = (userId: string, levelId: string, x: number, y: number) =>
+      pointInAnyPolygon({ x, y }, visibleAreas(state, zones, userId)[levelId] ?? []);
+
+    // juan has a short radius: it limits only his own hero, not what he sees through patrick.
+    state.visibility.perPlayer = { juan: { visionRadius: 1 } };
+    expect(sees('juan', 'lvl_A', 540, 500)).toBe(true);
+    expect(sees('juan', 'lvl_A', 600, 500)).toBe(false);
+    expect(sees('juan', 'lvl_B', 580, 200)).toBe(true);
+    expect(visionCellsFor(state, state.tokens.t_pat!, effectiveVisibility(state, 'juan'), 'juan')).toBe(8);
+    // ...and patrick, looking through juan, gets juan's limited sight.
+    expect(sees('patrick', 'lvl_A', 600, 500)).toBe(false);
+    expect(sees('patrick', 'lvl_B', 580, 200)).toBe(true);
+    expect(visionCellsFor(state, state.tokens.t_juan!, effectiveVisibility(state, 'patrick'), 'patrick')).toBe(1);
+
+    // patrick is blinded: the whole group loses what patrick's hero saw; juan keeps his own radius.
+    state.visibility.perPlayer = { patrick: { visionRadius: 1, enemyHp: 'hidden', visionMode: 'all' } };
+    expect(sees('juan', 'lvl_B', 240, 200)).toBe(true);
+    expect(sees('juan', 'lvl_B', 260, 200)).toBe(false);
+    expect(sees('juan', 'lvl_A', 780, 500)).toBe(true);
+    expect(visionCellsFor(state, state.tokens.t_pat!, effectiveVisibility(state, 'juan'), 'juan')).toBe(1);
+
+    // The player view carries only the vision shape of the others, and computes the same areas.
+    const view = buildPlayerView(state, zones, 'juan');
+    expect(view.visibility.perPlayer).toEqual({ patrick: { visionRadius: 1 } });
+    expect(visibleAreas(view, zones, 'juan')).toEqual(visibleAreas(state, zones, 'juan'));
+    withVisibility(state, { sharedVision: false });
+    expect(buildPlayerView(state, zones, 'juan').visibility.perPlayer).toEqual({});
+  });
+
+  it('with shared vision, the cone follows the hero, not the viewer', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { visionMode: 'vision', sharedVision: true, visionRadius: 6 });
+    const sees = (userId: string, levelId: string, x: number, y: number) =>
+      pointInAnyPolygon({ x, y }, visibleAreas(state, zones, userId)[levelId] ?? []);
+
+    // patrick's hero looks to the right with a 90° cone; juan sees through it the same way.
+    state.visibility.perPlayer = { patrick: { visionCone: 90 } };
+    expect(sees('juan', 'lvl_B', 300, 200)).toBe(true);
+    expect(sees('juan', 'lvl_B', 100, 200)).toBe(false);
+    expect(sees('juan', 'lvl_A', 400, 500)).toBe(true);
+    expect(visionConeFor(state, state.tokens.t_pat!, effectiveVisibility(state, 'juan'), 'juan')).toBe(90);
+    expect(visionConeFor(state, state.tokens.t_juan!, effectiveVisibility(state, 'juan'), 'juan')).toBe(360);
+
+    // juan's own cone does not narrow what he sees through patrick.
+    state.visibility.perPlayer = { juan: { visionCone: 90 } };
+    expect(sees('juan', 'lvl_A', 400, 500)).toBe(false);
+    expect(sees('juan', 'lvl_B', 100, 200)).toBe(true);
+    expect(sees('patrick', 'lvl_A', 400, 500)).toBe(false);
+
+    const view = buildPlayerView(state, zones, 'patrick');
+    expect(view.visibility.perPlayer).toEqual({ juan: { visionCone: 90 } });
+    expect(visibleAreas(view, zones, 'patrick')).toEqual(visibleAreas(state, zones, 'patrick'));
+  });
+
+  it('a hero token nobody plays uses its own vision or the global one, never the viewer override', () => {
+    const { state, zones } = fixture();
+    withVisibility(state, { visionMode: 'vision', sharedVision: true, visionRadius: 6 });
+    delete state.players.patrick;
+    state.visibility.perPlayer = { juan: { visionRadius: 1, visionCone: 90 } };
+    expect(heroTokenPlayerId(state, state.tokens.t_pat!)).toBeNull();
+    const eff = effectiveVisibility(state, 'juan');
+    expect(visionCellsFor(state, state.tokens.t_pat!, eff, 'juan')).toBe(6);
+    expect(visionConeFor(state, state.tokens.t_pat!, eff, 'juan')).toBe(360);
+    expect(pointInAnyPolygon({ x: 100, y: 200 }, visibleAreas(state, zones, 'juan').lvl_B!)).toBe(true);
   });
 
   it('respects walls and door states', () => {

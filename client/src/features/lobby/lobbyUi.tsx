@@ -12,7 +12,7 @@ import { useUsers } from '../../stores/users';
 
 export interface SessionStatusInfo {
   label: string;
-  /** Short label for the join list ("Lobby" / "En juego"). */
+  /** Short label for the join list ("Sala de espera" / "En juego"). */
   short: string;
   tone: BadgeTone;
   icon: ReactNode;
@@ -21,7 +21,7 @@ export interface SessionStatusInfo {
 }
 
 export const SESSION_STATUS_INFO: Record<SessionStatus, SessionStatusInfo> = {
-  lobby: { label: 'En lobby', short: 'Lobby', tone: 'sky', icon: <Hourglass />, live: true },
+  lobby: { label: 'En la sala de espera', short: 'Sala de espera', tone: 'sky', icon: <Hourglass />, live: true },
   playing: { label: 'En juego', short: 'En juego', tone: 'emerald', icon: <Play />, live: true },
   paused: { label: 'En pausa', short: 'En pausa', tone: 'gold', icon: <Pause />, live: false },
   ended: { label: 'Terminada', short: 'Terminada', tone: 'neutral', icon: <Ban />, live: false },
@@ -29,7 +29,7 @@ export const SESSION_STATUS_INFO: Record<SessionStatus, SessionStatusInfo> = {
 
 export interface SessionStatusBadgeProps {
   status: SessionStatus;
-  /** Use the short label ("Lobby"). */
+  /** Use the short label ("Sala de espera"). */
   short?: boolean;
   size?: 'xs' | 'sm' | 'md';
   className?: string;

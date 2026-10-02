@@ -11,6 +11,7 @@ import { Toggle } from '../../components/ui/Toggle';
 import { formatGold, formatRelative } from '../../lib/format';
 import { send } from './panels/actions';
 import { usePanelContext, type PanelContext } from './panels/context';
+import { andWord, currencyNoun, orWord } from './panels/currencyText';
 import { isPendingTrade, resolveTradeItems, splitTradeNote, TRADE_STATUS } from './panels/tradeUtils';
 import { TradeDialog } from './TradeDialog';
 
@@ -36,6 +37,8 @@ export function TradesPanel() {
   const history = sorted.filter((t) => !isPendingTrade(t)).slice(0, HISTORY_LIMIT);
   const hasPartners = Object.values(state.players).some((p) => p.userId !== meId && p.heroId && p.heroId !== myHeroId && state.heroes[p.heroId]);
   const canOffer = !ctx.isDm && !!myHeroId && hasPartners;
+  const money = currencyNoun(ctx.rules);
+  const offerHint = `Ofrece objetos${money ? ` ${orWord(money)} ${money}` : ''} a tus compañeros desde aquí o desde tu inventario.`;
 
   return (
     <div className="space-y-4">
@@ -56,7 +59,7 @@ export function TradesPanel() {
           compact
           icon={<Handshake />}
           title="Sin intercambios"
-          description={canOffer ? 'Ofrece objetos u oro a tus compañeros desde aquí o desde tu inventario.' : 'Aquí verás las ofertas entre jugadores.'}
+          description={canOffer ? offerHint : 'Aquí verás las ofertas entre jugadores.'}
         />
       ) : (
         <>
@@ -125,16 +128,19 @@ function DmTrades({ ctx, state, trades }: { ctx: PanelContext; state: LiveState;
   const approvals = trades.filter((t) => t.status === 'pending_dm');
   const open = trades.filter((t) => t.status === 'pending_target');
   const recent = trades.filter((t) => !isPendingTrade(t)).slice(0, HISTORY_LIMIT * 2);
+  const money = currencyNoun(ctx.rules);
+  // Bare plural ("Objetos y coronas de latón") avoids guessing the currency's gender for the article.
+  const goods = money ? `Objetos ${andWord(money)} ${money}` : 'Los objetos';
 
   const reject = async (t: TradeOffer) => {
-    const ok = await confirm({ title: 'Rechazar intercambio', message: 'Los objetos y el oro se quedan donde estaban.', confirmLabel: 'Rechazar', danger: true });
+    const ok = await confirm({ title: 'Rechazar intercambio', message: `${goods} se quedan donde estaban.`, confirmLabel: 'Rechazar', danger: true });
     if (ok) await send('trade:approve', { tradeId: t.id, approve: false }, { success: 'Intercambio rechazado' });
   };
 
   const annul = async (t: TradeOffer) => {
     const ok = await confirm({
       title: 'Anular oferta',
-      message: 'La oferta se retira antes de que el destinatario responda. Los objetos y el oro no se mueven.',
+      message: `La oferta se retira antes de que el destinatario responda. ${goods} no se mueven.`,
       confirmLabel: 'Anular',
       danger: true,
     });

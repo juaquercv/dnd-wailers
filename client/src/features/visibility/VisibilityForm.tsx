@@ -43,7 +43,7 @@ const PERMISSIONS: { key: Exclude<Key, 'visionMode' | 'visionRadius' | 'visionCo
   { key: 'canSeeEnemyDetails', label: 'Ver ficha de enemigos', description: 'CA, ataques, rasgos y resistencias.' },
   { key: 'canSeeInitiative', label: 'Ver iniciativa', description: 'Orden de turnos visible.' },
   { key: 'canSeeOthersRolls', label: 'Ver tiradas de otros', description: 'Tiradas públicas del resto de jugadores.' },
-  { key: 'canSeeOthersInventory', label: 'Ver inventarios de otros', description: 'Objetos y oro de los demás héroes.' },
+  { key: 'canSeeOthersInventory', label: 'Ver inventarios de otros', description: 'Objetos y monedas de los demás héroes.' },
   { key: 'canMoveOwnToken', label: 'Mover su propia ficha', description: 'Arrastrar, girar y usar pasos y bordes.' },
 ];
 

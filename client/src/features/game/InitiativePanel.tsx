@@ -27,6 +27,7 @@ import {
   Skull,
   Swords,
   Trash2,
+  TriangleAlert,
   UserPlus,
   UserRound,
   Users,
@@ -44,7 +45,7 @@ import { emitUiEvent } from '../../lib/uiEvents';
 import { useSessionStore } from '../../stores/session';
 import { isTurnEntryMasked } from './map/fog';
 import { send } from './panels/actions';
-import { heroTokenOf, usePanelContext, type PanelContext } from './panels/context';
+import { heroTokenOf, partyMembers, usePanelContext, type PanelContext } from './panels/context';
 import { HpBar, type HpInfo } from './panels/HpBar';
 import { PromptDialog, type PromptField } from './panels/PromptDialog';
 import { StatusIcons } from './panels/Statuses';
@@ -137,6 +138,20 @@ export function InitiativePanel() {
 
   const currentId = state ? state.turn.order[state.turn.currentIndex]?.id ?? null : null;
 
+  // Players who pick a hero mid-game get a token but no turn entry until the DM syncs (the players turn:syncPlayers adds).
+  const manageOrder = ctx.canManage;
+  const missingPlayers = useMemo(() => {
+    if (!state || !manageOrder) return [];
+    const inOrder = new Set(state.turn.order.filter((e) => e.type === 'player' && e.userId).map((e) => e.userId));
+    return partyMembers(state).filter(({ player }) => player.userId !== state.hostUserId && !inOrder.has(player.userId));
+  }, [state, manageOrder]);
+  const [syncing, setSyncing] = useState(false);
+  const syncPlayers = async () => {
+    setSyncing(true);
+    await send('turn:syncPlayers', {}, { success: 'Jugadores sincronizados' });
+    setSyncing(false);
+  };
+
   // Keep the current entry in view.
   useEffect(() => {
     if (!currentId || !listRef.current) return;
@@ -210,7 +225,7 @@ export function InitiativePanel() {
     }
     items.push({ separator: true });
     items.push({ label: 'Entrada personalizada…', icon: <Pencil />, onClick: () => setPrompt({ kind: 'custom' }) });
-    items.push({ label: 'Sincronizar jugadores', icon: <RefreshCw />, onClick: () => void send('turn:syncPlayers', {}, { success: 'Jugadores sincronizados' }) });
+    items.push({ label: 'Sincronizar jugadores', icon: <RefreshCw />, onClick: () => void syncPlayers() });
     menu.openAt(Math.max(8, r.left), r.bottom + 4, items);
   };
 
@@ -365,6 +380,25 @@ export function InitiativePanel() {
         {manage && <IconButton icon={<UserPlus />} title="Añadir a la iniciativa" size="sm" variant="secondary" onClick={openAddMenu} />}
       </div>
 
+      {manage && missingPlayers.length > 0 && views.length > 0 && (
+        <div role="status" className="mb-2 flex shrink-0 animate-fade-in items-start gap-2 rounded-lg border border-gold-600/50 bg-gold-500/10 px-2.5 py-2 text-[11px] leading-snug text-parchment-200">
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-gold-400" aria-hidden />
+          <span className="min-w-0 flex-1">
+            <strong className="text-parchment-50">{missingPlayers.map(({ player, hero }) => `${player.name} (${hero.name})`).join(', ')}</strong>{' '}
+            {missingPlayers.length === 1 ? 'ya tiene héroe pero no está' : 'ya tienen héroe pero no están'} en la iniciativa.
+          </span>
+          <button
+            type="button"
+            className="shrink-0 font-semibold text-gold-300 underline-offset-2 hover:text-gold-200 hover:underline disabled:opacity-50"
+            disabled={syncing}
+            onClick={() => void syncPlayers()}
+            title="Añadir a la iniciativa a los jugadores que ya tienen héroe"
+          >
+            Sincronizar
+          </button>
+        </div>
+      )}
+
       <div className="scroll-thin -mx-1 min-h-0 flex-1 overflow-y-auto px-1 py-1">
         {views.length === 0 ? (
           <EmptyState
@@ -375,7 +409,7 @@ export function InitiativePanel() {
             action={
               manage ? (
                 <>
-                  <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={() => void send('turn:syncPlayers', {}, { success: 'Jugadores sincronizados' })}>
+                  <Button size="sm" variant="secondary" icon={<RefreshCw />} loading={syncing} onClick={() => void syncPlayers()}>
                     Sincronizar jugadores
                   </Button>
                   <Button size="sm" variant="ghost" icon={<UserPlus />} onClick={openAddMenu}>
