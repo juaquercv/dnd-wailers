@@ -5,9 +5,7 @@
       "name": "dev",
       "runtimeExecutable": "node",
       "runtimeArgs": [
-        "scripts/dev.mjs",
-        "--db",
-        "postgresql://wailers:wailers@localhost:54329/wailers_dev"
+        "scripts/dev.mjs"
       ],
       "port": 5173
     }

@@ -12,7 +12,31 @@ Mesa virtual para jugar campañas de D&D simplificadas con tus amigos en la red 
 - Unos **2 GB** libres en disco.
 - Para tus amigos: solo un navegador moderno (Chrome, Edge, Firefox o Safari) en la misma red.
 
-## 🚀 Puesta en marcha
+## ⚡ Jugar sin compilar (la forma más rápida)
+
+No hace falta descargar el código: la imagen ya compilada se publica automáticamente en GitHub (`ghcr.io/juaquercv/dnd-wailers`), para PC y para Mac.
+
+1. Instala y abre **Docker Desktop**.
+2. Descarga el archivo [`docker-compose.imagen.yml`](https://raw.githubusercontent.com/juaquercv/dnd-wailers/main/docker-compose.imagen.yml) y guárdalo en una carpeta vacía.
+3. En esa carpeta, abre una terminal y ejecuta:
+
+   ```bash
+   docker compose -f docker-compose.imagen.yml up -d
+   ```
+
+4. Abre **<http://localhost:8080>**.
+
+Para **actualizar** a la última versión:
+
+```bash
+docker compose -f docker-compose.imagen.yml pull
+```
+
+```bash
+docker compose -f docker-compose.imagen.yml up -d
+```
+
+## 🚀 Puesta en marcha desde el código
 
 1. Abre **Docker Desktop** y espera a que diga que está en marcha.
 2. Abre una terminal (PowerShell en Windows) **dentro de la carpeta del proyecto** y ejecuta:
@@ -133,10 +157,12 @@ docker compose exec -T db psql -U wailers wailers < respaldo.sql
 docker compose down -v
 ```
 
-## ☁️ Compartir por Google Drive
+## ☁️ Compartir y publicar
 
-- **Código** (recomendado, unos 5 MB): comprime la carpeta del proyecto **sin** `node_modules`, `data`, `*/dist` ni el instalador de Docker. Quien lo descargue solo necesita Docker Desktop y `docker compose up -d --build`.
-- **Imagen ya compilada** (unos cientos de MB): no necesita compilar ni Internet para las dependencias.
+- **Código:** <https://github.com/juaquercv/dnd-wailers>. Cualquiera puede clonarlo y ejecutar `docker compose up -d --build`.
+- **Imagen lista para jugar:** cada `git push` a `main` dispara la GitHub Action [`Imagen Docker`](.github/workflows/docker-image.yml). Esta compila la app para PC (amd64) y Mac (arm64) y la publica en `ghcr.io/juaquercv/dnd-wailers:latest`. Los jugadores solo necesitan [`docker-compose.imagen.yml`](docker-compose.imagen.yml) (ver «Jugar sin compilar»).
+  - La primera vez, el dueño del repositorio debe hacer pública la imagen: *GitHub → tu perfil → Packages → dnd-wailers → Package settings → Change visibility → Public*.
+- **Sin Internet:** también puedes llevar la imagen en un archivo.
 
   ```bash
   docker save -o dnd-wailers-imagenes.tar dnd-wailers-app postgres:16-alpine
