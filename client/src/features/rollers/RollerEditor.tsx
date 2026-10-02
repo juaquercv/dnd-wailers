@@ -30,7 +30,8 @@ import { formatNumber } from '../../lib/format';
 import { useSettingsStore } from '../../stores/settings';
 import { uiSounds } from '../audio/uiSounds';
 import { DieGlyph } from '../dice/DieShapes';
-import { FORMULA_EXAMPLES } from '../dice/diceUtils';
+import { DicePoolBuilder } from '../dice/DicePoolBuilder';
+import { EMPTY_POOL, poolFormula, poolFromFormula, prettyFormula, type DicePool } from '../dice/dicePool';
 import { useThrottled } from '../dice/diceHooks';
 import { RouletteWheel } from '../dice/RouletteWheel';
 import { Segmented } from '../dice/Segmented';
@@ -105,6 +106,10 @@ function RollerEditorInner({ campaignId, roller, initialKind, tagSuggestions, on
   const [spinning, setSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState<RouletteSegment | null>(null);
   const pendingResult = useRef<RouletteSegment | null>(null);
+  const [pool, setPool] = useState<DicePool>(() => poolFromFormula(draft.formula) ?? EMPTY_POOL);
+  const [advancedFormula, setAdvancedFormula] = useState<string | null>(() =>
+    draft.formula.trim() && !poolFromFormula(draft.formula) ? draft.formula.trim() : null,
+  );
   const tick = useThrottled(() => uiSounds.tick(), 40);
 
   const errors = useMemo(() => validateDraft(draft), [draft]);
@@ -114,6 +119,11 @@ function RollerEditorInner({ campaignId, roller, initialKind, tagSuggestions, on
   const isNew = roller === null;
 
   const patch = (p: Partial<RollerDraft>) => setDraft((d) => ({ ...d, ...p }));
+  const changePool = (next: DicePool) => {
+    setPool(next);
+    setAdvancedFormula(null);
+    patch({ formula: poolFormula(next) ?? (next.bonus !== 0 ? String(next.bonus) : '') });
+  };
   const patchSegment = (id: string, p: Partial<RouletteSegment>) =>
     setDraft((d) => ({ ...d, segments: d.segments.map((s) => (s.id === id ? { ...s, ...p } : s)) }));
 
@@ -283,35 +293,25 @@ function RollerEditorInner({ campaignId, roller, initialKind, tagSuggestions, on
                   }
                   ariaLabel="Modo del dado"
                   options={[
-                    { value: 'formula', label: 'Fórmula de dados', icon: <Dices /> },
+                    { value: 'formula', label: 'Dados normales', icon: <Dices /> },
                     { value: 'faces', label: 'Caras personalizadas', icon: <Palette /> },
                   ]}
                 />
               </div>
               {draft.diceMode === 'formula' ? (
                 <div className="space-y-2">
-                  <TextInput
-                    label="Fórmula"
-                    value={draft.formula}
-                    onValueChange={(formula) => patch({ formula })}
-                    className="font-mono"
-                    placeholder="2d6+3"
-                    spellCheck={false}
-                    error={draft.formula.trim() ? errors.formula : visibleErrors.formula}
-                    hint="Ejemplos: 1d20+5, 2d6+3, 4d6kh3 (quedarse con los 3 mayores), 1d8+1d6+2, d% (d100)."
-                  />
-                  <div className="flex flex-wrap gap-1">
-                    {['1d20', ...FORMULA_EXAMPLES].map((ex) => (
-                      <button
-                        key={ex}
-                        type="button"
-                        onClick={() => patch({ formula: ex })}
-                        className="rounded-full border border-ink-600 bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-parchment-300 transition hover:border-gold-700 hover:text-gold-200"
-                      >
-                        {ex}
-                      </button>
-                    ))}
-                  </div>
+                  {advancedFormula && (
+                    <div className="rounded-lg border border-sky-700/50 bg-sky-900/15 px-3 py-2 text-xs leading-relaxed text-parchment-200">
+                      Este dado usa una tirada especial: <span className="font-mono font-semibold text-gold-200">{prettyFormula(advancedFormula)}</span>. Se
+                      conserva tal cual; si eliges dados abajo, se reemplazará.
+                    </div>
+                  )}
+                  <DicePoolBuilder pool={pool} onChange={changePool} emptyHint={advancedFormula ? 'Elige dados para reemplazar la tirada especial.' : undefined} />
+                  {(draft.formula.trim() ? errors.formula : visibleErrors.formula) && (
+                    <p role="alert" className="text-xs text-blood-400">
+                      {draft.formula.trim() ? errors.formula : visibleErrors.formula}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <FacesEditor faces={draft.faces} rowErrors={visibleErrors.faceRows ?? {}} error={visibleErrors.faces} onChange={(faces) => patch({ faces })} />
@@ -360,7 +360,7 @@ function RollerEditorInner({ campaignId, roller, initialKind, tagSuggestions, on
             ) : draft.diceMode === 'formula' ? (
               <div className="flex flex-col items-center gap-2 py-2 text-center">
                 <DieGlyph sides={mainSides} size={92} />
-                <div className="font-mono text-lg text-gold-200">{draft.formula.trim() || '—'}</div>
+                <div className="font-mono text-lg text-gold-200">{prettyFormula(draft.formula.trim()) || '—'}</div>
                 {range ? (
                   <div className="text-sm text-parchment-300">
                     Resultado entre <strong className="text-parchment-50">{range.min}</strong> y <strong className="text-parchment-50">{range.max}</strong>

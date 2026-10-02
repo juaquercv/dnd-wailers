@@ -211,6 +211,12 @@ export function validateDraft(d: AnyDraft): FieldError[] {
       if (!isNum(d.data.ac) || d.data.ac < 0 || d.data.ac > 40) push('data.ac', 'hero-stats', 'La clase de armadura debe estar entre 0 y 40.');
       if (!isNum(d.data.gold) || d.data.gold < 0) push('data.gold', 'hero-stats', 'El oro no puede ser negativo.');
       if (!isNum(d.data.xp) || d.data.xp < 0) push('data.xp', 'hero-stats', 'La experiencia no puede ser negativa.');
+      const moveCells = d.data.moveCells;
+      if (moveCells !== null && moveCells !== undefined && (!isNum(moveCells) || moveCells < 0 || moveCells > 100))
+        push('data.moveCells', 'hero-stats', 'El movimiento por turno va de 0 a 100 casillas (vacío = según la velocidad).');
+      const actionsPerTurn = d.data.actionsPerTurn;
+      if (actionsPerTurn !== undefined && (!isNum(actionsPerTurn) || actionsPerTurn < 0 || actionsPerTurn > 10))
+        push('data.actionsPerTurn', 'hero-stats', 'Las acciones de combate por turno van de 0 a 10.');
       for (const [k, v] of Object.entries(d.data.abilities ?? {})) {
         if (!isNum(v) || v < 1 || v > 30) push(`ability.${k}`, 'hero-stats', 'Las puntuaciones de característica van de 1 a 30.');
       }

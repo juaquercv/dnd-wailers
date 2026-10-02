@@ -1,10 +1,28 @@
 import { useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { Check, ChevronDown, Layers, Search, Users } from 'lucide-react';
-import { normalizeText } from '@wailers/shared';
+import { Check, ChevronDown, Layers, Moon, Search, Users } from 'lucide-react';
+import { normalizeText, type LiveState, type SessionZone } from '@wailers/shared';
 import { useDisplayState, useSessionStore } from '../../stores/session';
+import { zoneVisionInForce } from '../visibility/zoneVision';
+import { zoneVisionSummary } from '../visibility/visionText';
 import { Popover } from './map/Popover';
 import { levelLabel, sortedLevels, ZONE_TYPE_ICONS, zoneTree, zoneTypeLabel } from './map/zoneTree';
+
+/** DM hint: a moon on zones where players see less than everything (cave, crypt…). */
+function ZoneVisionMark({ state, zone }: { state: LiveState | null; zone: SessionZone }) {
+  if (!state) return null;
+  const vision = zoneVisionInForce(state, zone);
+  if (!vision || vision.mode === 'all') return null;
+  const live = !!state.zoneStates[zone.id]?.vision;
+  return (
+    <span
+      className={clsx('flex shrink-0 items-center', live ? 'text-arcane-300' : 'text-sky-300')}
+      title={`Visión de la zona: ${zoneVisionSummary(vision)}${live ? ' (cambio en vivo)' : ''}`}
+    >
+      <Moon className="h-3.5 w-3.5" aria-hidden />
+    </span>
+  );
+}
 
 /**
  * Zone / level switcher of the game top bar.
@@ -20,6 +38,7 @@ export function ZoneNavigator({ className }: { className?: string }) {
   const viewZone = useSessionStore((s) => s.viewZone);
   const setViewZone = useSessionStore((s) => s.setViewZone);
   const { state, effective } = useDisplayState();
+  const dmState = useSessionStore((s) => (s.view?.role === 'dm' ? s.view.state : null));
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -75,6 +94,7 @@ export function ZoneNavigator({ className }: { className?: string }) {
     <>
       <TypeIcon className="h-4 w-4 shrink-0 text-gold-400" aria-hidden />
       <span className="min-w-0 truncate font-display text-sm font-semibold tracking-wide text-parchment-50">{zone.name}</span>
+      {isDm && <ZoneVisionMark state={dmState} zone={zone} />}
     </>
   );
 
@@ -180,6 +200,7 @@ export function ZoneNavigator({ className }: { className?: string }) {
                 >
                   <Icon className={clsx('h-4 w-4 shrink-0', current ? 'text-gold-400' : 'text-parchment-400')} aria-hidden />
                   <span className="min-w-0 flex-1 truncate">{z.name}</span>
+                  {isDm && <ZoneVisionMark state={dmState} zone={z} />}
                   {z.levels.length > 1 && (
                     <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-parchment-400" title={`${z.levels.length} niveles`}>
                       <Layers className="h-3 w-3" aria-hidden />

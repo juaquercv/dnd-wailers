@@ -21,10 +21,6 @@ export const VISIBILITY_SHORT: Record<RollVisibility, string> = {
   secret: 'Secreta',
 };
 
-export const FORMULA_EXAMPLES = ['1d20+5', '2d6+3', '4d6kh3', '1d8+1d6+2', 'd%'];
-
-export const QUICK_DICE = [4, 6, 8, 10, 12, 20, 100] as const;
-
 /** Wheel easing (CSS and JS versions must match). */
 export const WHEEL_EASING_CSS = 'cubic-bezier(0.12, 0.8, 0.18, 1)';
 
@@ -88,25 +84,6 @@ export function rollBreakdown(roll: RollResult): string | null {
   }
 }
 
-/** Spanish validation message for a formula, or null when valid. */
-export function formulaError(formula: string): string | null {
-  if (!formula.trim()) return 'Escribe una fórmula, por ejemplo 2d6+3';
-  try {
-    parseFormula(formula);
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : 'Fórmula inválida';
-  }
-}
-
-/** Appends a flat modifier to a formula ("1d20" + 5 → "1d20+5"). */
-export function combineFormula(formula: string, modifier: number): string {
-  const base = formula.trim();
-  if (!modifier) return base;
-  const mod = modifier > 0 ? `+${modifier}` : `-${Math.abs(modifier)}`;
-  return base ? `${base}${mod}` : String(modifier);
-}
-
 /** Splits a d100 value into the "tens" (00–90) and "units" (0–9) dice faces. */
 export function d100Parts(value: number): { tens: string; units: string } {
   const v = ((Math.round(value) % 100) + 100) % 100;
@@ -123,9 +100,29 @@ export function errorMessage(err: unknown, fallback = 'Algo salió mal'): string
   return fallback;
 }
 
-/** Default heading when a roll has no label. */
+const AUTO_LABEL = /^tirada de\s+(.+)$/i;
+
+/**
+ * Label worth showing: the default ones built from the formula ("Tirada de 2d20+1d4+4") only repeat
+ * the formula chip, so they count as no label.
+ */
+export function meaningfulRollLabel(label: string | null | undefined): string {
+  const text = (label ?? '').trim();
+  const auto = AUTO_LABEL.exec(text);
+  if (auto) {
+    try {
+      if (parseFormula(auto[1]!).terms.length > 0) return '';
+    } catch {
+      // Not a formula: a real label that happens to start with "Tirada de".
+    }
+  }
+  return text;
+}
+
+/** Heading of a roll; a generic one when it has no meaningful label. */
 export function rollTitle(roll: RollResult): string {
-  if (roll.label.trim()) return roll.label.trim();
+  const label = meaningfulRollLabel(roll.label);
+  if (label) return label;
   if (roll.kind === 'roulette') return 'Ruleta';
   if (roll.kind === 'custom_die') return 'Dado especial';
   return 'Tirada de dados';

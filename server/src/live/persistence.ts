@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import {
   createLiveState,
   emptyHeroData,
+  emptyUsage,
   emptyZoneLiveState,
   type HeroSheet,
   type LiveState,
@@ -9,10 +10,12 @@ import {
   type SessionStatus,
   type Token,
   type TurnEntry,
+  type TurnUsage,
   type ZoneLiveState,
 } from '@wailers/shared';
 import { prisma } from '../db';
 import { isPlainObject, parseVisibility, toJson, withDefaults } from '../services/serializers';
+import { sanitizeZoneVision } from './helpers';
 
 /*
  * Persistence of live sessions: parsing of stored LiveState snapshots and serialized
@@ -122,7 +125,15 @@ export function parseLiveState(row: PersistedSessionRow): LiveState {
     return withDefaults<Token>({ ...TOKEN_TEMPLATE, id: key }, raw);
   });
 
-  state.zoneStates = recordOf<ZoneLiveState>(state.zoneStates, (_key, raw) => withDefaults(emptyZoneLiveState(), raw));
+  state.zoneStates = recordOf<ZoneLiveState>(state.zoneStates, (_key, raw) => {
+    const zs = withDefaults(emptyZoneLiveState(), raw);
+    const vision = sanitizeZoneVision(raw.vision);
+    if (vision) zs.vision = vision;
+    else delete zs.vision;
+    return zs;
+  });
+  // Filled from the campaign zones when the session is loaded (SessionManager).
+  state.zoneVision = {};
   state.instantiatedZones = state.instantiatedZones.filter((z): z is string => typeof z === 'string');
 
   state.turn.order = state.turn.order
@@ -133,6 +144,14 @@ export function parseLiveState(row: PersistedSessionRow): LiveState {
   state.turn.currentIndex = Number.isInteger(state.turn.currentIndex) ? Math.min(Math.max(state.turn.currentIndex, 0), maxIndex) : 0;
   state.turn.round = Number.isInteger(state.turn.round) && state.turn.round >= 1 ? state.turn.round : 1;
   if (state.turn.mode !== 'manual' && state.turn.mode !== 'random') state.turn.mode = 'manual';
+  state.turn.combat = state.turn.combat === true;
+  state.turn.usage = recordOf<TurnUsage>(state.turn.usage, (_key, raw) => {
+    const usage = withDefaults(emptyUsage(), raw);
+    for (const key of ['moved', 'actions', 'bonusMove', 'bonusActions'] as const) {
+      usage[key] = Number.isFinite(usage[key]) ? Math.max(0, usage[key]) : 0;
+    }
+    return usage;
+  });
 
   state.visibility.global = parseVisibility(state.visibility.global);
   state.visibility.perPlayer = isPlainObject(state.visibility.perPlayer)

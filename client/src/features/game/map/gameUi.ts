@@ -9,6 +9,15 @@ export interface CastRequest {
   animation: SpellAnimation;
 }
 
+/** Map point chosen with the right-click menu where the next quick-search spawn lands. */
+export interface SpawnTarget {
+  zoneId: string;
+  levelId: string;
+  x: number;
+  y: number;
+  at: number;
+}
+
 /** Camera focus to apply once the map shows the given zone/level. */
 export interface PendingFocus {
   zoneId: string;
@@ -30,6 +39,10 @@ interface GameUiState {
   pendingFocus: PendingFocus | null;
   /** Token briefly highlighted after "center on token". */
   flashTokenId: string | null;
+  /** "Añadir enemigo aquí…": the quick search spawns at this point instead of the view center. */
+  spawnAt: SpawnTarget | null;
+  /** A token of the map is being dragged right now (overlays step aside). */
+  tokenDragging: boolean;
 
   setPingMode: (on: boolean) => void;
   togglePingMode: () => void;
@@ -40,11 +53,16 @@ interface GameUiState {
   /** Returns (and clears) the pending focus if it targets this zone/level. */
   consumeFocus: (zoneId: string, levelId: string) => PendingFocus | null;
   flashToken: (tokenId: string) => void;
+  setSpawnAt: (target: Omit<SpawnTarget, 'at'> | null) => void;
+  /** The pending spawn point when it is recent and on the given zone/level (it is kept until used or replaced). */
+  peekSpawnAt: (zoneId: string, levelId: string) => SpawnTarget | null;
+  setTokenDragging: (on: boolean) => void;
   /** Leaves every transient mode (Esc). Returns true if something was cancelled. */
   cancelModes: () => boolean;
 }
 
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
+const SPAWN_AT_TTL_MS = 2 * 60 * 1000;
 let sidebarNonce = 0;
 
 export const useGameUi = create<GameUiState>((set, get) => ({
@@ -54,6 +72,8 @@ export const useGameUi = create<GameUiState>((set, get) => ({
   sidebarRequest: null,
   pendingFocus: null,
   flashTokenId: null,
+  spawnAt: null,
+  tokenDragging: false,
 
   setPingMode: (on) => set({ pingMode: on, cast: on ? null : get().cast }),
   togglePingMode: () => set((s) => ({ pingMode: !s.pingMode, cast: s.pingMode ? s.cast : null })),
@@ -78,6 +98,15 @@ export const useGameUi = create<GameUiState>((set, get) => ({
       set({ flashTokenId: null });
     }, 1800);
   },
+  setSpawnAt: (target) => set({ spawnAt: target ? { ...target, at: Date.now() } : null }),
+  peekSpawnAt: (zoneId, levelId) => {
+    const t = get().spawnAt;
+    if (!t || t.zoneId !== zoneId || t.levelId !== levelId || Date.now() - t.at > SPAWN_AT_TTL_MS) return null;
+    return t;
+  },
+  setTokenDragging: (on) => {
+    if (get().tokenDragging !== on) set({ tokenDragging: on });
+  },
   cancelModes: () => {
     const s = get();
     if (!s.cast && !s.pingMode) return false;
@@ -88,5 +117,13 @@ export const useGameUi = create<GameUiState>((set, get) => ({
 
 /** Reset every transient mode (used when leaving the game screen). */
 export function resetGameUi(): void {
-  useGameUi.setState({ pingMode: false, cast: null, pendingFocus: null, flashTokenId: null, sidebarRequest: null });
+  useGameUi.setState({
+    pingMode: false,
+    cast: null,
+    pendingFocus: null,
+    flashTokenId: null,
+    sidebarRequest: null,
+    spawnAt: null,
+    tokenDragging: false,
+  });
 }

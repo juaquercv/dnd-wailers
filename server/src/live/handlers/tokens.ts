@@ -1,7 +1,11 @@
 import {
   RARITY_INFO,
+  checkPlayerMove,
+  economyApplies,
   effectiveVisibility,
+  isHeroTurn,
   isOwnHeroToken,
+  moveBudget,
   newId,
   normalizeDeg,
   type FxEvent,
@@ -10,10 +14,12 @@ import {
   type SpawnPoint,
   type Token,
   type TokenStats,
+  type TransitionElement,
   type ZoneLevel,
 } from '@wailers/shared';
 import { isPlainObject } from '../../services/serializers';
 import {
+  addUsage,
   clamp,
   clampToLevel,
   colorValue,
@@ -27,6 +33,7 @@ import {
   formatCr,
   freeCellsAround,
   getLevel,
+  gridSize,
   heroTokenOf,
   idList,
   joinNames,
@@ -63,6 +70,7 @@ import {
   urlOrNull,
   visibilityForPlayers,
   zoneLabel,
+  type NeighborDirection,
   type Point,
 } from '../helpers';
 import {
@@ -100,6 +108,13 @@ function tokenLogVisibility(
 function canPlayerMoveToken(ctx: HandlerCtx, token: Token): boolean {
   const state = ctx.session.state;
   return isOwnHeroToken(state, token, ctx.userId) && effectiveFor(state, ctx.userId).canMoveOwnToken;
+}
+
+/** Hero whose turn economy a player's move spends: the hero of the token, else the player's selected hero. */
+function economyHeroId(ctx: HandlerCtx, token: Token): string | null {
+  const state = ctx.session.state;
+  const heroId = token.heroId ?? state.players[ctx.userId]?.heroId ?? null;
+  return heroId && state.heroes[heroId] ? heroId : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,9 +303,22 @@ function moveToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { token
   }
   const loc = getLevel(ctx.session, token.zoneId, token.levelId);
   const point = loc ? snapPoint(loc.level, { x, y }, token.cells) : { x, y };
+  // In combat a player's hero moves only on its turn and within its movement per turn (the DM is never limited).
+  const heroId = !ctx.isDm && loc ? economyHeroId(ctx, token) : null;
   manager.mutate(ctx.session, (s) => {
     const t = s.tokens[token.id];
     if (!t) return;
+    // Turning in place (same position, new facing) is free, also while waiting for the turn.
+    const samePoint = (p: Point): boolean => Math.abs(p.x - t.x) < 0.5 && Math.abs(p.y - t.y) < 0.5;
+    if (facing !== undefined && (samePoint({ x, y }) || samePoint(point))) {
+      t.facing = normalizeDeg(facing);
+      return;
+    }
+    if (heroId && loc && economyApplies(s)) {
+      const check = checkPlayerMove(s, heroId, { x: t.x, y: t.y }, point, loc.level.grid);
+      if (!check.ok) throw new HandlerError(check.reason);
+      if (check.cost > 0) addUsage(s, heroId, { moved: check.cost });
+    }
     t.x = point.x;
     t.y = point.y;
     if (facing !== undefined) t.facing = normalizeDeg(facing);
@@ -306,6 +334,9 @@ function dragToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { token
   if (!ctx.isDm) {
     requirePlaying(ctx);
     if (!canPlayerMoveToken(ctx, token)) throw new HandlerError(NO_MOVE);
+    // A move the turn economy would reject is not previewed to the others.
+    const heroId = economyHeroId(ctx, token);
+    if (heroId && economyApplies(state) && (!isHeroTurn(state, heroId) || moveBudget(state, heroId).left <= 0)) return null;
   }
   const recipients = membersExcept(state, ctx.userId).filter((uid) => {
     if (uid === state.hostUserId) return true;
@@ -320,8 +351,69 @@ function dragToken(manager: SessionManagerApi, ctx: HandlerCtx, payload: { token
 }
 
 // ---------------------------------------------------------------------------
+// token:moveMany (DM)
+// ---------------------------------------------------------------------------
+
+function moveManyTokens(manager: SessionManagerApi, ctx: HandlerCtx, payload: { moves: { tokenId: string; x: number; y: number }[] }): null {
+  const state = ctx.session.state;
+  if (!Array.isArray(payload.moves)) throw new HandlerError('Valor no válido para «movimientos»');
+  if (payload.moves.length === 0) return null;
+  if (payload.moves.length > 200) throw new HandlerError('Demasiadas fichas a la vez');
+  const targets = new Map<string, Point>();
+  for (const raw of payload.moves) {
+    const move = plainObject(raw, 'movimiento');
+    const token = requireToken(state, move.tokenId);
+    const loc = getLevel(ctx.session, token.zoneId, token.levelId);
+    const p = { x: reqNum(move.x, 'x'), y: reqNum(move.y, 'y') };
+    targets.set(token.id, loc ? snapPoint(loc.level, p, token.cells) : p);
+  }
+  manager.mutate(ctx.session, (s) => {
+    for (const [tokenId, point] of targets) {
+      const t = s.tokens[tokenId];
+      if (!t) continue;
+      t.x = point.x;
+      t.y = point.y;
+    }
+  });
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // token:transfer
 // ---------------------------------------------------------------------------
+
+/** How far (cells) outside a door/stairs element or from a zone edge a player's hero may still use it. */
+const PASSAGE_REACH_CELLS = 1;
+/** Players see the arrow to a neighbor zone within 2 cells of that edge (client EdgeNavigator). */
+const EDGE_REACH_CELLS = 2 + PASSAGE_REACH_CELLS;
+
+/** Whether p lies inside the (rotated) rectangle of a transition element, grown by `margin` px. */
+function pointNearTransition(p: Point, el: TransitionElement, margin: number): boolean {
+  const rad = (-(el.rotation || 0) * Math.PI) / 180;
+  const dx = p.x - el.x;
+  const dy = p.y - el.y;
+  const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+  const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+  return Math.abs(lx) <= Math.max(8, el.width) / 2 + margin && Math.abs(ly) <= Math.max(8, el.height) / 2 + margin;
+}
+
+/** Visible transition of `level` leading to the zone/level whose area the hero stands on (or right next to). */
+function transitionUnderHero(level: ZoneLevel, hero: Point, zoneId: string, levelId: string): TransitionElement | null {
+  const margin = PASSAGE_REACH_CELLS * gridSize(level);
+  for (const el of level.elements) {
+    if (el.type !== 'transition' || el.hidden || !el.target) continue;
+    if (el.target.zoneId !== zoneId || el.target.levelId !== levelId) continue;
+    if (pointNearTransition(hero, el, margin)) return el;
+  }
+  return null;
+}
+
+/** Whether a point is close enough to an edge of the level to cross to the neighbor zone there. */
+function nearLevelEdge(level: ZoneLevel, p: Point, direction: NeighborDirection): boolean {
+  const { width, height } = levelSize(level);
+  const distance = direction === 'left' ? p.x : direction === 'right' ? width - p.x : direction === 'up' ? p.y : height - p.y;
+  return distance <= EDGE_REACH_CELLS * gridSize(level);
+}
 
 function transferTokens(
   manager: SessionManagerApi,
@@ -352,19 +444,36 @@ function transferTokens(
   }
   let x = optNum(payload.x, 'x');
   let y = optNum(payload.y, 'y');
-  const transitionTarget = fromLoc ? findTransitionTarget(fromLoc.level, zone.id, level.id, ctx.isDm) : null;
+  let transitionTarget = fromLoc ? findTransitionTarget(fromLoc.level, zone.id, level.id, ctx.isDm) : null;
+  // Hero whose movement this transfer spends (a player's plain move on the same level, in combat).
+  let costHeroId: string | null = null;
 
   if (!ctx.isDm) {
     requirePlaying(ctx);
     if (tokens.length !== 1 || !canPlayerMoveToken(ctx, first)) throw new HandlerError(NO_MOVE);
+    // Doors, stairs and zone edges are interactions (no movement cost), but in combat only on the hero's turn.
+    const heroId = economyHeroId(ctx, first);
+    const limited = heroId !== null && economyApplies(state);
+    if (limited && !isHeroTurn(state, heroId)) {
+      throw new HandlerError('Combate en curso: espera a tu turno para moverte');
+    }
+    // A player passes through a door/stairs only standing on it, and to a neighbor zone only next to that edge.
+    const passage = fromLoc ? transitionUnderHero(fromLoc.level, first, zone.id, level.id) : null;
     const sameLevel = first.zoneId === zone.id && first.levelId === level.id;
-    const viaNeighbor = direction !== null && level.id === defaultLevel(zone).id;
-    const viaTransition = transitionTarget !== null;
-    if (!sameLevel && !viaNeighbor && !viaTransition) throw new HandlerError('Tu ficha no puede llegar a esa zona desde aquí');
-    // Passing through a door/stairs always lands on its target point.
-    if (!sameLevel && !viaNeighbor) {
+    const neighborReachable = direction !== null && level.id === defaultLevel(zone).id;
+    const viaNeighbor = neighborReachable && fromLoc !== null && nearLevelEdge(fromLoc.level, first, direction);
+    if (passage) {
+      // Passing through a door/stairs always lands on its target point.
+      transitionTarget = passage.target;
       x = undefined;
       y = undefined;
+    } else if (!sameLevel && !viaNeighbor) {
+      if (neighborReachable) throw new HandlerError('Acércate al borde del mapa para pasar a la zona vecina');
+      if (transitionTarget) throw new HandlerError('Acerca tu ficha a la puerta o escalera para usarla');
+      throw new HandlerError('Tu ficha no puede llegar a esa zona desde aquí');
+    } else if (sameLevel && limited) {
+      // On the same level it is a plain move: in combat it spends movement like token:move.
+      costHeroId = heroId;
     }
   }
 
@@ -413,6 +522,11 @@ function transferTokens(
       const positions = freeCellsAround(s, zone.id, level, anchor, live.length, maxCells, new Set(tokenIds));
       live.forEach((t, i) => {
         const pos = snapPoint(level, positions[i]!, t.cells);
+        if (costHeroId && economyApplies(s)) {
+          const check = checkPlayerMove(s, costHeroId, { x: t.x, y: t.y }, pos, level.grid);
+          if (!check.ok) throw new HandlerError(check.reason);
+          if (check.cost > 0) addUsage(s, costHeroId, { moved: check.cost });
+        }
         t.zoneId = zone.id;
         t.levelId = level.id;
         t.x = pos.x;
@@ -766,6 +880,7 @@ export const registerTokenHandlers: HandlerModule = (socket, manager) => {
   manager.register(socket, 'token:placeHeroes', (ctx, payload) => placeHeroes(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'token:move', (ctx, payload) => moveToken(manager, ctx, payload));
   manager.register(socket, 'token:drag', (ctx, payload) => dragToken(manager, ctx, payload));
+  manager.register(socket, 'token:moveMany', (ctx, payload) => moveManyTokens(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'token:transfer', (ctx, payload) => transferTokens(manager, ctx, payload));
   manager.register(socket, 'token:update', (ctx, payload) => updateToken(manager, ctx, payload), { dmOnly: true });
   manager.register(socket, 'token:hp', (ctx, payload) => tokenHp(manager, ctx, payload), { dmOnly: true });

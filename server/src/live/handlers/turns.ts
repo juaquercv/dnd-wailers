@@ -1,5 +1,7 @@
 import {
+  currentTurnEntry,
   effectiveVisibility,
+  heroIdOfEntry,
   newId,
   secureRandomInt,
   type HeroSheet,
@@ -10,7 +12,7 @@ import {
   type TurnEntry,
 } from '@wailers/shared';
 import { isPlainObject } from '../../services/serializers';
-import { playerKnowsTurnEntry } from '../helpers';
+import { playerKnowsTurnEntry, resetUsage } from '../helpers';
 import type { SessionManager } from '../SessionManager';
 import {
   HandlerError,
@@ -202,21 +204,27 @@ export function turnPointer(state: LiveState): TurnPointer {
 
 /**
  * Inside mutate: the current entry starts its turn. Sets the turn offer (active turn rollers for a
- * player entry) and, when the campaign enables it, regenerates that hero's mana. Only while playing.
+ * player entry) and, on a new turn, gives the hero back its movement and actions and regenerates its
+ * mana when the campaign enables it. `fresh` = false when the turn goes back to an entry whose turn was
+ * already running (turn:prev, «Dar el turno» to who already has it): nothing is given back, so undoing
+ * a mistaken turn:next is neutral. Only while playing.
  */
-export function landCurrentTurn(session: LiveSession, state: LiveState, opts: MutateOptions): TurnLanding | null {
+export function landCurrentTurn(session: LiveSession, state: LiveState, opts: MutateOptions, fresh = true): TurnLanding | null {
   const entry = state.turn.order[state.turn.currentIndex];
+  const startingHeroId = heroIdOfEntry(state, entry ?? null);
   if (!entry || state.status !== 'playing') {
+    if (startingHeroId) resetUsage(state, startingHeroId);
     state.turnOffer = null;
     return null;
   }
+  if (fresh && startingHeroId) resetUsage(state, startingHeroId);
   const turnUserId = turnUserOf(state, entry);
   const offered = turnUserId ? turnRollersOf(session) : [];
   state.turnOffer = turnUserId && offered.length > 0 ? { userId: turnUserId, rollerIds: offered.map((r) => r.id) } : null;
 
   let regenText = '';
   const magic = session.campaign.rules.magic;
-  if (magic.mode === 'mana' && magic.manaAutoRegen) {
+  if (fresh && magic.mode === 'mana' && magic.manaAutoRegen) {
     const hero = heroForEntry(state, entry);
     if (hero) {
       const mana = hero.data.resources.mana;
@@ -299,6 +307,61 @@ export function startTurns(session: LiveSession, state: LiveState, opts: MutateO
 }
 
 /**
+ * Inside mutate, while playing, after a player picked a hero: a player who had none (joined mid-game)
+ * takes part in the turn order at its end; a player who switched hero keeps their entry, now pointing
+ * to the new hero token. Returns the landing when the order was empty (the newcomer starts round 1).
+ */
+export function joinTurnOrder(session: LiveSession, state: LiveState, opts: MutateOptions, userId: string, hadHero: boolean): TurnLanding | null {
+  if (state.status !== 'playing') return null;
+  const player = state.players[userId];
+  const hero = player?.heroId ? state.heroes[player.heroId] : undefined;
+  if (!player || !hero) return null;
+  const existing = state.turn.order.find((e) => e.type === 'player' && e.userId === userId);
+  if (existing) {
+    existing.tokenId = heroTokenId(state, hero.id) ?? existing.tokenId;
+    return null;
+  }
+  // A player the DM took out of the order and who only switched hero stays out.
+  if (hadHero) return null;
+  const hadEntries = state.turn.order.length > 0;
+  state.turn.order.push(playerEntry(state, player, hero));
+  return hadEntries ? null : landFreshOrder(session, state, opts);
+}
+
+const OWN_TURN_REMINDER_DELAY_MS = 150;
+
+/**
+ * A player who (re)joins during their own turn and cannot follow the turn order gets that turn's
+ * turnStart again: without it their client (page reloaded) would not know the turn is theirs and would
+ * block their movement and actions. Sent to the joining socket after the join answer, so the client
+ * already holds the session view; no log line, no mana and no new turn (only the rollers still pending).
+ */
+export function remindOwnTurn(manager: SessionManager, session: LiveSession, socket: AppSocket, userId: string): void {
+  const ownTurn = (state: LiveState): TurnEntry | null => {
+    if (state.status !== 'playing' || effectiveVisibility(state, userId).canSeeInitiative) return null;
+    const entry = currentTurnEntry(state);
+    return entry && isOwnTurnEntry(state, entry, userId) ? entry : null;
+  };
+  const entryId = ownTurn(session.state)?.id;
+  if (!entryId) return;
+  setTimeout(() => {
+    const state = session.state;
+    if (manager.get(session.id) !== session || !socket.connected || socket.data.sessionId !== session.id) return;
+    const entry = ownTurn(state);
+    if (!entry || entry.id !== entryId) return;
+    const pending = state.turnOffer?.userId === userId ? state.turnOffer.rollerIds : [];
+    const offeredRollers = turnRollersOf(session).filter((r) => pending.includes(r.id));
+    socket.emit('session:event', { type: 'turnStart', entry: structuredClone(entry), round: state.turn.round, offeredRollers });
+    // The client pins the reminded turn to the turn index of the next newer state it receives.
+    try {
+      manager.mutate(session, () => undefined);
+    } catch {
+      /* the session was unloaded meanwhile */
+    }
+  }, OWN_TURN_REMINDER_DELAY_MS);
+}
+
+/**
  * turnStart for the DM and the players who may follow the turn order and know who the entry is (a
  * creature only for the players who see it); only the player whose turn it is receives the offered rollers.
  */
@@ -314,6 +377,48 @@ export function announceTurnStart(manager: SessionManagerApi, session: LiveSessi
   if (landing.turnUserId) {
     manager.emitEvent(session, { ...base, offeredRollers: landing.offered }, { kind: 'users', userIds: [landing.turnUserId] });
   }
+  announcedTurns.set(session, turnMark(session.state));
+}
+
+/** Current turn: its entry, its position in the order and the round. */
+export interface TurnMark {
+  entryId: string | null;
+  index: number;
+  round: number;
+}
+
+export function turnMark(state: LiveState): TurnMark {
+  return { entryId: currentTurnEntry(state)?.id ?? null, index: state.turn.currentIndex, round: state.turn.round };
+}
+
+/** Turn last announced with announceTurnStart, per session. */
+const announcedTurns = new WeakMap<LiveSession, TurnMark>();
+
+function sameMark(a: TurnMark | undefined, b: TurnMark): boolean {
+  return a !== undefined && a.entryId === b.entryId && a.index === b.index && a.round === b.round;
+}
+
+/**
+ * After any mutation that kept the same turn but moved it in the order (an earlier entry removed or
+ * inserted, a reorder): the player whose turn it is and who cannot follow the order gets its turnStart
+ * again, since their client only knows the turn by its position. Skipped when the handler announced
+ * that turn anyway.
+ */
+export function remindShiftedTurn(manager: SessionManagerApi, session: LiveSession, before: TurnMark): void {
+  const now = turnMark(session.state);
+  if (session.state.status !== 'playing' || !now.entryId || now.entryId !== before.entryId || now.index === before.index) return;
+  setImmediate(() => {
+    const state = session.state;
+    if (manager.get(session.id) !== session || state.status !== 'playing') return;
+    if (!sameMark(now, turnMark(state)) || sameMark(announcedTurns.get(session), now)) return;
+    const entry = currentTurnEntry(state);
+    const userId = entry ? turnUserOf(state, entry) : null;
+    if (!entry || !userId || effectiveVisibility(state, userId).canSeeInitiative) return;
+    const pending = state.turnOffer?.userId === userId ? state.turnOffer.rollerIds : [];
+    const offeredRollers = turnRollersOf(session).filter((r) => pending.includes(r.id));
+    manager.emitEvent(session, { type: 'turnStart', entry: structuredClone(entry), round: now.round, offeredRollers }, { kind: 'users', userIds: [userId] });
+    announcedTurns.set(session, now);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -355,13 +460,14 @@ function initiativeOf(value: unknown): number | null {
 // Handlers
 // ---------------------------------------------------------------------------
 
-function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1): null {
+function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1, before?: (state: LiveState, opts: MutateOptions) => void): null {
   if (ctx.session.state.turn.order.length === 0) throw new HandlerError(EMPTY_ORDER);
   const opts: MutateOptions = {};
   const out: { landing: TurnLanding | null } = { landing: null };
   manager.mutate(
     ctx.session,
     (state) => {
+      before?.(state, opts);
       const length = state.turn.order.length;
       if (length === 0) throw new HandlerError(EMPTY_ORDER);
       const current = Math.min(Math.max(state.turn.currentIndex, 0), length - 1);
@@ -374,7 +480,8 @@ function moveTurn(manager: SessionManager, ctx: HandlerCtx, step: 1 | -1): null 
         state.turn.round = Math.max(1, state.turn.round - 1);
       }
       state.turn.currentIndex = index;
-      out.landing = landCurrentTurn(ctx.session, state, opts);
+      // Going back is not a new turn for that entry (see landCurrentTurn).
+      out.landing = landCurrentTurn(ctx.session, state, opts, step === 1);
     },
     opts,
   );
@@ -455,8 +562,9 @@ function setCurrent(manager: SessionManager, ctx: HandlerCtx, entryIdRaw: unknow
     (state) => {
       const index = state.turn.order.findIndex((e) => e.id === entryId);
       if (index < 0) throw new HandlerError(UNKNOWN_ENTRY);
+      const fresh = index !== state.turn.currentIndex;
       state.turn.currentIndex = index;
-      out.landing = landCurrentTurn(ctx.session, state, opts);
+      out.landing = landCurrentTurn(ctx.session, state, opts, fresh);
     },
     opts,
   );
@@ -549,6 +657,71 @@ function setOrder(manager: SessionManager, ctx: HandlerCtx, orderRaw: unknown): 
   return null;
 }
 
+/** Whether a turn entry is the player's own turn (their hero's entry or their player entry). */
+function isOwnTurnEntry(state: LiveState, entry: TurnEntry, userId: string): boolean {
+  const heroId = state.players[userId]?.heroId ?? null;
+  return (heroId !== null && heroIdOfEntry(state, entry) === heroId) || entry.userId === userId;
+}
+
+/** Player: end their own turn (same as turn:next). The DM may use it too. */
+function endMyTurn(manager: SessionManager, ctx: HandlerCtx): null {
+  if (ctx.isDm) return moveTurn(manager, ctx, 1);
+  if (ctx.session.state.status !== 'playing') throw new HandlerError('La partida todavía no ha empezado');
+  const check = (state: LiveState): TurnEntry => {
+    const entry = currentTurnEntry(state);
+    if (!entry) throw new HandlerError(EMPTY_ORDER);
+    if (!isOwnTurnEntry(state, entry, ctx.userId)) throw new HandlerError('No es tu turno');
+    return entry;
+  };
+  check(ctx.session.state);
+  return moveTurn(manager, ctx, 1, (state, opts) => {
+    const entry = check(state);
+    const news: TurnNews = { text: `⏭️ ${entry.name} termina su turno`, data: { entryId: entry.id, round: state.turn.round } };
+    appendTurnNews(opts, state, news, () => news);
+  });
+}
+
+/**
+ * DM: start/stop combat. Starting zeroes every hero's usage, makes sure every player with a hero is in
+ * the turn order (players who joined or picked a hero mid-game are appended) and announces the current
+ * turn like any turn landing. Stopping returns to free exploration.
+ */
+function setCombat(manager: SessionManager, ctx: HandlerCtx, activeRaw: unknown): null {
+  if (typeof activeRaw !== 'boolean') throw new HandlerError('Valor no válido para «combate»');
+  const active = activeRaw;
+  const session = ctx.session;
+  if (session.state.status !== 'playing') throw new HandlerError('La partida todavía no ha empezado');
+  if ((session.state.turn.combat === true) === active) return null;
+  const opts: MutateOptions = {};
+  const out: { landing: TurnLanding | null } = { landing: null };
+  manager.mutate(
+    session,
+    (state) => {
+      state.turn.usage = {};
+      state.turn.combat = active;
+      if (!active) {
+        appendLog(opts, { type: 'turn', text: '🕊️ Fin del combate', visibility: 'all' });
+        return;
+      }
+      appendLog(opts, { type: 'turn', text: '⚔️ ¡Comienza el combate!', visibility: 'all' });
+      const hadEntries = state.turn.order.length > 0;
+      syncPlayerEntries(state);
+      if (state.turn.order.length === 0) return;
+      out.landing = hadEntries ? landCurrentTurn(session, state, opts) : landFreshOrder(session, state, opts);
+    },
+    opts,
+  );
+  if (out.landing) announceTurnStart(manager, session, out.landing);
+  if (active && session.state.turn.order.length === 0) {
+    manager.emitEvent(
+      session,
+      { type: 'toast', level: 'warning', text: 'Combate iniciado, pero no hay nadie en el orden de turnos: añade participantes.' },
+      { kind: 'dm' },
+    );
+  }
+  return null;
+}
+
 export function registerTurnHandlers(socket: AppSocket, manager: SessionManager): void {
   const dmOnly = { dmOnly: true };
 
@@ -598,6 +771,8 @@ export function registerTurnHandlers(socket: AppSocket, manager: SessionManager)
   );
 
   manager.register(socket, 'turn:update', (ctx, payload) => updateEntry(manager, ctx, payload), dmOnly);
+  manager.register(socket, 'turn:endMine', (ctx) => endMyTurn(manager, ctx));
+  manager.register(socket, 'combat:set', (ctx, payload) => setCombat(manager, ctx, payload.active), dmOnly);
 
   manager.register(
     socket,

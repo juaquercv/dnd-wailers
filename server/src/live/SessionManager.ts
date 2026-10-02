@@ -1,7 +1,6 @@
 import {
   adaptHeroToRules,
   allowedZoneIds,
-  buildPlayerView,
   decodeExplored,
   effectiveVisibility,
   emptyZoneLiveState,
@@ -9,8 +8,8 @@ import {
   filterZoneForPlayer,
   markExplored,
   newId,
-  visibleAreas,
   visionCellsFor,
+  visionConeFor,
   visionTokensFor,
   type AckResult,
   type C2SEvent,
@@ -39,7 +38,16 @@ import { bus } from '../bus';
 import { prisma } from '../db';
 import { refreshSearchText } from '../services/library';
 import { entryInclude, entryToDTO, isPlainObject, logToDTO, sessionInclude, sessionSummaryToDTO, toJson, toNullableJson, type SessionRow } from '../services/serializers';
-import { anonymizedTurnEntry, playerKnowsTurnEntry } from './helpers';
+import {
+  anonymizedTurnEntry,
+  hasLimitedVisionSources,
+  playerKnowsTurnEntry,
+  playerStateFor,
+  playerZoneVisionMode,
+  zoneLimitedAreas,
+  zoneVisionMap,
+} from './helpers';
+import { remindShiftedTurn, turnMark } from './handlers/turns';
 import { SessionPersistence, isMissingRecordError, parseLiveState } from './persistence';
 import {
   defaultLevel,
@@ -307,6 +315,7 @@ export class SessionManager implements SessionManagerApi {
     const { campaign, entries } = await loadCampaignRuntime(row.campaignId, sounds);
     const state = parseLiveState(row);
     await this.refreshHeroesFromLibrary(state, row.updatedAt);
+    state.zoneVision = zoneVisionMap(campaign.zones);
     const session = new RunningSession(row.id, state, campaign, entries);
     this.syncHeroMirrors(session.state);
     this.sessions.set(session.id, session);
@@ -389,6 +398,7 @@ export class SessionManager implements SessionManagerApi {
       return;
     }
     const backup = structuredClone(running.state);
+    const turnBefore = turnMark(running.state);
     running.mutateDepth++;
     try {
       fn(running.state);
@@ -416,6 +426,7 @@ export class SessionManager implements SessionManagerApi {
     }
     this.scheduleBroadcast(running, zones);
     this.schedulePersist(running, persistNow);
+    remindShiftedTurn(this, running, turnBefore);
   }
 
   /** Hero tokens and player turn entries mirror the live hero sheets. */
@@ -450,28 +461,35 @@ export class SessionManager implements SessionManagerApi {
     const zoneIds = new Set<string>();
     for (const t of visionTokensFor(state, userId)) {
       zoneIds.add(t.zoneId);
-      parts.push(`${t.id}:${t.zoneId}:${t.levelId}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.facing)}:${visionCellsFor(state, t, eff, userId)}`);
+      parts.push(
+        `${t.id}:${t.zoneId}:${t.levelId}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.facing)}:${visionCellsFor(state, t, eff, userId)}:${visionConeFor(state, t, eff, userId)}`,
+      );
     }
     for (const zoneId of zoneIds) {
       const zone = session.campaign.zones.find((z) => z.id === zoneId);
-      parts.push(`${zoneId}@${zone?.updatedAt ?? ''}=${JSON.stringify(state.zoneStates[zoneId]?.doors ?? {})}`);
+      parts.push(
+        `${zoneId}@${zone?.updatedAt ?? ''}:${playerZoneVisionMode(state, userId, zoneId)}=${JSON.stringify(state.zoneStates[zoneId]?.doors ?? {})}`,
+      );
     }
     parts.push(Object.keys(state.explored[userId] ?? {}).sort().join(','));
     return parts.join('|');
   }
 
-  /** Marks what each player currently sees as explored (players in 'explored' or 'vision' mode). */
+  /**
+   * Marks what each player currently sees as explored, in the zones where their vision is limited
+   * (playerZoneVisionMode): lit zones need no memory.
+   */
   private updateExplored(session: RunningSession): void {
     const state = session.state;
     const zones = session.campaign.zones;
     for (const userId of Object.keys(state.players)) {
-      const eff = effectiveVisibility(state, userId);
-      if (eff.visionMode !== 'explored' && eff.visionMode !== 'vision') {
+      if (!hasLimitedVisionSources(state, userId)) {
         session.visionSignatures.delete(userId);
         continue;
       }
+      const eff = effectiveVisibility(state, userId);
       if (session.visionSignatures.get(userId) === this.visionSignature(session, userId, eff)) continue;
-      const areas = visibleAreas(state, zones, userId);
+      const areas = zoneLimitedAreas(state, zones, userId);
       for (const [levelId, polygons] of Object.entries(areas)) {
         const found = session.levelIndex.get(levelId);
         if (!found || polygons.length === 0) continue;
@@ -531,7 +549,7 @@ export class SessionManager implements SessionManagerApi {
       return { role: 'dm', meUserId: userId, state, effective: state.visibility.global };
     }
     if (!state.players[userId]) return null;
-    const playerState = buildPlayerView(state, session.campaign.zones, userId);
+    const playerState = playerStateFor(state, session.campaign.zones, userId);
     // Creatures the player does not see on the map (out of sight, another zone, under fog) stay anonymous.
     playerState.turn.order = playerState.turn.order.map((entry) =>
       playerKnowsTurnEntry(session, userId, entry) ? entry : anonymizedTurnEntry(entry),
@@ -1089,8 +1107,27 @@ export class SessionManager implements SessionManagerApi {
       session.reindex();
       session.visionSignatures.clear();
       this.cleanupAfterZoneReload(session);
+      this.syncZoneVision(session);
       this.broadcast(session, { zones: true });
     }
+  }
+
+  /** Inside mutate: copy the default vision of every campaign zone into the state (state.zoneVision). */
+  applyZoneVision(session: LiveSession, state: LiveState): void {
+    state.zoneVision = zoneVisionMap(session.campaign.zones);
+  }
+
+  /** After the zones changed: the state follows the zones' default visions (one mutation when they differ). */
+  private syncZoneVision(session: RunningSession): void {
+    const next = zoneVisionMap(session.campaign.zones);
+    if (stableJson(next) === stableJson(session.state.zoneVision ?? {})) return;
+    this.mutate(
+      session,
+      (state) => {
+        state.zoneVision = next;
+      },
+      { zones: true },
+    );
   }
 
   /** Tokens/states that point to deleted zones or levels after the campaign was edited. */

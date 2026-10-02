@@ -2,8 +2,12 @@ import {
   SIZE_INFO,
   STATUSES,
   blockingSegments,
+  buildPlayerView,
   cellsForSize,
+  cellsToPx,
+  computeVisibilityPolygon,
   customInventoryItem,
+  defaultVisibility,
   effectiveVisibility,
   hexAt,
   hexToPixel,
@@ -13,8 +17,12 @@ import {
   normalizeText,
   pointInAnyPolygon,
   snapTokenCenter,
-  visibleAreas,
+  visionCellsFor,
+  visionConeFor,
+  visionTokensFor,
+  zoneVisionFor,
   allowedZoneIds,
+  usageOf,
   HIDDEN_TURN_ENTRY_NAME,
   RARITIES,
   type EntryKind,
@@ -30,10 +38,14 @@ import {
   type TokenStats,
   type TransitionElement,
   type TurnEntry,
+  type TurnUsage,
   type VisibilitySettings,
+  type VisionMode,
+  type Wall,
   type Zone,
   type ZoneLevel,
   type ZoneNeighbors,
+  type ZoneVision,
 } from '@wailers/shared';
 import { prisma } from '../db';
 import { entryInclude, entryToDTO, isPlainObject } from '../services/serializers';
@@ -837,19 +849,109 @@ export function membersExcept(state: LiveState, userId: string): string[] {
   return [...ids];
 }
 
+// ---------------------------------------------------------------------------
+// Vision per zone
+// ---------------------------------------------------------------------------
+
+function isLimitedVision(mode: VisionMode): boolean {
+  return mode === 'vision' || mode === 'explored';
+}
+
+/**
+ * Vision mode a player has when looking into a zone: the mode the DM set for that player, else the vision
+ * of that zone, else the starting value. A dark zone stays dark for party members looking in from outside
+ * (shared vision, canSeeOtherZones); for the zone of the player's own hero it equals effectiveVisibility.
+ */
+export function playerZoneVisionMode(state: LiveState, userId: string, zoneId: string): VisionMode {
+  const own = state.visibility.perPlayer[userId]?.visionMode;
+  if (own === 'all' || own === 'explored' || own === 'vision' || own === 'none') return own;
+  return zoneVisionFor(state, zoneId)?.mode ?? state.visibility.global.visionMode;
+}
+
+/**
+ * What a player sees right now (polygons per levelId) inside the zones where their vision is limited
+ * (playerZoneVisionMode), from the vision tokens standing in them. Lit zones are not listed: everything
+ * is visible there. Same radius/cone rules as the shared visibleAreas.
+ */
+export function zoneLimitedAreas(state: LiveState, zones: Zone[], userId: string): Record<string, number[][]> {
+  const out: Record<string, number[][]> = {};
+  const eff = effectiveVisibility(state, userId);
+  if (eff.visionMode === 'none') return out;
+  const zoneById = new Map(zones.map((z) => [z.id, z]));
+  const segmentCache = new Map<string, ReturnType<typeof blockingSegments>>();
+  for (const token of visionTokensFor(state, userId)) {
+    if (!isLimitedVision(playerZoneVisionMode(state, userId, token.zoneId))) continue;
+    const zone = zoneById.get(token.zoneId);
+    const level = zone?.levels.find((l) => l.id === token.levelId);
+    if (!zone || !level) continue;
+    const cacheKey = `${zone.id}:${level.id}`;
+    let segments = segmentCache.get(cacheKey);
+    if (!segments) {
+      segments = blockingSegments(level.walls, state.zoneStates[zone.id]?.doors);
+      segmentCache.set(cacheKey, segments);
+    }
+    const polygon = computeVisibilityPolygon(
+      {
+        x: token.x,
+        y: token.y,
+        radius: cellsToPx(visionCellsFor(state, token, eff, userId), level.grid),
+        cone: visionConeFor(state, token, eff, userId),
+        facing: token.facing,
+      },
+      segments,
+      { width: level.background.width, height: level.background.height },
+    );
+    if (polygon.length >= 6) (out[level.id] ??= []).push(polygon);
+  }
+  return out;
+}
+
+/** True when some vision token of the player stands in a zone where their vision is limited. */
+export function hasLimitedVisionSources(state: LiveState, userId: string): boolean {
+  if (effectiveVisibility(state, userId).visionMode === 'none') return false;
+  return visionTokensFor(state, userId).some((t) => isLimitedVision(playerZoneVisionMode(state, userId, t.zoneId)));
+}
+
+/**
+ * State a player receives: buildPlayerView, with the tokens of each zone filtered by the vision that
+ * player has in that zone (playerZoneVisionMode) instead of the vision of the zone their hero is in.
+ */
+export function playerStateFor(state: LiveState, zones: Zone[], userId: string): LiveState {
+  if (userId === state.hostUserId || state.status === 'lobby' || effectiveVisibility(state, userId).visionMode === 'none') {
+    return buildPlayerView(state, zones, userId);
+  }
+  const own = state.visibility.perPlayer[userId];
+  // buildPlayerView applies one vision mode to every zone: it keeps every token in sight here ('all')
+  // and each zone's own vision filters them below.
+  const unfiltered: LiveState = {
+    ...state,
+    visibility: { ...state.visibility, perPlayer: { ...state.visibility.perPlayer, [userId]: { ...own, visionMode: 'all' } } },
+  };
+  const view = buildPlayerView(unfiltered, zones, userId);
+  const perPlayer = { ...view.visibility.perPlayer };
+  if (own) perPlayer[userId] = { ...own };
+  else delete perPlayer[userId];
+  view.visibility = { ...view.visibility, perPlayer };
+  const areas = zoneLimitedAreas(state, zones, userId);
+  for (const [id, token] of Object.entries(view.tokens)) {
+    if (token.kind === 'hero') continue;
+    const mode = playerZoneVisionMode(state, userId, token.zoneId);
+    if (mode === 'all') continue;
+    if (mode === 'none' || !pointInAnyPolygon({ x: token.x, y: token.y }, areas[token.levelId] ?? [])) delete view.tokens[id];
+  }
+  return view;
+}
+
 interface ViewCacheEntry {
   version: number;
   allowed: Set<string>;
-  mode: VisibilitySettings['visionMode'];
+  blind: boolean;
   areas: Record<string, number[][]>;
 }
 
 const viewCache = new WeakMap<LiveSession, Map<string, ViewCacheEntry>>();
 
-/**
- * Whether a player currently sees a point of a level (zone allowed and, in vision/explored modes,
- * inside the visible area). Cached per state version, cheap enough for drag relays.
- */
+/** Zones a player receives and what they see in the limited ones. Cached per state version, cheap enough for drag relays. */
 function playerViewEntry(session: LiveSession, userId: string): ViewCacheEntry {
   const state = session.state;
   let perUser = viewCache.get(session);
@@ -859,14 +961,12 @@ function playerViewEntry(session: LiveSession, userId: string): ViewCacheEntry {
   }
   let entry = perUser.get(userId);
   if (!entry || entry.version !== state.version) {
-    const eff = effectiveVisibility(state, userId);
     const zones = session.campaign.zones;
-    const limited = eff.visionMode === 'vision' || eff.visionMode === 'explored';
     entry = {
       version: state.version,
       allowed: new Set(allowedZoneIds(state, zones, userId)),
-      mode: eff.visionMode,
-      areas: limited ? visibleAreas(state, zones, userId) : {},
+      blind: effectiveVisibility(state, userId).visionMode === 'none',
+      areas: zoneLimitedAreas(state, zones, userId),
     };
     perUser.set(userId, entry);
   }
@@ -877,7 +977,7 @@ function playerViewEntry(session: LiveSession, userId: string): ViewCacheEntry {
 export function playerSeesZone(session: LiveSession, userId: string, zoneId: string): boolean {
   if (session.state.status === 'lobby') return false;
   const entry = playerViewEntry(session, userId);
-  return entry.mode !== 'none' && entry.allowed.has(zoneId);
+  return !entry.blind && entry.allowed.has(zoneId);
 }
 
 /**
@@ -893,18 +993,23 @@ export function pointUnderFog(session: LiveSession, zoneId: string, levelId: str
   return polygons.length > 0 && pointInAnyPolygon(p, polygons);
 }
 
-/** Whether a player currently sees a point of a level: zone allowed, in sight (vision modes) and not under fog. */
+/**
+ * Whether a player currently sees a point of a level: zone allowed, in sight (when their vision in that
+ * zone is limited) and not under fog.
+ */
 export function playerSeesPoint(session: LiveSession, userId: string, zoneId: string, levelId: string, p: Point): boolean {
   if (session.state.status === 'lobby') return false;
   const entry = playerViewEntry(session, userId);
-  if (entry.mode === 'none' || !entry.allowed.has(zoneId)) return false;
+  if (entry.blind || !entry.allowed.has(zoneId)) return false;
   if (pointUnderFog(session, zoneId, levelId, p)) return false;
-  if (entry.mode === 'all') return true;
+  const mode = playerZoneVisionMode(session.state, userId, zoneId);
+  if (mode === 'all') return true;
+  if (mode === 'none') return false;
   return pointInAnyPolygon(p, entry.areas[levelId] ?? []);
 }
 
 /**
- * Whether a player sees a token on their map: the tokens buildPlayerView sends them, minus non-hero
+ * Whether a player sees a token on their map: the tokens playerStateFor sends them, minus non-hero
  * tokens under an unrevealed fog region (the client masks those).
  */
 export function playerSeesToken(
@@ -957,4 +1062,101 @@ export function inventoriesArePublic(state: LiveState, except: ReadonlyArray<str
   return playerIds(state)
     .filter((uid) => !except.includes(uid))
     .every((uid) => effectiveVisibility(state, uid).canSeeOthersInventory);
+}
+
+// ---------------------------------------------------------------------------
+// Zone vision
+// ---------------------------------------------------------------------------
+
+export const ZONE_VISION_MODES: readonly ZoneVision['mode'][] = ['all', 'explored', 'vision'];
+export const ZONE_VISION_MAX_RADIUS = 60;
+const DEFAULT_ZONE_VISION_RADIUS = defaultVisibility().visionRadius;
+
+/** Stored zone vision (campaign document or saved state) -> valid ZoneVision, or null. Never throws. */
+export function sanitizeZoneVision(value: unknown): ZoneVision | null {
+  if (!isPlainObject(value)) return null;
+  const mode = value.mode;
+  if (typeof mode !== 'string' || !(ZONE_VISION_MODES as readonly string[]).includes(mode)) return null;
+  const radius = typeof value.radius === 'number' && Number.isFinite(value.radius) ? clamp(Math.round(value.radius), 0, ZONE_VISION_MAX_RADIUS) : DEFAULT_ZONE_VISION_RADIUS;
+  const cone = typeof value.cone === 'number' && Number.isFinite(value.cone) ? clamp(Math.round(value.cone), 10, 360) : 360;
+  return { mode: mode as ZoneVision['mode'], radius, cone };
+}
+
+/** Zone vision from an untrusted payload (null = back to the zone default). Throws a Spanish error. */
+export function parseZoneVision(value: unknown): ZoneVision | null {
+  if (value === null || value === undefined) return null;
+  const obj = plainObject(value, 'visión de la zona');
+  return {
+    mode: oneOf(ZONE_VISION_MODES, obj.mode, 'modo de visión'),
+    radius: obj.radius === undefined ? DEFAULT_ZONE_VISION_RADIUS : reqInt(obj.radius, 'radio de visión', 0, ZONE_VISION_MAX_RADIUS),
+    cone: obj.cone === undefined ? 360 : reqInt(obj.cone, 'cono de visión', 10, 360),
+  };
+}
+
+/** zoneId -> default vision of each campaign zone (what the server copies into state.zoneVision). */
+export function zoneVisionMap(zones: Zone[]): Record<string, ZoneVision | null> {
+  const out: Record<string, ZoneVision | null> = {};
+  for (const zone of zones) out[zone.id] = sanitizeZoneVision(zone.vision);
+  return out;
+}
+
+function cellsText(n: number): string {
+  return n === 1 ? '1 casilla' : `${n} casillas`;
+}
+
+/** "Solo lo que tiene delante (3 casillas, cono de 90°)" style label. */
+export function zoneVisionLabel(vision: ZoneVision | null): string {
+  if (!vision || vision.mode === 'all') return 'todo visible';
+  const cone = vision.cone < 360 ? `, cono de ${vision.cone}°` : '';
+  const what = vision.mode === 'explored' ? 'lo explorado' : 'lo que tiene delante';
+  return `solo ${what} (${cellsText(vision.radius)}${cone})`;
+}
+
+// ---------------------------------------------------------------------------
+// Turn economy
+// ---------------------------------------------------------------------------
+
+/** Inside mutate: add to (or subtract from) what a hero spent this turn. Values never go below 0. */
+export function addUsage(state: LiveState, heroId: string, delta: Partial<TurnUsage>): TurnUsage {
+  const current = usageOf(state, heroId);
+  const next: TurnUsage = {
+    moved: Math.max(0, current.moved + (delta.moved ?? 0)),
+    actions: Math.max(0, current.actions + (delta.actions ?? 0)),
+    bonusMove: Math.max(0, current.bonusMove + (delta.bonusMove ?? 0)),
+    bonusActions: Math.max(0, current.bonusActions + (delta.bonusActions ?? 0)),
+  };
+  state.turn.usage ??= {};
+  state.turn.usage[heroId] = next;
+  return next;
+}
+
+/** Inside mutate: a hero's turn starts again (nothing spent, no DM bonus). */
+export function resetUsage(state: LiveState, heroId: string): void {
+  if (state.turn.usage) delete state.turn.usage[heroId];
+}
+
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
+
+function pointSegmentDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  const t = lengthSq === 0 ? 0 : clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq, 0, 1);
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** Distance in px from a point to the nearest point of a wall polyline (Infinity without segments). */
+export function distanceToWall(p: Point, wall: Pick<Wall, 'points'>): number {
+  const pts = wall.points;
+  let best = Number.POSITIVE_INFINITY;
+  if (pts.length === 2 && Number.isFinite(pts[0]) && Number.isFinite(pts[1])) return Math.hypot(p.x - pts[0]!, p.y - pts[1]!);
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const a = { x: pts[i]!, y: pts[i + 1]! };
+    const b = { x: pts[i + 2]!, y: pts[i + 3]! };
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) continue;
+    best = Math.min(best, pointSegmentDistance(p, a, b));
+  }
+  return best;
 }

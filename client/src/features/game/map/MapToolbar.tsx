@@ -17,10 +17,13 @@ export function MapToolbar({ dmControls, onCenterOwn, className }: MapToolbarPro
   const scale = useGameCamera((s) => s.scale);
   const pingMode = useGameUi((s) => s.pingMode);
   const realLighting = useGameUi((s) => s.realLighting);
+  // Steps aside while a token is dragged under it.
+  const dragging = useGameUi((s) => s.tokenDragging);
   return (
     <div
       className={clsx(
-        'pointer-events-auto flex flex-col items-center gap-1 rounded-xl border border-ink-600/80 bg-ink-900/85 p-1 shadow-panel backdrop-blur',
+        'flex flex-col items-center gap-1 rounded-xl border border-ink-600/80 bg-ink-900/85 p-1 shadow-panel backdrop-blur transition-opacity',
+        dragging ? 'pointer-events-none opacity-30' : 'pointer-events-auto',
         className,
       )}
     >

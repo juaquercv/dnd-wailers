@@ -5,7 +5,7 @@ import type { RollResult } from '@wailers/shared';
 import { useSessionEvent } from '../../lib/eventBus';
 import { useSessionStore } from '../../stores/session';
 import { useSettingsStore } from '../../stores/settings';
-import { RollStage } from './RollStage';
+import { DEFAULT_OVERLAY_ROLL_MS, RollStage } from './RollStage';
 import { setOverlayShowing } from './coveringOverlays';
 import { useUserLookup, useViewportSize } from './diceHooks';
 import { rollTitle } from './diceUtils';
@@ -13,11 +13,14 @@ import { clearPendingRolls, markRollsPending, markRollsRevealed } from './rollRe
 import './dice.css';
 
 const MAX_QUEUE = 12;
-const HOLD_MS = 2600;
-const CRIT_HOLD_MS = 3400;
+const HOLD_MS = 2400;
+const CRIT_HOLD_MS = 3200;
 const ROULETTE_HOLD_MS = 3400;
 const CUSTOM_HOLD_MS = 2800;
 const SHORT_HOLD_MS = 900;
+/** Dice roll length when other rolls are waiting (the first one alone gets the full ~3.5 s). */
+const QUEUED_ROLL_MS = 2600;
+const CROWDED_ROLL_MS = 1700;
 const LEAVE_MS = 240;
 /** Safety net: never keep one roll on screen longer than this. */
 const MAX_SCENE_MS = 16000;
@@ -185,7 +188,8 @@ export function DiceOverlay() {
       data-dice-overlay
     >
       <div className="wl-backdrop absolute inset-0" aria-hidden />
-      <div className="relative flex max-h-full w-full flex-col items-center justify-center px-4 py-6">
+      {/* safe center: if a tiny window still overflows, the dice stay visible instead of going off the top. */}
+      <div className="relative flex max-h-full w-full flex-col items-center justify-center px-4 py-6 [justify-content:safe_center]">
         <RollStage
           key={current.id}
           roll={current}
@@ -200,6 +204,7 @@ export function DiceOverlay() {
           rollerColor={rollerColor}
           extra={extra}
           wheelSize={wheelSize}
+          rollMs={pending >= 3 ? CROWDED_ROLL_MS : pending >= 1 ? QUEUED_ROLL_MS : DEFAULT_OVERLAY_ROLL_MS}
           hint={pending > 0 ? 'Clic o Esc para continuar · Mayús+Esc salta todas' : 'Clic o Esc para continuar'}
         />
       </div>

@@ -6,11 +6,15 @@ import {
   Dices,
   Eye,
   EyeOff,
+  Flag,
   Flame,
+  Footprints,
+  Hand,
   HeartCrack,
   HeartPulse,
   LocateFixed,
   Minus,
+  Move,
   Pencil,
   Plus,
   Radar,
@@ -22,11 +26,13 @@ import {
   Swords,
   Trash2,
   UserRound,
+  Zap,
 } from 'lucide-react';
 import {
-  effectiveVisibility,
+  actionBudget,
+  economyApplies,
   isOwnHeroToken,
-  isValidFormula,
+  moveBudget,
   ROLL_VISIBILITY_LABELS,
   STATUSES,
   tokenHp,
@@ -44,12 +50,16 @@ import { TextInput } from '../../components/ui/TextInput';
 import { toast } from '../../components/ui/toast';
 import { emitUiEvent } from '../../lib/uiEvents';
 import { useSessionStore } from '../../stores/session';
+import { DicePoolBuilder, effectivePoolMode } from '../dice/DicePoolBuilder';
+import { poolFormula, prettyFormula, type DicePool } from '../dice/dicePool';
 import {
   addToInitiative,
   adjustHp,
+  adjustUsage,
   duplicateTokens,
   goToZone,
   isInInitiative,
+  moveTokensNear,
   playerForToken,
   removeTokens,
   requestRoll,
@@ -62,8 +72,10 @@ import {
   setTorch,
   tokensByIds,
   transferTokens,
+  turnEntryOf,
 } from './map/actions';
 import { useGameUi } from './map/gameUi';
+import { freeMoveBlock, OFF_TURN_TURN_REASON, playerEconomyNow } from './map/ownEconomy';
 import { levelLabel, sortedLevels, zoneTree } from './map/zoneTree';
 
 export interface MenuAnchor {
@@ -71,9 +83,17 @@ export interface MenuAnchor {
   clientY: number;
 }
 
+export interface TokenMenuOptions {
+  /** Item token next to the player's hero (can be picked up now). */
+  pickable?: boolean;
+}
+
 export interface TokenContextMenuApi {
-  /** Opens the context menu of a token at a client position. */
-  open: (anchor: MenuAnchor, tokenId: string) => void;
+  /**
+   * Opens the context menu of a token at a client position. DM: a token outside the current selection is
+   * acted on alone and the selection is kept, so it can be brought next to that token.
+   */
+  open: (anchor: MenuAnchor, tokenId: string, opts?: TokenMenuOptions) => void;
   /** Dialogs launched from the menu ("Fijar PV…", "Personalizada…"): render once. */
   dialogs: ReactNode;
 }
@@ -148,6 +168,74 @@ function moveToItems(targets: Token[]): ContextMenuItem[] {
   return items;
 }
 
+function cellsText(n: number): string {
+  return `${n} ${n === 1 ? 'casilla' : 'casillas'}`;
+}
+
+/** "Combate y turno" submenu: turn, initiative and the hero's movement / combat actions this turn. */
+function combatItems(state: LiveState, token: Token, targets: Token[]): ContextMenuItem[] {
+  const n = targets.length;
+  const suffix = n > 1 ? ` (${n})` : '';
+  const items: ContextMenuItem[] = [];
+  const allInInitiative = targets.every((t) => isInInitiative(state, t));
+  if (n === 1) {
+    const entry = turnEntryOf(state, token);
+    const current = state.turn.order[state.turn.currentIndex] ?? null;
+    const isCurrent = !!entry && current?.id === entry.id;
+    items.push({
+      label: isCurrent ? 'Ya es su turno' : entry ? 'Dar el turno' : 'Dar el turno (no está en la iniciativa)',
+      icon: <Flag />,
+      disabled: !entry || isCurrent,
+      onClick: () => {
+        if (!entry) return;
+        void send('turn:setCurrent', { entryId: entry.id }, 'No se pudo dar el turno').then((ok) => ok && toast.success(`Turno de ${token.name}`));
+      },
+    });
+  }
+  items.push({
+    label: allInInitiative ? 'Ya en la iniciativa' : `Añadir a la iniciativa${suffix}`,
+    icon: <Swords />,
+    disabled: allInInitiative,
+    onClick: () => void addToInitiative(targets),
+  });
+  const heroIds = [...new Set(targets.flatMap((t) => (t.kind === 'hero' && t.heroId && state.heroes[t.heroId] ? [t.heroId] : [])))];
+  // Movement / action limits only exist while combat is on (usage resets when it starts).
+  if (heroIds.length === 0 || !economyApplies(state)) return items;
+  const one = heroIds.length === 1 ? heroIds[0]! : null;
+  const who = one ? state.heroes[one]!.name : `${heroIds.length} héroes`;
+  const grant = (patch: { bonusMoveDelta?: number; bonusActionsDelta?: number; reset?: boolean }, text: string) => {
+    void Promise.all(heroIds.map((id) => adjustUsage(id, patch))).then((oks) => {
+      if (oks.some(Boolean)) toast.success(text);
+    });
+  };
+  items.push({ separator: true });
+  if (one) {
+    const move = moveBudget(state, one);
+    const acts = actionBudget(state, one);
+    items.push({
+      heading: true,
+      label: `Le quedan ${move.left} de ${cellsText(move.max)} · ${acts.left} de ${acts.max} ${acts.max === 1 ? 'acción' : 'acciones'}`,
+    });
+  }
+  items.push(
+    {
+      label: 'Restablecer movimiento y acciones',
+      icon: <RotateCcw />,
+      onClick: () => grant({ reset: true }, `${who}: movimiento y acciones restablecidos`),
+    },
+    { label: '+1 acción de combate', icon: <Zap />, onClick: () => grant({ bonusActionsDelta: 1 }, `${who}: +1 acción de combate este turno`) },
+    {
+      label: 'Más movimiento',
+      icon: <Footprints />,
+      children: [1, 2, 3, 5].map((cells) => ({
+        label: `+${cellsText(cells)}`,
+        onClick: () => grant({ bonusMoveDelta: cells }, `${who}: +${cellsText(cells)} de movimiento este turno`),
+      })),
+    },
+  );
+  return items;
+}
+
 function dmItems(
   state: LiveState,
   token: Token,
@@ -155,6 +243,7 @@ function dmItems(
   gridSize: number,
   openHp: (d: HpDialogState) => void,
   openRoll: (d: RollDialogState) => void,
+  bringSelection: Token[],
 ): ContextMenuItem[] {
   const n = targets.length;
   const suffix = n > 1 ? ` (${n})` : '';
@@ -166,30 +255,48 @@ function dmItems(
       : `${token.name}${hp && hp.hp !== null && hp.maxHp !== null ? ` · PV ${hp.hp}/${hp.maxHp}` : ''}`;
   const allHidden = targets.every((t) => t.hidden);
   const allLit = targets.every((t) => t.light !== null);
-  const allInInitiative = targets.every((t) => isInInitiative(state, t));
   const playerId = n === 1 ? playerForToken(state, token) : null;
   // A hero token is only taken off the map (its sheet stays); other tokens are deleted.
   const heroCount = targets.filter((t) => t.kind === 'hero').length;
   const removeLabel = heroCount === n ? 'Retirar del mapa' : heroCount > 0 ? 'Quitar del mapa' : 'Eliminar';
 
   const items: ContextMenuItem[] = [{ heading: true, label: heading }];
-  if (living.length > 0) {
+  if (bringSelection.length > 0) {
     items.push(
-      { label: `−1 PV${suffix}`, icon: <Minus />, onClick: () => void adjustHp(living, -1) },
-      { label: `−5 PV${suffix}`, icon: <HeartCrack />, onClick: () => void adjustHp(living, -5) },
-      { label: `+1 PV${suffix}`, icon: <Plus />, onClick: () => void adjustHp(living, 1) },
-      { label: `+5 PV${suffix}`, icon: <HeartPulse />, onClick: () => void adjustHp(living, 5) },
       {
-        label: 'Fijar PV…',
-        icon: <Pencil />,
+        label: `Traer aquí la selección (${bringSelection.length})`,
+        icon: <Move />,
         onClick: () =>
-          openHp({
-            tokenIds: living.map((t) => t.id),
-            title: living.length === 1 ? living[0]!.name : `${living.length} fichas`,
-            initial: hp?.hp ?? 0,
-          }),
+          void moveTokensNear(bringSelection, { zoneId: token.zoneId, levelId: token.levelId, x: token.x, y: token.y }).then(
+            (ok) => ok > 0 && toast.success(`${ok === 1 ? bringSelection[0]!.name : `${ok} fichas`} junto a ${token.name}`),
+          ),
       },
       { separator: true },
+    );
+  }
+  if (living.length > 0) {
+    items.push(
+      {
+        label: `Puntos de vida${suffix}`,
+        icon: <HeartPulse />,
+        children: [
+          { label: '−1 PV', icon: <Minus />, onClick: () => void adjustHp(living, -1) },
+          { label: '−5 PV', icon: <HeartCrack />, onClick: () => void adjustHp(living, -5) },
+          { label: '+1 PV', icon: <Plus />, onClick: () => void adjustHp(living, 1) },
+          { label: '+5 PV', icon: <HeartPulse />, onClick: () => void adjustHp(living, 5) },
+          { separator: true },
+          {
+            label: 'Fijar PV…',
+            icon: <Pencil />,
+            onClick: () =>
+              openHp({
+                tokenIds: living.map((t) => t.id),
+                title: living.length === 1 ? living[0]!.name : `${living.length} fichas`,
+                initial: hp?.hp ?? 0,
+              }),
+          },
+        ],
+      },
       {
         label: 'Estados',
         icon: <Sparkles />,
@@ -202,33 +309,24 @@ function dmItems(
           };
         }),
       },
+      { label: 'Combate y turno', icon: <Swords />, children: combatItems(state, token, targets) },
     );
   }
-  items.push(
-    {
-      label: allHidden ? `Mostrar a jugadores${suffix}` : `Ocultar a jugadores${suffix}`,
-      icon: allHidden ? <Eye /> : <EyeOff />,
-      shortcut: 'H',
-      onClick: () => void setHidden(targets, !allHidden),
-    },
-  );
+  items.push({
+    label: allHidden ? `Mostrar a jugadores${suffix}` : `Ocultar a jugadores${suffix}`,
+    icon: allHidden ? <Eye /> : <EyeOff />,
+    shortcut: 'H',
+    onClick: () => void setHidden(targets, !allHidden),
+  });
   if (n === 1 && token.hidden && (token.kind === 'creature' || token.kind === 'npc')) {
     // The big boss moment in one click: reveal + cinematic entrance (with a roar when available).
     items.push({ label: 'Mostrar con entrada dramática', icon: <Crown />, onClick: () => void revealWithEntrance(token) });
   }
-  items.push(
-    {
-      label: allLit ? 'Apagar antorcha' : 'Encender antorcha',
-      icon: <Flame />,
-      onClick: () => void setTorch(targets, !allLit, gridSize),
-    },
-    {
-      label: allInInitiative ? 'Ya en la iniciativa' : `Añadir a la iniciativa${suffix}`,
-      icon: <Swords />,
-      disabled: allInInitiative,
-      onClick: () => void addToInitiative(targets),
-    },
-  );
+  items.push({
+    label: allLit ? 'Apagar antorcha' : 'Encender antorcha',
+    icon: <Flame />,
+    onClick: () => void setTorch(targets, !allLit, gridSize),
+  });
   if (n === 1 && token.kind === 'hero') {
     items.push({
       label: 'Pedir tirada',
@@ -247,7 +345,7 @@ function dmItems(
     });
   }
   items.push(
-    { label: `Mover a${suffix}`, icon: <Route />, children: moveToItems(targets) },
+    { label: `Mover a otra zona${suffix}`, icon: <Route />, children: moveToItems(targets) },
     { separator: true },
     { label: 'Botín y detalles', icon: <Backpack />, onClick: () => emitUiEvent('open-token', { tokenId: token.id }) },
     { label: 'Centrar', icon: <LocateFixed />, onClick: () => emitUiEvent('center-on-token', { tokenId: token.id }) },
@@ -257,27 +355,43 @@ function dmItems(
   return items;
 }
 
-function playerItems(state: LiveState, token: Token, meUserId: string): ContextMenuItem[] {
+function playerItems(state: LiveState, token: Token, meUserId: string, canMoveOwn: boolean, opts: TokenMenuOptions): ContextMenuItem[] {
   const own = isOwnHeroToken(state, token, meUserId);
   const items: ContextMenuItem[] = [{ heading: true, label: token.name }];
   if (own) {
-    const canMove = effectiveVisibility(state, meUserId).canMoveOwnToken;
+    // Turning costs no movement, but it needs the DM's permission and, in combat, the hero's own turn.
+    const block = freeMoveBlock(
+      canMoveOwn,
+      playerEconomyNow(token.heroId ?? state.players[meUserId]?.heroId ?? null),
+      OFF_TURN_TURN_REASON,
+    );
     items.push(
       { label: 'Ver mi ficha', icon: <ScrollText />, onClick: () => useGameUi.getState().openSidebarTab('character') },
       { label: 'Centrar', icon: <LocateFixed />, onClick: () => emitUiEvent('center-on-token', { tokenId: token.id }) },
       {
         label: 'Girar',
         icon: <RotateCw />,
-        disabled: !canMove,
-        children: canMove
-          ? [
-              { label: 'Girar a la derecha', icon: <RotateCw />, shortcut: 'R', onClick: () => void rotateTokens([token], 45) },
-              { label: 'Girar a la izquierda', icon: <RotateCcw />, shortcut: 'Mayús+R', onClick: () => void rotateTokens([token], -45) },
-            ]
-          : undefined,
+        disabled: block !== null,
+        children:
+          block === null
+            ? [
+                { label: 'Girar a la derecha', icon: <RotateCw />, shortcut: 'R', onClick: () => void rotateTokens([token], 45) },
+                { label: 'Girar a la izquierda', icon: <RotateCcw />, shortcut: 'Mayús+R', onClick: () => void rotateTokens([token], -45) },
+              ]
+            : undefined,
       },
     );
+    if (block !== null) items.push({ label: <span className="whitespace-normal text-xs leading-snug">{block}</span>, disabled: true });
   } else {
+    if (token.kind === 'item') {
+      items.push({
+        label: opts.pickable ? `Recoger «${token.name}»` : 'Recoger (acércate a una casilla)',
+        icon: <Hand />,
+        disabled: !opts.pickable,
+        onClick: () =>
+          void send('token:pickup', { tokenId: token.id }, 'No se pudo recoger el objeto').then((ok) => ok && toast.success(`Recoges «${token.name}»`)),
+      });
+    }
     items.push(
       { label: 'Ver detalles', icon: <UserRound />, onClick: () => emitUiEvent('open-token', { tokenId: token.id }) },
       { label: 'Centrar', icon: <LocateFixed />, onClick: () => emitUiEvent('center-on-token', { tokenId: token.id }) },
@@ -287,7 +401,7 @@ function playerItems(state: LiveState, token: Token, meUserId: string): ContextM
   return items;
 }
 
-/** Token context menu (DM: quick HP, statuses, visibility, initiative, rolls, moves...; players: own token actions). */
+/** Token context menu (DM: HP, statuses, combat, visibility, rolls, moves...; players: own token, pick up items). */
 export function useTokenContextMenu(gridSize: number): TokenContextMenuApi {
   const menu = useContextMenu();
   const [hpDialog, setHpDialog] = useState<HpDialogState | null>(null);
@@ -295,7 +409,7 @@ export function useTokenContextMenu(gridSize: number): TokenContextMenuApi {
   const { openAt } = menu;
 
   const open = useCallback(
-    (anchor: MenuAnchor, tokenId: string) => {
+    (anchor: MenuAnchor, tokenId: string, opts: TokenMenuOptions = {}) => {
       const s = useSessionStore.getState();
       const view = s.view;
       if (!view) return;
@@ -303,14 +417,14 @@ export function useTokenContextMenu(gridSize: number): TokenContextMenuApi {
       const token = state.tokens[tokenId];
       if (!token) return;
       if (view.role === 'dm') {
-        const inSelection = s.selectedTokenIds.includes(tokenId);
-        if (!inSelection) s.selectTokens([tokenId]);
-        const ids = inSelection ? s.selectedTokenIds : [tokenId];
-        const targets = tokensByIds(ids);
-        if (targets.length === 0) return;
-        openAt(anchor.clientX, anchor.clientY, dmItems(state, token, targets, gridSize, setHpDialog, setRollDialog));
+        const selection = tokensByIds(s.selectedTokenIds);
+        const inSelection = selection.some((t) => t.id === tokenId);
+        if (!inSelection && selection.length === 0) s.selectTokens([tokenId]);
+        const targets = inSelection ? selection : [token];
+        const bring = inSelection ? [] : selection;
+        openAt(anchor.clientX, anchor.clientY, dmItems(state, token, targets, gridSize, setHpDialog, setRollDialog, bring));
       } else {
-        openAt(anchor.clientX, anchor.clientY, playerItems(state, token, view.meUserId));
+        openAt(anchor.clientX, anchor.clientY, playerItems(state, token, view.meUserId, view.effective.canMoveOwnToken, opts));
       }
     },
     [openAt, gridSize],
@@ -364,58 +478,46 @@ function SetHpForm({ state, onClose }: { state: HpDialogState; onClose: () => vo
   );
 }
 
-const MODE_OPTIONS: { value: RollMode; label: string }[] = [
-  { value: 'normal', label: 'Normal' },
-  { value: 'advantage', label: 'Ventaja' },
-  { value: 'disadvantage', label: 'Desventaja' },
-];
-
 const VISIBILITY_OPTIONS: { value: RollVisibility; label: string }[] = (Object.keys(ROLL_VISIBILITY_LABELS) as RollVisibility[]).map(
   (v) => ({ value: v, label: ROLL_VISIBILITY_LABELS[v] }),
 );
 
+const DEFAULT_REQUEST_POOL: DicePool = { groups: [{ sides: 20, count: 1 }], bonus: 0 };
+
 function CustomRollDialog({ state, onClose }: { state: RollDialogState | null; onClose: () => void }) {
   return (
-    <Modal open={!!state} onClose={onClose} size="sm" icon={<Dices />} title="Pedir tirada personalizada" subtitle={state ? `Para ${state.heroName}` : undefined}>
+    <Modal open={!!state} onClose={onClose} size="sm" icon={<Dices />} title="Pedir tirada" subtitle={state ? `Para ${state.heroName}` : undefined}>
       {state && <CustomRollForm key={state.userId} state={state} onClose={onClose} />}
     </Modal>
   );
 }
 
+/** Same dice table as the dice panel: pick dice and a flat bonus with buttons (no formula typing). */
 function CustomRollForm({ state, onClose }: { state: RollDialogState; onClose: () => void }) {
   const [label, setLabel] = useState('Tirada');
-  const [formula, setFormula] = useState('1d20');
+  const [pool, setPool] = useState<DicePool>(DEFAULT_REQUEST_POOL);
   const [mode, setMode] = useState<RollMode>('normal');
   const [visibility, setVisibility] = useState<RollVisibility>('public');
   const [busy, setBusy] = useState(false);
-  const valid = isValidFormula(formula.trim());
+  const formula = poolFormula(pool);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!valid) return;
+    if (!formula) return;
     setBusy(true);
-    const ok = await requestRoll(state.userId, label.trim() || `Tirada de ${formula.trim()}`, formula.trim(), mode, visibility);
+    const ok = await requestRoll(state.userId, label.trim() || `Tirada de ${prettyFormula(formula)}`, formula, effectivePoolMode(pool, mode), visibility);
     setBusy(false);
     if (ok) onClose();
   };
   return (
     <form onSubmit={(e) => void submit(e)} className="space-y-3">
       <TextInput label="Motivo" value={label} onValueChange={setLabel} placeholder="Percepción, Atletismo…" autoFocus />
-      <TextInput
-        label="Fórmula"
-        value={formula}
-        onValueChange={setFormula}
-        placeholder="1d20+3"
-        error={formula.trim() && !valid ? 'Fórmula no válida (ej. 1d20+3, 2d6)' : undefined}
-      />
-      <div className="grid grid-cols-2 gap-3">
-        <Select label="Modo" value={mode} onChange={setMode} options={MODE_OPTIONS} />
-        <Select label="Visibilidad" value={visibility} onChange={setVisibility} options={VISIBILITY_OPTIONS} />
-      </div>
+      <DicePoolBuilder compact pool={pool} onChange={setPool} mode={mode} onModeChange={setMode} emptyHint="Elige los dados que tendrá que tirar." />
+      <Select label="¿Quién verá el resultado?" value={visibility} onChange={setVisibility} options={VISIBILITY_OPTIONS} />
       <div className="flex justify-end gap-2 pt-1">
         <Button variant="ghost" onClick={onClose} disabled={busy}>
           Cancelar
         </Button>
-        <Button type="submit" variant="primary" loading={busy} disabled={!valid} icon={<Dices />}>
+        <Button type="submit" variant="primary" loading={busy} disabled={!formula} icon={<Dices />}>
           Pedir tirada
         </Button>
       </div>

@@ -381,15 +381,17 @@ export interface D6CubeProps {
 /** CSS 3D cube that tumbles and lands showing `value` on its front face. */
 export function D6Cube({ value, size, durationMs, seed, className }: D6CubeProps) {
   const faces = cubeFaces(value);
+  const longRoll = durationMs >= 2000;
   const spin = useMemo(() => {
     const rnd = seededRandom(seed);
     const sign = () => (rnd() < 0.5 ? -1 : 1);
+    const extra = longRoll ? 2 : 0;
     return {
-      rx: (2 + Math.floor(rnd() * 3)) * 360 * sign(),
-      ry: (1 + Math.floor(rnd() * 3)) * 360 * sign(),
+      rx: (2 + extra + Math.floor(rnd() * 3)) * 360 * sign(),
+      ry: (1 + extra + Math.floor(rnd() * 3)) * 360 * sign(),
       rz: Math.floor(rnd() * 2) * 360 * sign(),
     };
-  }, [seed]);
+  }, [seed, longRoll]);
   const st = dieStyle(6);
   const half = size / 2;
   const cubeStyle = {

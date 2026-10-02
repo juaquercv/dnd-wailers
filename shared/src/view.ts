@@ -1,4 +1,4 @@
-import type { Zone } from './types/campaign';
+import type { Zone, ZoneVision } from './types/campaign';
 import type { HeroSheet, LiveState, SessionZone, Token, TurnEntry, VisibilitySettings } from './types/session';
 import { blockingSegments, cellsToPx, computeVisibilityPolygon, pointInAnyPolygon, type Segment } from './vision';
 
@@ -6,17 +6,46 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-/** Global settings merged with the player's perPlayer overrides. */
+/**
+ * Vision in force inside a zone: the DM's live override (zoneStates[zoneId].vision) or, when there is none,
+ * the zone default from the campaign (state.zoneVision). null = no zone vision (campaign default applies).
+ */
+export function zoneVisionFor(state: Pick<LiveState, 'zoneStates' | 'zoneVision'>, zoneId: string): ZoneVision | null {
+  const live = state.zoneStates[zoneId]?.vision;
+  if (live) return live;
+  return state.zoneVision?.[zoneId] ?? null;
+}
+
+/** Zone of the player's own hero token (first one found), or null. */
+export function playerHeroZoneId(state: LiveState, userId: string): string | null {
+  for (const t of Object.values(state.tokens)) if (isOwnHeroToken(state, t, userId)) return t.zoneId;
+  return null;
+}
+
+/**
+ * What a player sees, in order of priority (later wins):
+ *  1. `visibility.global` — the starting values, the same for everyone (everything visible by default);
+ *  2. the vision of the zone their hero is in (zoneVisionFor) — mode, radius and cone;
+ *  3. `visibility.perPlayer[userId]` — what the DM set explicitly for that player.
+ */
 export function effectiveVisibility(state: LiveState, userId: string): VisibilitySettings {
   const global = state.visibility.global;
+  const base: VisibilitySettings = { ...global };
+  const zoneId = playerHeroZoneId(state, userId);
+  const zv = zoneId ? zoneVisionFor(state, zoneId) : null;
+  if (zv) {
+    base.visionMode = zv.mode;
+    base.visionRadius = zv.radius;
+    base.visionCone = zv.cone;
+  }
   const overrides = state.visibility.perPlayer[userId];
-  if (!overrides) return { ...global };
+  if (!overrides) return base;
   const defined = Object.fromEntries(
     Object.entries(overrides).filter(([key, value]) => value !== undefined && value !== null && key in global),
   ) as Partial<VisibilitySettings>;
   // sceneImageUrl may legitimately be overridden with null.
   if ('sceneImageUrl' in overrides && overrides.sceneImageUrl === null) defined.sceneImageUrl = null;
-  return { ...global, ...defined };
+  return { ...base, ...defined };
 }
 
 /** True when the hero token belongs to the player (token owner or the hero selected by the player). */
@@ -98,7 +127,13 @@ export function visionCellsFor(state: LiveState, token: Token, eff: VisibilitySe
   const hero = token.heroId ? state.heroes[token.heroId] : undefined;
   const cells = hero?.data.visionCells;
   if (typeof cells === 'number' && Number.isFinite(cells)) return Math.max(0, cells);
-  const fallback = owner !== null && owner === userId ? eff.visionRadius : state.visibility.global.visionRadius;
+  // Own token: the viewer's effective radius; a teammate's token: that teammate's (it follows their zone).
+  const fallback =
+    owner !== null && owner === userId
+      ? eff.visionRadius
+      : owner !== null
+        ? effectiveVisibility(state, owner).visionRadius
+        : state.visibility.global.visionRadius;
   return Math.max(0, fallback);
 }
 
@@ -111,7 +146,8 @@ export function visionConeFor(state: LiveState, token: Token, eff: VisibilitySet
   const owner = visionOwnerOf(state, token, userId);
   if (owner !== null && owner === userId) return eff.visionCone;
   const override = owner !== null ? finiteOverride(state.visibility.perPlayer[owner]?.visionCone) : null;
-  return override ?? state.visibility.global.visionCone;
+  if (override !== null) return override;
+  return owner !== null ? effectiveVisibility(state, owner).visionCone : state.visibility.global.visionCone;
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   rollFormula,
   secureRandom,
   secureRandomInt,
+  supportsAdvantage,
   type DiceRollOutcome,
   type LiveState,
   type RollMode,
@@ -44,6 +45,18 @@ function parseMode(value: unknown): RollMode {
   return optOneOf(ROLL_MODES, value, 'modo de tirada') ?? 'normal';
 }
 
+/** Advantage/disadvantage only where it changes the roll (a single d20 term); 'normal' everywhere else. */
+function modeFor(mode: RollMode, formula: string | null): RollMode {
+  return mode !== 'normal' && formula !== null && supportsAdvantage(formula) ? mode : 'normal';
+}
+
+/** Formula a roller rolls (null for roulettes and dice with custom faces). */
+function rollerFormula(roller: Roller): string | null {
+  if (roller.kind === 'roulette') return null;
+  if ((roller.faces ?? []).some((f) => typeof f === 'string' && f.trim() !== '')) return null;
+  return roller.formula && roller.formula.trim() !== '' ? roller.formula : null;
+}
+
 function rollDiceOutcome(formula: string, mode: RollMode): DiceRollOutcome {
   try {
     return rollFormula(formula, mode, secureRandom);
@@ -76,7 +89,8 @@ function baseResult(ctx: HandlerCtx, meta: RollMeta): Omit<RollResult, 'kind' | 
   };
 }
 
-function diceResult(ctx: HandlerCtx, formula: string, meta: RollMeta, rollerId: string | null): RollResult {
+function diceResult(ctx: HandlerCtx, formula: string, rawMeta: RollMeta, rollerId: string | null): RollResult {
+  const meta: RollMeta = { ...rawMeta, mode: modeFor(rawMeta.mode, formula) };
   const outcome = rollDiceOutcome(formula, meta.mode);
   return {
     ...baseResult(ctx, meta),
@@ -100,7 +114,7 @@ function rollerResult(ctx: HandlerCtx, roller: Roller, meta: RollMeta): RollResu
     if (segments.length === 0) throw new HandlerError('La ruleta no tiene ningún segmento con peso mayor que 0');
     const segment = pickWeighted(segments, secureRandom);
     return {
-      ...baseResult(ctx, meta),
+      ...baseResult(ctx, { ...meta, mode: 'normal' }),
       kind: 'roulette',
       formula: null,
       dice: [],
@@ -118,7 +132,7 @@ function rollerResult(ctx: HandlerCtx, roller: Roller, meta: RollMeta): RollResu
   if (faces.length > 0) {
     const face = faces[secureRandomInt(faces.length)]!;
     return {
-      ...baseResult(ctx, meta),
+      ...baseResult(ctx, { ...meta, mode: 'normal' }),
       kind: 'custom_die',
       formula: null,
       dice: [],
@@ -279,7 +293,7 @@ function rollRequest(
     if (!rawFormula) throw new HandlerError('Indica una fórmula o elige una ruleta');
     formula = normalizedFormula(rawFormula);
   }
-  const mode = parseMode(payload.mode);
+  const mode = modeFor(parseMode(payload.mode), roller ? rollerFormula(roller) : formula);
   const visibility = optOneOf(VISIBILITIES, payload.visibility, 'visibilidad') ?? 'public';
   const label = (payload.label === undefined || payload.label === null ? '' : reqText(payload.label, 'etiqueta', 120)) || roller?.name || `Tirada de ${formula}`;
 

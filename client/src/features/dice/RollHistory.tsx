@@ -8,6 +8,7 @@ import { formatTime } from '../../lib/format';
 import { useSessionStore } from '../../stores/session';
 import { DieGlyph } from './DieShapes';
 import { useUserLookup } from './diceHooks';
+import { prettyFormula } from './dicePool';
 import { isRollResult, MODE_LABELS, rollBreakdown, rollTitle } from './diceUtils';
 import { MiniWheel } from './RouletteWheel';
 import { useRollPending } from './rollReveal';
@@ -225,7 +226,7 @@ function RollRow({ roll, at, compact, color, targetName }: { roll: RollResult; a
               </div>
               {(roll.formula || roll.mode !== 'normal') && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                  {roll.formula && <span className="font-mono text-[11px] text-gold-300">{roll.formula}</span>}
+                  {roll.formula && <span className="font-mono text-[11px] text-gold-300">{prettyFormula(roll.formula)}</span>}
                   {roll.mode !== 'normal' && roll.kind === 'dice' && (
                     <Badge size="xs" tone={roll.mode === 'advantage' ? 'emerald' : 'blood'}>
                       {MODE_LABELS[roll.mode]}

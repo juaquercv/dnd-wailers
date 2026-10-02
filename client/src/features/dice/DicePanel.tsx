@@ -1,19 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import {
-  ChevronDown,
-  Dices,
-  Globe,
-  Hand,
-  Lock,
-  RotateCw,
-  Send,
-  Settings2,
-  Sparkles,
-  UserRound,
-  X,
-} from 'lucide-react';
-import { supportsAdvantage, type RollMode, type RollRequest, type RollVisibility, type Roller } from '@wailers/shared';
+import { ChevronDown, Dices, Globe, Hand, Lock, RotateCw, Send, Settings2, Sparkles, Tag, UserRound, X } from 'lucide-react';
+import type { RollMode, RollRequest, RollVisibility, Roller } from '@wailers/shared';
 import { emitAck } from '../../api/socket';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -21,27 +9,30 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { IconButton } from '../../components/ui/IconButton';
 import { Modal } from '../../components/ui/Modal';
 import { Select, type SelectOption } from '../../components/ui/Select';
-import { Stepper } from '../../components/ui/Stepper';
 import { TextInput } from '../../components/ui/TextInput';
 import { toast } from '../../components/ui/toast';
 import { formatRelative } from '../../lib/format';
 import { useSessionStore } from '../../stores/session';
 import { RollerManager } from '../rollers/RollerManager';
+import { DicePoolBuilder, effectivePoolMode } from './DicePoolBuilder';
 import { DieGlyph } from './DieShapes';
 import { playerLabel, useSessionPlayers, type PlayerOption } from './diceHooks';
-import { combineFormula, FORMULA_EXAMPLES, formulaError, MODE_LABELS, QUICK_DICE } from './diceUtils';
+import { poolFormula, poolIsEmpty, prettyFormula } from './dicePool';
+import { patchDiceTray, useDiceTray, useDiceTraySession, type LastTrayRoll } from './diceTrayStore';
+import { meaningfulRollLabel, MODE_LABELS } from './diceUtils';
 import { resolveOffered, useEnsureRollers, useRollerLookup } from './offeredRollers';
 import { RollHistory } from './RollHistory';
 import { MiniWheel, SegmentStrip } from './RouletteWheel';
 import { Segmented, type SegmentedOption } from './Segmented';
 
 /**
- * Live game dice tray. DM: free dice with visibility, campaign rollers, roll requests and live roller
- * editing. Players: requests addressed to them, turn offers and (if the campaign allows) public free dice.
+ * Live game dice tray. DM: dice table with visibility, campaign rollers, roll requests and live roller
+ * editing. Players: requests addressed to them, turn offers and (if the campaign allows) public dice.
  * Every result is only shown, never applied.
  */
 export function DicePanel() {
   const role = useSessionStore((s) => s.view?.role ?? null);
+  useDiceTraySession();
   if (!role) {
     return (
       <div className="p-3">
@@ -79,51 +70,96 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const heading = (
-    <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-parchment-300">
-      {icon && <span className="text-gold-400 [&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</span>}
+    <span className="flex min-w-0 items-center gap-2 font-display text-[13px] font-semibold tracking-wide text-parchment-100">
+      {icon && (
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gold-700/50 bg-ink-800 text-gold-300 [&>svg]:h-3.5 [&>svg]:w-3.5">
+          {icon}
+        </span>
+      )}
       <span className="truncate">{title}</span>
     </span>
   );
   return (
-    <section className={clsx('rounded-xl border bg-ink-900/60 p-2.5', highlight ? 'border-gold-600/60 shadow-glow-gold' : 'border-ink-600/70')}>
+    <section
+      className={clsx(
+        'rounded-xl border bg-gradient-to-b from-ink-800/70 to-ink-900/70 p-3 shadow-panel',
+        highlight ? 'border-gold-600/60 shadow-glow-gold' : 'border-ink-600/70',
+      )}
+    >
       <div className="flex items-center justify-between gap-2">
         {collapsible ? (
           <button
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((o) => !o)}
-            className="flex min-w-0 flex-1 items-center gap-1 rounded text-left hover:text-parchment-100"
+            className="flex min-w-0 flex-1 items-center gap-1 rounded text-left hover:text-parchment-50"
           >
             {heading}
-            <ChevronDown className={clsx('ml-auto h-3.5 w-3.5 shrink-0 text-parchment-400 transition-transform', open && 'rotate-180')} />
+            <ChevronDown className={clsx('ml-auto h-4 w-4 shrink-0 text-parchment-400 transition-transform', open && 'rotate-180')} />
           </button>
         ) : (
           heading
         )}
         {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
       </div>
-      {(!collapsible || open) && <div className="mt-2.5">{children}</div>}
+      {(!collapsible || open) && <div className="mt-3">{children}</div>}
     </section>
   );
 }
 
-const MODE_OPTIONS: SegmentedOption<RollMode>[] = [
-  { value: 'normal', label: MODE_LABELS.normal },
-  { value: 'advantage', label: MODE_LABELS.advantage, title: 'Ventaja: se tiran dos d20 y se queda el mayor' },
-  { value: 'disadvantage', label: MODE_LABELS.disadvantage, title: 'Desventaja: se tiran dos d20 y se queda el menor' },
+interface VisibilityChoice {
+  value: RollVisibility;
+  label: string;
+  hint: string;
+  icon: ReactNode;
+}
+
+const ROLL_VISIBILITY: VisibilityChoice[] = [
+  { value: 'public', label: 'Pública', hint: 'La ven todos', icon: <Globe /> },
+  { value: 'player', label: 'Solo un jugador', hint: 'Él y tú', icon: <UserRound /> },
+  { value: 'secret', label: 'Secreta', hint: 'Solo tú', icon: <Lock /> },
 ];
 
-const VISIBILITY_OPTIONS: SegmentedOption<RollVisibility>[] = [
-  { value: 'public', label: 'Pública', icon: <Globe />, title: 'Todos ven la tirada' },
-  { value: 'player', label: 'Jugador', icon: <UserRound />, title: 'Solo la ve un jugador (y tú)' },
-  { value: 'secret', label: 'Secreta', icon: <Lock />, title: 'Solo la ves tú' },
+const REQUEST_VISIBILITY: VisibilityChoice[] = [
+  { value: 'public', label: 'Pública', hint: 'La ven todos', icon: <Globe /> },
+  { value: 'player', label: 'Él y el DM', hint: 'Nadie más', icon: <UserRound /> },
+  { value: 'secret', label: 'Secreta', hint: 'Solo tú', icon: <Lock /> },
 ];
 
-const REQUEST_VISIBILITY_OPTIONS: SegmentedOption<RollVisibility>[] = [
-  { value: 'public', label: 'Pública', icon: <Globe />, title: 'Todos verán el resultado' },
-  { value: 'player', label: 'Él y el DM', icon: <UserRound />, title: 'Solo el jugador y tú veréis el resultado' },
-  { value: 'secret', label: 'Secreta', icon: <Lock />, title: 'Solo tú verás el resultado' },
-];
+const VISIBILITY_TEXT: Record<RollVisibility, string> = { public: 'pública', player: 'solo un jugador', secret: 'secreta' };
+
+function VisibilityPicker({ value, onChange, choices, ariaLabel }: { value: RollVisibility; onChange: (v: RollVisibility) => void; choices: VisibilityChoice[]; ariaLabel: string }) {
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="grid grid-cols-3 gap-1.5">
+      {choices.map((c) => {
+        const active = c.value === value;
+        return (
+          <button
+            key={c.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(c.value)}
+            className={clsx(
+              'flex min-w-0 flex-col items-center gap-0.5 rounded-lg border px-1 py-1.5 text-center transition [&_svg]:h-4 [&_svg]:w-4',
+              active
+                ? c.value === 'secret'
+                  ? 'border-arcane-400/70 bg-arcane-500/15 text-arcane-300 shadow-glow-arcane'
+                  : c.value === 'player'
+                    ? 'border-sky-400/60 bg-sky-500/10 text-sky-200'
+                    : 'border-gold-500/70 bg-gold-500/10 text-gold-200 shadow-glow-gold'
+                : 'border-ink-600 bg-ink-900/60 text-parchment-300 hover:border-ink-400 hover:text-parchment-100',
+            )}
+          >
+            {c.icon}
+            <span className="text-[11px] font-semibold leading-tight">{c.label}</span>
+            <span className={clsx('text-[10px] leading-tight', active ? 'opacity-80' : 'text-parchment-400')}>{c.hint}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function playerOptions(players: PlayerOption[]): SelectOption<string>[] {
   return players.map((p) => ({ value: p.userId, label: `${playerLabel(p)}${p.connected ? '' : ' (desconectado)'}` }));
@@ -135,139 +171,120 @@ function sortedActive(rollers: Roller[]): Roller[] {
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'es'));
 }
 
+function ModeBadge({ mode }: { mode: RollMode }) {
+  if (mode === 'normal') return null;
+  return (
+    <Badge size="xs" tone={mode === 'advantage' ? 'emerald' : 'blood'}>
+      {MODE_LABELS[mode]}
+    </Badge>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Dice tray (shared by DM and players)
+// Dice table (shared by DM and players)
 // ---------------------------------------------------------------------------
+
+interface TrayRoll {
+  formula: string;
+  mode: RollMode;
+  label: string;
+}
 
 interface TrayProps {
   busy: boolean;
-  /** Called with the final formula (modifier included) and the effective mode. */
-  onRoll: (formula: string, mode: RollMode, label: string) => void;
-  /** Extra controls (visibility) rendered before the roll button. */
+  /** `repeat` = sent from "Repetir última tirada". */
+  onRoll: (roll: TrayRoll, repeat: boolean) => void;
+  /** Extra controls (DM visibility) rendered before the roll button. */
   children?: ReactNode;
   note?: ReactNode;
+  /** Extra text for the repeat button (e.g. the visibility used). */
+  lastSuffix?: string | null;
 }
 
-function DiceTray({ busy, onRoll, children, note }: TrayProps) {
-  const [formula, setFormula] = useState('');
-  const [modifier, setModifier] = useState(0);
-  const [mode, setMode] = useState<RollMode>('normal');
-  const [label, setLabel] = useState('');
-  const [touched, setTouched] = useState(false);
-  const [last, setLast] = useState<string | null>(null);
+function DiceTray({ busy, onRoll, children, note, lastSuffix }: TrayProps) {
+  const pool = useDiceTray((s) => s.pool);
+  const mode = useDiceTray((s) => s.mode);
+  const label = useDiceTray((s) => s.label);
+  const last = useDiceTray((s) => s.last);
+  const formula = poolFormula(pool);
 
-  const finalFormula = combineFormula(formula, modifier);
-  const error = formula.trim() ? formulaError(finalFormula) : touched ? 'Escribe una fórmula, por ejemplo 2d6+3' : null;
-  const advantageApplies = formula.trim() ? supportsAdvantage(finalFormula) : true;
-
-  const fire = (raw: string) => {
-    const err = formulaError(raw);
-    if (err) {
-      toast.error(err);
+  const roll = () => {
+    if (busy) return;
+    if (!formula) {
+      toast.info(poolIsEmpty(pool) ? 'Añade dados a la mesa para tirar' : 'Añade al menos un dado: el bono solo no se tira');
       return;
     }
-    setLast(raw);
-    onRoll(raw, supportsAdvantage(raw) ? mode : 'normal', label.trim());
-  };
-
-  const quick = (sides: number, append: boolean) => {
-    if (append) {
-      const term = `1d${sides}`;
-      setFormula((f) => (f.trim() ? `${f.trim()}+${term}` : term));
-      return;
-    }
-    fire(combineFormula(`1d${sides}`, modifier));
-  };
-
-  const submit = () => {
-    setTouched(true);
-    if (!formula.trim()) {
-      toast.error('Escribe una fórmula, por ejemplo 2d6+3');
-      return;
-    }
-    fire(finalFormula);
+    onRoll({ formula, mode: effectivePoolMode(pool, mode), label: label.trim() }, false);
   };
 
   return (
-    <div className="space-y-2.5">
-      <div className="grid grid-cols-4 gap-1.5">
-        {QUICK_DICE.map((sides) => (
-          <button
-            key={sides}
-            type="button"
-            disabled={busy}
-            onClick={(e) => quick(sides, e.shiftKey)}
-            title={`Lanzar 1d${sides}${modifier ? ` ${modifier > 0 ? '+' : '−'} ${Math.abs(modifier)}` : ''} (Mayús+clic: añadir a la fórmula)`}
-            className="group flex flex-col items-center gap-0.5 rounded-lg border border-ink-600 bg-ink-800/70 px-1 pb-1 pt-1.5 transition duration-150 hover:-translate-y-0.5 hover:border-gold-600/70 hover:bg-ink-700 hover:shadow-glow-gold active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
-          >
-            <DieGlyph sides={sides} size={34} className="transition duration-300 group-hover:rotate-12 group-hover:scale-110" />
-            <span className="text-[11px] font-semibold text-parchment-200">d{sides === 100 ? '100' : sides}</span>
-          </button>
-        ))}
-        <button
-          type="button"
-          disabled={busy || !last}
-          onClick={() => last && fire(last)}
-          title={last ? `Repetir ${last}` : 'Aún no has lanzado nada'}
-          className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-ink-500 bg-ink-900/60 px-1 py-1.5 text-parchment-300 transition hover:border-gold-600/70 hover:text-gold-200 disabled:pointer-events-none disabled:opacity-40"
-        >
-          <RotateCw className="h-5 w-5" />
-          <span className="max-w-full truncate text-[10px] font-semibold">{last ?? 'Repetir'}</span>
-        </button>
-      </div>
-
-      <TextInput
-        size="sm"
-        label="Fórmula"
-        value={formula}
-        placeholder="2d6+3, 4d6kh3, 1d20+5…"
-        className="font-mono"
-        error={error}
-        onValueChange={(v) => setFormula(v)}
-        onBlur={() => formula.trim() && setTouched(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        spellCheck={false}
-        autoComplete="off"
+    <div className="space-y-3">
+      <DicePoolBuilder
+        pool={pool}
+        onChange={(next) => patchDiceTray({ pool: next })}
+        mode={mode}
+        onModeChange={(m) => patchDiceTray({ mode: m })}
       />
-      <div className="flex flex-wrap gap-1">
-        {FORMULA_EXAMPLES.map((ex) => (
-          <button
-            key={ex}
-            type="button"
-            onClick={() => setFormula(ex)}
-            className="rounded-full border border-ink-600 bg-ink-800 px-2 py-0.5 font-mono text-[10px] text-parchment-300 transition hover:border-gold-700 hover:text-gold-200"
-          >
-            {ex}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap items-end gap-2">
-        <Stepper label="Modificador" size="sm" value={modifier} min={-99} max={99} onChange={(v) => setModifier(v)} format={(v) => (v > 0 ? `+${v}` : String(v))} />
-        <div className="min-w-[13.5rem] flex-1">
-          <span className="label">Modo</span>
-          <Segmented value={mode} onChange={setMode} options={MODE_OPTIONS} ariaLabel="Modo de tirada" />
-        </div>
-      </div>
-      {mode !== 'normal' && !advantageApplies && (
-        <p className="text-[11px] text-parchment-400">La ventaja y la desventaja solo se aplican a fórmulas con un único d20.</p>
-      )}
-
-      <TextInput size="sm" label="Etiqueta (opcional)" value={label} placeholder="Ataque con espada, Percepción…" maxLength={80} onValueChange={setLabel} />
 
       {children}
 
-      <Button variant="primary" epic block loading={busy} icon={<Dices />} onClick={submit}>
-        {formula.trim() && !error ? `Lanzar ${finalFormula}` : 'Lanzar'}
-      </Button>
+      <TextInput
+        size="sm"
+        value={label}
+        placeholder="¿Para qué es? (opcional) · Ataque, Percepción…"
+        maxLength={80}
+        aria-label="Etiqueta de la tirada (opcional)"
+        icon={<Tag />}
+        onValueChange={(v) => patchDiceTray({ label: v })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            roll();
+          }
+        }}
+      />
+
+      <div className="space-y-1.5">
+        <Button
+          variant="primary"
+          size="lg"
+          epic
+          block
+          loading={busy}
+          disabled={!formula}
+          icon={<Dices />}
+          onClick={roll}
+          className="h-12 text-base shadow-glow-gold"
+        >
+          ¡Tirar!
+        </Button>
+        {!formula && <p className="text-center text-[11px] text-parchment-400">Pon al menos un dado en la mesa.</p>}
+        <button
+          type="button"
+          disabled={busy || !last}
+          onClick={() => last && onRoll({ formula: last.formula, mode: last.mode, label: last.label }, true)}
+          title={last ? `Volver a tirar ${prettyFormula(last.formula)}` : 'Aún no has tirado nada'}
+          className="flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-500 bg-ink-900/50 px-2.5 py-2 text-left text-xs font-semibold text-parchment-300 transition hover:border-gold-600/70 hover:text-gold-200 disabled:pointer-events-none disabled:opacity-40"
+        >
+          <RotateCw className="h-4 w-4 shrink-0" />
+          <span className="shrink-0">Repetir última tirada</span>
+          {last && (
+            <span className="ml-auto min-w-0 truncate text-right font-mono text-[11px] font-normal text-gold-300/90">
+              {prettyFormula(last.formula)}
+              {last.mode !== 'normal' ? ` · ${MODE_LABELS[last.mode]}` : ''}
+              {lastSuffix ? ` · ${lastSuffix}` : ''}
+            </span>
+          )}
+        </button>
+      </div>
       {note && <p className="text-center text-[11px] text-parchment-400">{note}</p>}
     </div>
   );
+}
+
+function rememberLast(roll: TrayRoll, visibility: RollVisibility, targetUserId: string | null): void {
+  const last: LastTrayRoll = { ...roll, visibility, targetUserId };
+  patchDiceTray({ last });
 }
 
 // ---------------------------------------------------------------------------
@@ -279,26 +296,29 @@ function DmDice() {
   const rollers = useSessionStore((s) => s.rollers);
   const requests = useSessionStore((s) => s.view?.state.rollRequests ?? null);
   const players = useSessionPlayers();
-  const [visibility, setVisibility] = useState<RollVisibility>('public');
-  const [targetUserId, setTargetUserId] = useState<string | null>(null);
+  const visibility = useDiceTray((s) => s.visibility);
+  const targetUserId = useDiceTray((s) => s.targetUserId);
+  const last = useDiceTray((s) => s.last);
   const [busy, setBusy] = useState<string | null>(null);
   const [managing, setManaging] = useState(false);
 
   const active = useMemo(() => sortedActive(rollers), [rollers]);
-  const target = visibility === 'player' ? targetUserId : null;
-  const targetValid = visibility !== 'player' || (!!targetUserId && players.some((p) => p.userId === targetUserId));
+  const isValidTarget = (id: string | null) => !!id && players.some((p) => p.userId === id);
 
-  const checkTarget = (): boolean => {
-    if (targetValid) return true;
+  const checkTarget = (vis: RollVisibility, target: string | null): boolean => {
+    if (vis !== 'player' || isValidTarget(target)) return true;
     toast.error('Elige a qué jugador va dirigida la tirada');
     return false;
   };
 
-  const rollDice = async (formula: string, mode: RollMode, label: string) => {
-    if (!checkTarget()) return;
+  const rollDice = async (roll: TrayRoll, repeat: boolean) => {
+    const vis = repeat && last ? last.visibility : visibility;
+    const target = vis === 'player' ? (repeat && last ? last.targetUserId : targetUserId) : null;
+    if (!checkTarget(vis, target)) return;
     setBusy('dice');
     try {
-      await emitAck('roll:dice', { formula, mode, label: label || undefined, visibility, targetUserId: target });
+      await emitAck('roll:dice', { formula: roll.formula, mode: roll.mode, label: roll.label || undefined, visibility: vis, targetUserId: target });
+      rememberLast(roll, vis, target);
     } catch (err) {
       toast.fromError(err, 'No se pudo lanzar la tirada');
     } finally {
@@ -307,7 +327,8 @@ function DmDice() {
   };
 
   const rollRoller = async (roller: Roller) => {
-    if (!checkTarget()) return;
+    const target = visibility === 'player' ? targetUserId : null;
+    if (!checkTarget(visibility, target)) return;
     setBusy(roller.id);
     try {
       await emitAck('roll:roller', { rollerId: roller.id, visibility, targetUserId: target });
@@ -318,18 +339,21 @@ function DmDice() {
     }
   };
 
+  const lastTargetName = last?.visibility === 'player' ? players.find((p) => p.userId === last.targetUserId)?.name ?? null : null;
+  const lastSuffix = last ? (last.visibility === 'player' && lastTargetName ? `solo ${lastTargetName}` : VISIBILITY_TEXT[last.visibility]) : null;
+
   const visibilityControls = (
     <div className="space-y-1.5">
-      <span className="label">Visibilidad</span>
-      <Segmented value={visibility} onChange={setVisibility} options={VISIBILITY_OPTIONS} ariaLabel="Visibilidad de la tirada" />
+      <span className="label mb-0">¿Quién ve el resultado?</span>
+      <VisibilityPicker value={visibility} onChange={(v) => patchDiceTray({ visibility: v })} choices={ROLL_VISIBILITY} ariaLabel="Visibilidad de la tirada" />
       {visibility === 'player' &&
         (players.length > 0 ? (
           <Select<string | null>
             size="sm"
             aria-label="Jugador que verá la tirada"
-            value={targetUserId}
-            onChange={setTargetUserId}
-            placeholder="Elige un jugador…"
+            value={isValidTarget(targetUserId) ? targetUserId : null}
+            onChange={(v) => patchDiceTray({ targetUserId: v })}
+            placeholder="Elige el jugador…"
             options={playerOptions(players)}
           />
         ) : (
@@ -340,16 +364,20 @@ function DmDice() {
 
   return (
     <>
-      <Section title="Tirar dados" icon={<Dices />}>
-        <DiceTray busy={busy === 'dice'} onRoll={(f, m, l) => void rollDice(f, m, l)}>
+      <Section title="Mesa de dados" icon={<Dices />}>
+        <DiceTray busy={busy === 'dice'} onRoll={(r, repeat) => void rollDice(r, repeat)} lastSuffix={lastSuffix}>
           {visibilityControls}
         </DiceTray>
       </Section>
 
+      {requests && requests.length > 0 && <PendingRequests requests={requests} players={players} rollers={rollers} />}
+
+      <RequestForm players={players} rollers={active} />
+
       <Section
-        title="Dados y ruletas de la campaña"
+        title="Ruletas y dados de la campaña"
         icon={<Sparkles />}
-        actions={<IconButton size="xs" icon={<Settings2 />} title="Gestionar ruletas" onClick={() => setManaging(true)} />}
+        actions={<IconButton size="xs" icon={<Settings2 />} title="Gestionar ruletas y dados" onClick={() => setManaging(true)} />}
       >
         {active.length === 0 ? (
           <EmptyState
@@ -387,23 +415,18 @@ function DmDice() {
                     <SegmentStrip segments={r.segments} className="h-1" />
                   ) : (
                     <span className="truncate font-mono text-[10px] text-gold-300/90">
-                      {r.faces && r.faces.length > 0 ? `${r.faces.length} caras` : r.formula ?? '—'}
+                      {r.faces && r.faces.length > 0 ? `${r.faces.length} caras` : prettyFormula(r.formula) || '—'}
                     </span>
                   )}
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[11px] text-parchment-400">Se lanzan con la visibilidad elegida arriba.</p>
+            <p className="mt-2 text-[11px] text-parchment-400">
+              Se lanzan con la visibilidad elegida en la mesa de dados ({VISIBILITY_TEXT[visibility]}).
+            </p>
           </>
         )}
-        <Button size="sm" variant="ghost" block className="mt-2" icon={<Settings2 />} onClick={() => setManaging(true)}>
-          Gestionar ruletas
-        </Button>
       </Section>
-
-      <RequestForm players={players} rollers={active} />
-
-      {requests && requests.length > 0 && <PendingRequests requests={requests} players={players} rollers={rollers} />}
 
       <Section title="Tiradas" icon={<Dices />}>
         <RollHistory compact />
@@ -413,7 +436,7 @@ function DmDice() {
         open={managing}
         onClose={() => setManaging(false)}
         size="xl"
-        title="Dados y ruletas de la campaña"
+        title="Ruletas y dados de la campaña"
         subtitle="Los cambios se aplican al instante en la partida."
         icon={<Settings2 />}
       >
@@ -426,17 +449,17 @@ function DmDice() {
 const ALL_PLAYERS = '__all__';
 
 function RequestForm({ players, rollers }: { players: PlayerOption[]; rollers: Roller[] }) {
+  const pool = useDiceTray((s) => s.requestPool);
+  const mode = useDiceTray((s) => s.requestMode);
   const [target, setTarget] = useState<string | null>(null);
-  const [source, setSource] = useState<'formula' | 'roller'>('formula');
-  const [formula, setFormula] = useState('1d20');
+  const [source, setSource] = useState<'dice' | 'roller'>('dice');
   const [rollerId, setRollerId] = useState<string | null>(null);
   const [label, setLabel] = useState('');
-  const [mode, setMode] = useState<RollMode>('normal');
   const [visibility, setVisibility] = useState<RollVisibility>('public');
   const [sending, setSending] = useState(false);
 
   const roller = rollerId ? rollers.find((r) => r.id === rollerId) ?? null : null;
-  const fError = source === 'formula' ? formulaError(formula) : null;
+  const formula = poolFormula(pool);
 
   const send = async () => {
     const targets = target === ALL_PLAYERS ? players.map((p) => p.userId) : target && players.some((p) => p.userId === target) ? [target] : [];
@@ -444,8 +467,8 @@ function RequestForm({ players, rollers }: { players: PlayerOption[]; rollers: R
       toast.error('Elige a qué jugador pedirle la tirada');
       return;
     }
-    if (source === 'formula' && fError) {
-      toast.error(fError);
+    if (source === 'dice' && !formula) {
+      toast.error('Pon al menos un dado en la mesa de la petición');
       return;
     }
     if (source === 'roller' && !roller) {
@@ -460,9 +483,9 @@ function RequestForm({ players, rollers }: { players: PlayerOption[]; rollers: R
           emitAck('roll:request', {
             targetUserId: userId,
             label: finalLabel,
-            formula: source === 'formula' ? formula.trim() : undefined,
+            formula: source === 'dice' && formula ? formula : undefined,
             rollerId: source === 'roller' && roller ? roller.id : undefined,
-            mode: source === 'formula' && supportsAdvantage(formula) ? mode : 'normal',
+            mode: source === 'dice' ? effectivePoolMode(pool, mode) : 'normal',
             visibility,
           }),
         ),
@@ -484,33 +507,31 @@ function RequestForm({ players, rollers }: { players: PlayerOption[]; rollers: R
     ...playerOptions(players),
   ];
 
+  const sourceOptions: SegmentedOption<'dice' | 'roller'>[] = [
+    { value: 'dice', label: 'Dados', icon: <Dices /> },
+    { value: 'roller', label: 'De la campaña', icon: <Sparkles />, title: 'Una ruleta o un dado especial de la campaña' },
+  ];
+
   return (
-    <Section title="Pedir tirada" icon={<Hand />} collapsible defaultOpen={false}>
+    <Section title="Pedir tirada a un jugador" icon={<Hand />} collapsible defaultOpen={false}>
       {players.length === 0 ? (
         <p className="text-xs text-parchment-400">Cuando haya jugadores en la partida podrás pedirles tiradas.</p>
       ) : (
-        <div className="space-y-2.5">
-          <Select<string | null> size="sm" label="Jugador" value={target} onChange={setTarget} placeholder="Elige un jugador…" options={targetOptions} />
+        <div className="space-y-3">
+          <Select<string | null> size="sm" label="¿A quién?" value={target} onChange={setTarget} placeholder="Elige un jugador…" options={targetOptions} />
           <div>
-            <span className="label">Qué debe tirar</span>
-            <Segmented
-              value={source}
-              onChange={setSource}
-              ariaLabel="Tipo de tirada pedida"
-              options={[
-                { value: 'formula', label: 'Fórmula', icon: <Dices /> },
-                { value: 'roller', label: 'Ruleta o dado', icon: <Sparkles /> },
-              ]}
-            />
+            <span className="label">¿Qué debe tirar?</span>
+            <Segmented value={source} onChange={setSource} ariaLabel="Tipo de tirada pedida" options={sourceOptions} />
           </div>
-          {source === 'formula' ? (
-            <>
-              <TextInput size="sm" value={formula} onValueChange={setFormula} className="font-mono" placeholder="1d20+3" error={fError} aria-label="Fórmula pedida" spellCheck={false} />
-              <div>
-                <span className="label">Modo</span>
-                <Segmented value={mode} onChange={setMode} options={MODE_OPTIONS} ariaLabel="Modo de la tirada pedida" />
-              </div>
-            </>
+          {source === 'dice' ? (
+            <DicePoolBuilder
+              compact
+              pool={pool}
+              onChange={(next) => patchDiceTray({ requestPool: next })}
+              mode={mode}
+              onModeChange={(m) => patchDiceTray({ requestMode: m })}
+              emptyHint="Elige los dados que tendrá que tirar."
+            />
           ) : rollers.length === 0 ? (
             <p className="text-[11px] text-parchment-400">No hay ruletas activas en la campaña.</p>
           ) : (
@@ -523,10 +544,17 @@ function RequestForm({ players, rollers }: { players: PlayerOption[]; rollers: R
               options={rollers.map((r) => ({ value: r.id, label: `${r.kind === 'roulette' ? '🎡' : '🎲'} ${r.name}` }))}
             />
           )}
-          <TextInput size="sm" label="Etiqueta" value={label} onValueChange={setLabel} maxLength={80} placeholder={source === 'roller' && roller ? roller.name : 'Percepción, Salvación de Destreza…'} />
-          <div>
-            <span className="label">Quién verá el resultado</span>
-            <Segmented value={visibility} onChange={setVisibility} options={REQUEST_VISIBILITY_OPTIONS} ariaLabel="Visibilidad del resultado" />
+          <TextInput
+            size="sm"
+            label="Etiqueta"
+            value={label}
+            onValueChange={setLabel}
+            maxLength={80}
+            placeholder={source === 'roller' && roller ? roller.name : 'Percepción, Salvación de Destreza…'}
+          />
+          <div className="space-y-1.5">
+            <span className="label mb-0">¿Quién verá el resultado?</span>
+            <VisibilityPicker value={visibility} onChange={setVisibility} choices={REQUEST_VISIBILITY} ariaLabel="Visibilidad del resultado" />
           </div>
           <Button variant="primary" block icon={<Send />} loading={sending} onClick={() => void send()}>
             Pedir tirada
@@ -550,26 +578,26 @@ function PendingRequests({ requests, players, rollers }: { requests: RollRequest
     }
   };
   return (
-    <Section title={`Peticiones pendientes (${requests.length})`} icon={<Hand />} highlight>
+    <Section title={`Esperando tiradas (${requests.length})`} icon={<Hand />} highlight>
       <ul className="space-y-1.5">
         {requests.map((r) => {
           const p = players.find((x) => x.userId === r.targetUserId);
-          const what = r.formula ?? (r.rollerId ? rollers.find((x) => x.id === r.rollerId)?.name ?? 'ruleta' : '—');
+          const what = r.formula ? prettyFormula(r.formula) : r.rollerId ? rollers.find((x) => x.id === r.rollerId)?.name ?? 'ruleta' : '—';
           return (
             <li key={r.id} className="flex items-center gap-2 rounded-lg border border-ink-600 bg-ink-800/60 px-2 py-1.5">
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p?.color ?? '#a8946b' }} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs font-semibold text-parchment-100">
-                  {p ? p.name : 'Jugador'} · {r.label}
+                  {p ? p.name : 'Jugador'} · {meaningfulRollLabel(r.label) || 'Tirada'}
                 </div>
                 <div className="flex flex-wrap items-center gap-1 text-[10px] text-parchment-400">
                   <span className="font-mono text-gold-300/90">{what}</span>
-                  {r.mode !== 'normal' && (
-                    <Badge size="xs" tone={r.mode === 'advantage' ? 'emerald' : 'blood'}>
-                      {MODE_LABELS[r.mode]}
+                  <ModeBadge mode={r.mode} />
+                  {r.source === 'turn' && (
+                    <Badge size="xs" tone="gold">
+                      De turno
                     </Badge>
                   )}
-                  {r.source === 'turn' && <Badge size="xs" tone="gold">De turno</Badge>}
                   <span>· {formatRelative(r.createdAt)}</span>
                 </div>
               </div>
@@ -602,39 +630,44 @@ function PlayerDice() {
   );
   useEnsureRollers(wantedRollerIds);
 
-  const run = async (key: string, fn: () => Promise<unknown>, fallback: string) => {
-    if (busy) return;
+  const run = async (key: string, fn: () => Promise<unknown>, fallback: string): Promise<boolean> => {
+    if (busy) return false;
     setBusy(key);
     try {
       await fn();
+      return true;
     } catch (err) {
       toast.fromError(err, fallback);
+      return false;
     } finally {
       setBusy(null);
     }
   };
 
+  const rollFree = async (roll: TrayRoll) => {
+    const ok = await run(
+      'dice',
+      () => emitAck('roll:dice', { formula: roll.formula, mode: roll.mode, label: roll.label || undefined, visibility: 'public' }),
+      'No se pudo lanzar la tirada',
+    );
+    if (ok) rememberLast(roll, 'public', null);
+  };
+
   return (
     <>
       {requests.length > 0 && (
-        <Section title="El DM te pide" icon={<Hand />} highlight>
+        <Section title="El DM te pide una tirada" icon={<Hand />} highlight>
           <ul className="space-y-1.5">
             {requests.map((r) => (
-              <li key={r.id} className="flex items-center gap-2 rounded-lg border border-gold-700/50 bg-ink-800/70 px-2 py-1.5">
-                <span className="text-xl leading-none" aria-hidden>
-                  🎲
-                </span>
+              <li key={r.id} className="flex items-center gap-2.5 rounded-lg border border-gold-700/50 bg-ink-800/70 px-2.5 py-2">
+                <DieGlyph sides={20} size={30} className="shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold text-parchment-50">{r.label || 'Tirada'}</div>
-                  <div className="flex flex-wrap items-center gap-1 text-[10px] text-parchment-400">
+                  <div className="truncate text-sm font-semibold text-parchment-50">{meaningfulRollLabel(r.label) || 'Tirada'}</div>
+                  <div className="flex flex-wrap items-center gap-1 text-[11px] text-parchment-400">
                     <span className="font-mono text-gold-300/90">
-                      {r.formula ?? (r.rollerId ? lookupRoller(r.rollerId)?.name ?? 'ruleta o dado del DM' : '—')}
+                      {r.formula ? prettyFormula(r.formula) : r.rollerId ? lookupRoller(r.rollerId)?.name ?? 'ruleta o dado del DM' : '—'}
                     </span>
-                    {r.mode !== 'normal' && (
-                      <Badge size="xs" tone={r.mode === 'advantage' ? 'emerald' : 'blood'}>
-                        {MODE_LABELS[r.mode]}
-                      </Badge>
-                    )}
+                    <ModeBadge mode={r.mode} />
                   </div>
                 </div>
                 <Button
@@ -694,18 +727,12 @@ function PlayerDice() {
       )}
 
       {rules?.playersCanRollFreely ? (
-        <Section title="Tirar dados" icon={<Dices />}>
-          <DiceTray
-            busy={busy === 'dice'}
-            note="Tus tiradas libres son públicas: todos verán el resultado."
-            onRoll={(formula, mode, label) =>
-              void run('dice', () => emitAck('roll:dice', { formula, mode, label: label || undefined, visibility: 'public' }), 'No se pudo lanzar la tirada')
-            }
-          />
+        <Section title="Mesa de dados" icon={<Dices />}>
+          <DiceTray busy={busy === 'dice'} note="Tus tiradas son públicas: todos verán el resultado." onRoll={(roll) => void rollFree(roll)} />
         </Section>
       ) : (
         rules && (
-          <Section title="Tirar dados" icon={<Dices />}>
+          <Section title="Mesa de dados" icon={<Dices />}>
             <p className="text-xs leading-relaxed text-parchment-300">
               En esta campaña el DM no permite tiradas libres. Cuando te pida una tirada aparecerá aquí con el botón «¡Tirar!».
             </p>

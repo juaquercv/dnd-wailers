@@ -17,6 +17,7 @@ import {
   ZONE_TYPES,
   createRuleSystem,
   createZoneLevel,
+  DEFAULT_ACTIONS_PER_TURN,
   defaultSlotsTable,
   defaultVisibility,
   emptyEntryData,
@@ -44,8 +45,11 @@ import {
   type UserDTO,
   type VisibilitySettings,
   type Zone,
+  type HeroData,
   type ZoneLevel,
   type ZoneNeighbors,
+  type ZoneTemplateData,
+  type ZoneVision,
 } from '@wailers/shared';
 
 /*
@@ -100,6 +104,10 @@ function oneOfOrNull<T extends string>(values: readonly T[], value: unknown): T 
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 export function isEntryKind(value: unknown): value is EntryKind {
@@ -166,9 +174,34 @@ export type EntryRowInput = LibraryEntryRow & {
   recents?: { usedAt: Date }[];
 };
 
+/** Limits of the turn economy fields of a hero sheet. */
+export const HERO_MOVE_CELLS_MAX = 1000;
+export const HERO_ACTIONS_PER_TURN_MAX = 10;
+
+/** Hero sheet with sane turn economy fields: moveCells = whole cells >= 0 or null (derived from speed), actionsPerTurn = 0..10. */
+export function normalizeHeroEconomy<T extends HeroData>(data: T): T {
+  const move = finiteNumber(data.moveCells);
+  const actions = finiteNumber(data.actionsPerTurn);
+  return {
+    ...data,
+    moveCells: move !== null && move >= 0 ? Math.min(HERO_MOVE_CELLS_MAX, Math.floor(move)) : null,
+    actionsPerTurn: actions !== null ? clamp(Math.floor(actions), 0, HERO_ACTIONS_PER_TURN_MAX) : DEFAULT_ACTIONS_PER_TURN,
+  };
+}
+
+/** Per-kind cleanup of a data document already merged over the shared defaults. */
+export function normalizeEntryData(kind: EntryKind, data: unknown): unknown {
+  if (kind === 'hero') return normalizeHeroEconomy(data as HeroData);
+  if (kind === 'zone') {
+    const zone = data as ZoneTemplateData;
+    return { ...zone, content: { ...zone.content, vision: parseZoneVision(zone.content.vision) } };
+  }
+  return data;
+}
+
 export function entryToDTO<K extends EntryKind = EntryKind>(row: EntryRowInput): LibraryEntry<K> {
   const kind = isEntryKind(row.kind) ? row.kind : null;
-  const data = kind ? withDefaults(emptyEntryData(kind), row.data) : row.data;
+  const data = kind ? normalizeEntryData(kind, withDefaults(emptyEntryData(kind), row.data)) : row.data;
   const used = new Map<string, { id: string; name: string }>();
   for (const usage of row.usages ?? []) {
     if (!used.has(usage.campaign.id)) used.set(usage.campaign.id, { id: usage.campaign.id, name: usage.campaign.name });
@@ -338,6 +371,41 @@ export function parseGridPos(value: unknown): { x: number; y: number } | null {
   return x === null || y === null ? null : { x, y };
 }
 
+const ZONE_VISION_MODES = ['all', 'explored', 'vision'] as const;
+export const ZONE_VISION_LIMITS = { radiusMin: 0, radiusMax: 60, coneMin: 10, coneMax: 360 } as const;
+const DEFAULT_ZONE_VISION_RADIUS = defaultVisibility().visionRadius;
+
+/** ZoneVision JSON -> ZoneVision | null (unknown mode = null; radius and cone rounded and clamped to their ranges). */
+export function parseZoneVision(value: unknown): ZoneVision | null {
+  if (!isPlainObject(value)) return null;
+  const mode = oneOfOrNull(ZONE_VISION_MODES, value.mode);
+  if (!mode) return null;
+  const L = ZONE_VISION_LIMITS;
+  return {
+    mode,
+    radius: clamp(Math.round(finiteNumber(value.radius) ?? DEFAULT_ZONE_VISION_RADIUS), L.radiusMin, L.radiusMax),
+    cone: clamp(Math.round(finiteNumber(value.cone) ?? L.coneMax), L.coneMin, L.coneMax),
+  };
+}
+
+/*
+ * The zone table has no column of its own for the default vision of a zone: it is stored inside the
+ * `neighbors` JSON document under the key `vision`. Every write of `neighbors` goes through
+ * neighborsColumn() with the zone's vision so it is never lost; parseNeighbors() ignores the extra key.
+ */
+
+/** Value for the `neighbors` column: the four directions plus the zone vision (omitted when null). */
+export function neighborsColumn(neighbors: ZoneNeighbors, vision: ZoneVision | null | undefined): Prisma.InputJsonValue {
+  const directions = { up: neighbors.up ?? null, down: neighbors.down ?? null, left: neighbors.left ?? null, right: neighbors.right ?? null };
+  const parsed = parseZoneVision(vision);
+  return (parsed ? { ...directions, vision: parsed } : directions) as Prisma.InputJsonValue;
+}
+
+/** Zone vision stored in a `neighbors` column value. */
+export function storedZoneVision(neighbors: unknown): ZoneVision | null {
+  return isPlainObject(neighbors) ? parseZoneVision(neighbors.vision) : null;
+}
+
 export function zoneToDTO(row: ZoneRow): Zone {
   const levels = parseLevels(row.levels, row.id, row.defaultLevelId);
   const defaultLevelId = levels.some((l) => l.id === row.defaultLevelId) ? row.defaultLevelId : levels[0]!.id;
@@ -361,6 +429,7 @@ export function zoneToDTO(row: ZoneRow): Zone {
     levels,
     defaultLevelId,
     notes: row.notes,
+    vision: storedZoneVision(row.neighbors),
   };
 }
 

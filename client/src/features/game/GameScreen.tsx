@@ -9,6 +9,8 @@ import { FxOverlay } from '../fx/FxOverlay';
 import { QuickSearch } from '../library/QuickSearch';
 import { EdgeNavigator } from './EdgeNavigator';
 import { GameMap } from './GameMap';
+import { usePlayerHudLayout } from './hud/hudLayout';
+import { PlayerHud } from './hud/PlayerHud';
 import { OverviewModal } from './OverviewModal';
 import { ProjectionOverlay } from './ProjectionOverlay';
 import { SceneScreen } from './SceneScreen';
@@ -56,8 +58,10 @@ export function GameScreen() {
   const campaignId = useSessionStore((s) => s.campaign?.id ?? s.view?.state.campaignId ?? undefined);
   const viewAsUserId = useSessionStore((s) => s.viewAsUserId);
   const viewAsName = useSessionStore((s) => (s.viewAsUserId ? s.view?.state.players[s.viewAsUserId]?.name ?? null : null));
+  const combat = useSessionStore((s) => s.view?.state.status === 'playing' && s.view.state.turn.combat === true);
   const pendingDmTrades = useSessionStore((s) => (s.view?.role === 'dm' ? s.view.state.trades.filter((t) => t.status === 'pending_dm').length : 0));
   const { effective, isPreview } = useDisplayState();
+  const hudInset = usePlayerHudLayout((s) => s.centerInset);
   const wide = useMediaQuery('(min-width: 1024px)');
   const roomy = useMediaQuery('(min-width: 1280px)');
 
@@ -238,9 +242,18 @@ export function GameScreen() {
         <main id="game-viewport" className="relative min-w-0 flex-1 overflow-hidden bg-[#070605]">
           {sceneMode ? <SceneScreen /> : <GameMap />}
           <FxOverlay />
-          {!sceneMode && <EdgeNavigator />}
+          {!sceneMode && (
+            // The edge arrows live above the player's action bar when it reaches the centre ("Viajar a…" stays clickable).
+            <div className="pointer-events-none absolute inset-x-0 top-0 transition-[bottom] duration-200" style={{ bottom: hudInset }}>
+              <EdgeNavigator />
+            </div>
+          )}
           <ProjectionOverlay />
           {!sceneMode && <ViewportBanners />}
+          {combat && (
+            <div aria-hidden className="pointer-events-none absolute inset-0 z-[5] animate-fade-in shadow-[inset_0_0_90px_-24px_rgba(196,61,51,0.65)]" />
+          )}
+          {(!isDm || isPreview) && <PlayerHud />}
           {isDm && isPreview && sceneMode && (
             <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center">
               <span className="flex items-center gap-2 rounded-full border border-arcane-500/50 bg-ink-950/85 px-3 py-1 text-xs text-arcane-100">

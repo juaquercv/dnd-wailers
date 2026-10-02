@@ -1,4 +1,4 @@
-import { newId, type ZoneContent, type ZoneLevel } from '@wailers/shared';
+import { newId, type ZoneContent, type ZoneLevel, type ZoneVision } from '@wailers/shared';
 import type { MapKey } from '../assets/maps';
 import { CAVE, CROSSROADS, FOREST, MOUNTAINS, SMALL_CAVE, TAVERN, TOWER, VILLAGE, ellipsePolygon, rectPolygon } from '../assets/layouts';
 import { AIRSHIP, WORKSHOP } from '../assets/layoutsSteam';
@@ -10,8 +10,14 @@ import { fogRegion, lights, makeLevel, mapUrl, markerEl, noteEl, textEl, walls }
 /** Zone templates for the library (kind 'zone'): reusable maps with walls, lights and markers. */
 
 function content(init: Omit<ZoneContent, 'defaultLevelId'> & { levels: ZoneLevel[] }): ZoneContent {
-  return { ...init, defaultLevelId: init.levels[0]!.id };
+  return { vision: null, ...init, defaultLevelId: init.levels[0]!.id };
 }
+
+/** Default vision of the dark templates (seed v3): players inside only see around their hero. */
+export const TEMPLATE_VISIONS: Readonly<Record<string, ZoneVision>> = {
+  'cueva-pequena': { mode: 'explored', radius: 4, cone: 360 },
+  'guarida-del-dragon': { mode: 'explored', radius: 6, cone: 360 },
+};
 
 function clearing(): ZoneContent {
   const level = makeLevel({ id: newId('lvl'), name: 'Claro', elevation: 0, map: 'bosque', color: '#2f4a24' });
@@ -34,7 +40,7 @@ function smallCave(): ZoneContent {
   level.walls.push(...walls(SMALL_CAVE.walls));
   level.lights.push(...lights(SMALL_CAVE.lights));
   level.elements.push(markerEl('💧', 'Poza', SMALL_CAVE.pool.x, SMALL_CAVE.pool.y - 110, '#6fd0ff'), textEl('Entrada', 30, 380, 24, '#cfd8ff'));
-  return content({ zoneType: 'dungeon', biome: 'Cueva', weather: 'none', lighting: 'dark', levels: [level], notes: 'Cueva de una sola cámara con poza, setas luminosas y un pilar de roca.' });
+  return content({ zoneType: 'dungeon', biome: 'Cueva', weather: 'none', lighting: 'dark', levels: [level], notes: 'Cueva de una sola cámara con poza, setas luminosas y un pilar de roca.', vision: TEMPLATE_VISIONS['cueva-pequena'] });
 }
 
 function crossroads(): ZoneContent {
@@ -69,7 +75,7 @@ function dragonLair(): ZoneContent {
   level.lights.push(...lights(CAVE.lights));
   level.fogRegions.push(fogRegion('Cámara del tesoro', CAVE.innerFog));
   level.elements.push(markerEl('💰', 'Tesoro', CAVE.hoard.x, CAVE.hoard.y - 190, '#e9c063', true), textEl('Entrada', 30, 620, 24, '#cfd8ff'));
-  return content({ zoneType: 'dungeon', biome: 'Cueva', weather: 'none', lighting: 'dark', levels: [level], notes: 'Gran caverna con pilares, ríos de lava y una cámara del tesoro oculta tras la niebla de guerra.' });
+  return content({ zoneType: 'dungeon', biome: 'Cueva', weather: 'none', lighting: 'dark', levels: [level], notes: 'Gran caverna con pilares, ríos de lava y una cámara del tesoro oculta tras la niebla de guerra.', vision: TEMPLATE_VISIONS['guarida-del-dragon'] });
 }
 
 function wizardTower(): ZoneContent {

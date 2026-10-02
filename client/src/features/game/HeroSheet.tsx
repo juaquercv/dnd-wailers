@@ -21,8 +21,12 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import {
+  DEFAULT_MOVE_CELLS,
   formatModifier,
+  heroActionsPerTurn,
+  heroMoveCells,
   newId,
+  parseSpeedCells,
   slotsForLevel,
   type HeroSheet as HeroSheetData,
   type LimitedUse,
@@ -43,6 +47,7 @@ import { TextArea } from '../../components/ui/TextArea';
 import { TextInput } from '../../components/ui/TextInput';
 import { formatGold, formatNumber } from '../../lib/format';
 import { emitUiEvent } from '../../lib/uiEvents';
+import { MAX_ACTIONS_PER_TURN, MAX_MOVE_CELLS } from '../library/editor/HeroFields';
 import { send, useDraft } from './panels/actions';
 import { AbilityGrid } from './panels/AbilityGrid';
 import {
@@ -186,11 +191,14 @@ export function HeroSheet({ heroId }: HeroSheetProps) {
           )}
           {rules.showSpeed && (
             <StatCard icon={<Footprints />} label="Velocidad">
-              {manage ? (
-                <InlineText value={d.speed} placeholder="9 m" onCommit={(speed) => void send('hero:update', { heroId: hero.id, patch: { speed } })} />
-              ) : (
-                <span className="truncate text-sm font-semibold text-parchment-50">{d.speed || '—'}</span>
-              )}
+              <span className="flex min-w-0 flex-col items-center" title={`En combate: ${heroMoveCells(d)} casillas por turno`}>
+                {manage ? (
+                  <InlineText value={d.speed} placeholder="9 m" onCommit={(speed) => void send('hero:update', { heroId: hero.id, patch: { speed } })} />
+                ) : (
+                  <span className="truncate text-sm font-semibold text-parchment-50">{d.speed || '—'}</span>
+                )}
+                <span className="mt-0.5 text-[10px] text-sky-300">{heroMoveCells(d)} cas./turno</span>
+              </span>
             </StatCard>
           )}
           {rules.showInitiative && (
@@ -267,6 +275,20 @@ export function HeroSheet({ heroId }: HeroSheetProps) {
                 onChange={manage ? (abilities) => void send('hero:update', { heroId: hero.id, patch: { abilities } }) : undefined}
               />
               {manage && <VisionField heroId={hero.id} value={d.visionCells} />}
+              {manage ? (
+                <TurnLimitsFields heroId={hero.id} speed={d.speed} moveCells={d.moveCells ?? null} actionsPerTurn={heroActionsPerTurn(d)} />
+              ) : (
+                <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-parchment-300">
+                  <span className="inline-flex items-center gap-1.5" title="Casillas que puede moverse en su turno durante el combate">
+                    <Footprints className="h-3.5 w-3.5 text-sky-300" />
+                    Movimiento: {heroMoveCells(d)} casillas por turno
+                  </span>
+                  <span className="inline-flex items-center gap-1.5" title="Ataques, hechizos u objetos por turno durante el combate">
+                    <Swords className="h-3.5 w-3.5 text-blood-300" />
+                    {heroActionsPerTurn(d)} {heroActionsPerTurn(d) === 1 ? 'acción' : 'acciones'} de combate
+                  </span>
+                </p>
+              )}
               {!manage && d.visionCells !== null && (
                 <p className="flex items-center gap-1.5 text-xs text-parchment-300">
                   <Eye className="h-3.5 w-3.5 text-gold-400" />
@@ -420,6 +442,44 @@ function VisionField({ heroId, value }: { heroId: string; value: number | null }
       value={draft}
       onChange={setDraft}
     />
+  );
+}
+
+/** DM: movement per turn (cells, empty = from the speed) and combat actions per turn. */
+function TurnLimitsFields({ heroId, speed, moveCells, actionsPerTurn }: { heroId: string; speed: string; moveCells: number | null; actionsPerTurn: number }) {
+  const derived = parseSpeedCells(speed) ?? DEFAULT_MOVE_CELLS;
+  const [moveDraft, setMoveDraft] = useDraft<number | null>(moveCells, (v) => void send('hero:update', { heroId, patch: { moveCells: v } }), 700);
+  const [actionsDraft, setActionsDraft] = useDraft(actionsPerTurn, (v) => void send('hero:update', { heroId, patch: { actionsPerTurn: v } }));
+  return (
+    <div className="space-y-2 rounded-lg border border-ink-600/70 bg-ink-800/40 px-3 py-2.5">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-gold-300">
+        <Swords className="h-3.5 w-3.5" />
+        Límites por turno (combate)
+      </p>
+      <NumberInput
+        nullable
+        integer
+        size="sm"
+        min={0}
+        max={MAX_MOVE_CELLS}
+        label="Movimiento por turno (casillas)"
+        placeholder={String(derived)}
+        hint={`Vacío = según la velocidad${speed ? ` (${speed} → ${derived} casillas)` : ` (${derived} casillas)`}. 1 casilla = 1,5 m.`}
+        value={moveDraft}
+        onChange={setMoveDraft}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-parchment-200">Acciones de combate por turno</span>
+        <Stepper
+          size="sm"
+          value={actionsDraft}
+          min={0}
+          max={MAX_ACTIONS_PER_TURN}
+          onChange={(next) => setActionsDraft(next)}
+          title="Ataques, hechizos u objetos que puede usar en su turno"
+        />
+      </div>
+    </div>
   );
 }
 

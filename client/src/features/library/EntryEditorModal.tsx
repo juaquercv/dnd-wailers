@@ -11,6 +11,7 @@ import { toast } from '../../components/ui/toast';
 import { useHotkeys } from '../../lib/hotkeys';
 import { useAuthStore } from '../../stores/auth';
 import { useUsers } from '../../stores/users';
+import { notifySoundLibraryChanged } from '../audio/soundLibrary';
 import { CreatureCombatTab, CreatureLootTab, CreatureStatsTab } from './editor/CreatureFields';
 import { draftFromEntry, newDraft, tabsFor, toPayload, validateDraft, type AnyDraft, type EditorTab } from './editor/draft';
 import { CategoryFields, GeneralFields } from './editor/GeneralFields';
@@ -89,6 +90,7 @@ function EditorDialog({ kind, entry, defaults, onClose, onSaved }: EntryEditorMo
       const payload = toPayload(draft);
       const saved = entry ? await api.library.update(entry.id, payload) : await api.library.create(payload);
       initialJson.current = draftJson;
+      if (saved.kind === 'sound') notifySoundLibraryChanged();
       toast.success(entry ? 'Cambios guardados' : 'Añadido a la biblioteca', { description: saved.name });
       onSaved(saved);
     } catch (err) {

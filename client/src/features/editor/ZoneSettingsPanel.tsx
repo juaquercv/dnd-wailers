@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { CloudSun, Compass, Flag, Grid3x3, Info, Map as MapIcon, NotebookPen, Tag, Trash2 } from 'lucide-react';
+import { CloudSun, Compass, Eye, Flag, Grid3x3, Info, Map as MapIcon, NotebookPen, Tag, Trash2 } from 'lucide-react';
 import {
   emptyNeighbors,
   LIGHTING_INFO,
@@ -24,6 +24,7 @@ import { FieldGrid } from './shell/controls';
 import { PanelSection } from './shell/PanelSection';
 import { SoundPicker } from './shell/SoundPicker';
 import { buildZoneTree, descendantIds, orderedZoneIds, zoneSelectOptions } from './shell/zoneTree';
+import { ZoneVisionFields } from '../visibility/ZoneVisionFields';
 
 type Direction = keyof ZoneNeighbors;
 
@@ -412,6 +413,25 @@ export function ZoneSettingsPanel() {
           />
         </FieldGrid>
         <p className="text-[11px] leading-snug text-parchment-400">El DM puede cambiar el clima y la luz durante la partida.</p>
+      </PanelSection>
+
+      <PanelSection id="zone-vision" title="Visión de la zona" icon={<Eye />}>
+        <ZoneVisionFields
+          value={zone.vision ?? null}
+          onChange={(vision) =>
+            patch((d) => {
+              d.vision = vision;
+            })
+          }
+          inheritOption={{
+            label: 'Predeterminada de la campaña',
+            hint: 'Sin visión propia: los jugadores usan los valores iniciales de la campaña (normalmente, todo visible).',
+          }}
+        />
+        <p className="text-[11px] leading-snug text-parchment-400">
+          Los jugadores que entren en esta zona (una cueva, una cripta…) usarán esta visión; al salir recuperan la de la zona a la que vayan.
+          Durante la partida el DM puede cambiarla al momento.
+        </p>
       </PanelSection>
 
       <PanelSection id="zone-tags" title="Etiquetas" icon={<Tag />}>

@@ -1,10 +1,10 @@
-import { adaptHeroToRules, type SessionView } from '@wailers/shared';
+import { adaptHeroToRules, sessionOptionsOf, type SessionView } from '@wailers/shared';
 import { claims } from '../../auth/claims';
 import { isPlainObject } from '../../services/serializers';
 import { DEFAULT_PLAYER_COLOR, resolveSpawn } from '../runtime';
 import type { SessionManager } from '../SessionManager';
 import { HandlerError, type AppSocket, type HandlerCtx, type LogInput, type MutateOptions } from '../types';
-import { announceTurnStart, startTurns, type TurnLanding } from './turns';
+import { announceTurnStart, remindOwnTurn, startTurns, type TurnLanding } from './turns';
 
 /*
  * Session lifecycle: join/leave (presence), start, save, pause, end and session options.
@@ -13,6 +13,15 @@ import { announceTurnStart, startTurns, type TurnLanding } from './turns';
 const PAUSED_REASON = 'El DM ha pausado la partida. Podrás volver cuando la reanude.';
 const ENDED_REASON = 'El DM ha terminado la partida. ¡Gracias por jugar!';
 const UNLOAD_AFTER_END_MS = 4000;
+
+type OptionKey = 'tradeNeedsApproval' | 'turnEconomy' | 'playersCanPickUp' | 'playersCanUseDoors';
+
+const OPTION_LABELS: ReadonlyArray<[OptionKey, string]> = [
+  ['tradeNeedsApproval', 'aprobación de trueques'],
+  ['turnEconomy', 'movimiento y acciones por turno'],
+  ['playersCanPickUp', 'recoger objetos'],
+  ['playersCanUseDoors', 'usar puertas'],
+];
 
 async function join(manager: SessionManager, ctx: HandlerCtx): Promise<SessionView> {
   const { socket, userId, isDm, session } = ctx;
@@ -62,6 +71,7 @@ async function join(manager: SessionManager, ctx: HandlerCtx): Promise<SessionVi
   if (!view) throw new HandlerError('No se pudo entrar en la partida');
   manager.sendZones(session, socket, true);
   manager.broadcastSessionsList();
+  if (!isDm) remindOwnTurn(manager, session, socket, userId);
   return view;
 }
 
@@ -88,6 +98,7 @@ function start(manager: SessionManager, ctx: HandlerCtx): null {
     (state) => {
       state.status = 'playing';
       state.startedAt ??= new Date().toISOString();
+      manager.applyZoneVision(session, state);
       manager.ensureZoneInstantiated(session, state, spawn.zoneId);
       for (const player of Object.values(state.players).sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))) {
         if (!player.heroId) continue;
@@ -204,14 +215,30 @@ export function registerSessionHandlers(socket: AppSocket, manager: SessionManag
     (ctx, payload) => {
       const patch: unknown = payload.patch;
       if (!isPlainObject(patch)) throw new HandlerError('Datos inválidos');
-      const tradeNeedsApproval = patch.tradeNeedsApproval;
-      if (tradeNeedsApproval !== undefined && typeof tradeNeedsApproval !== 'boolean') {
-        throw new HandlerError('Valor no válido para «aprobación de trueques»');
+      const changes: Partial<Record<OptionKey, boolean>> = {};
+      for (const [key, label] of OPTION_LABELS) {
+        const value = patch[key];
+        if (value === undefined) continue;
+        if (typeof value !== 'boolean') throw new HandlerError(`Valor no válido para «${label}»`);
+        changes[key] = value;
       }
-      if (tradeNeedsApproval === undefined) return null;
-      manager.mutate(ctx.session, (state) => {
-        state.options.tradeNeedsApproval = tradeNeedsApproval;
-      });
+      if (Object.keys(changes).length === 0) return null;
+      const logs: LogInput[] = [];
+      if (changes.turnEconomy !== undefined && changes.turnEconomy !== sessionOptionsOf(ctx.session.state).turnEconomy) {
+        logs.push({
+          type: 'system',
+          text: changes.turnEconomy
+            ? '⏳ En combate cada héroe tiene movimiento y acciones limitados por turno'
+            : '⏳ En combate ya no se limitan el movimiento ni las acciones por turno',
+        });
+      }
+      manager.mutate(
+        ctx.session,
+        (state) => {
+          state.options = { ...state.options, ...changes };
+        },
+        { log: logs.length > 0 ? logs : undefined },
+      );
       return null;
     },
     dmOnly,

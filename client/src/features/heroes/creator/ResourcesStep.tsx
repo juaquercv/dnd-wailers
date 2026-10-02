@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { Coins, Crown, Heart, Library, Lock, RotateCcw, Shield, Sparkles, Trash2, Zap } from 'lucide-react';
-import { ENTRY_KIND_LABELS, SPELL_ANIMATION_LABELS, formatModifier, type HeroSpell } from '@wailers/shared';
+import { Coins, Crown, Footprints, Heart, Library, Lock, RotateCcw, Shield, Sparkles, Swords, Trash2, Zap } from 'lucide-react';
+import { ENTRY_KIND_LABELS, SPELL_ANIMATION_LABELS, formatModifier, heroMoveCells, type HeroSpell } from '@wailers/shared';
 import { Button } from '../../../components/ui/Button';
 import { NumberInput } from '../../../components/ui/NumberInput';
 import { Tabs } from '../../../components/ui/Tabs';
@@ -9,6 +9,7 @@ import { TextInput } from '../../../components/ui/TextInput';
 import { formatGold } from '../../../lib/format';
 import { SectionTitle } from '../../library/common';
 import { EntryPickerModal } from '../../library/editor/fields';
+import { TurnEconomyFields } from '../../library/editor/HeroFields';
 import { SPELL_ANIMATION_COLORS, spellLevelLabel } from '../../library/meta';
 import { HIT_DICE, heroSpellFromEntry, type HitDie } from '../heroUtils';
 import type { CreatorContext, CreatorState, DerivedSheet } from './state';
@@ -23,6 +24,8 @@ export interface ResourcesStepProps {
   issues: string[];
 }
 
+const DM_ADJUSTS = 'El DM lo ajusta durante la partida';
+
 function Suggestion({ value, suggested, onReset, children }: { value: number | null; suggested: number; onReset: () => void; children: ReactNode }) {
   return (
     <div className="mt-1 flex items-center gap-1.5 text-[11px] text-parchment-400">
@@ -36,11 +39,11 @@ function Suggestion({ value, suggested, onReset, children }: { value: number | n
   );
 }
 
-function Locked({ label, value, icon }: { label: string; value: ReactNode; icon: ReactNode }) {
+function Locked({ label, value, icon, title = 'Fijado por las reglas de la campaña' }: { label: ReactNode; value: ReactNode; icon: ReactNode; title?: string }) {
   return (
     <div className="min-w-0">
       <div className="label">{label}</div>
-      <div className="flex h-10 items-center gap-2 rounded-lg border border-ink-600/70 bg-ink-950/50 px-3 text-sm text-parchment-100" title="Fijado por las reglas de la campaña">
+      <div className="flex h-10 items-center gap-2 rounded-lg border border-ink-600/70 bg-ink-950/50 px-3 text-sm text-parchment-100" title={title}>
         <span className="text-gold-400 [&>svg]:h-4 [&>svg]:w-4">{icon}</span>
         <span className="min-w-0 flex-1 truncate font-semibold">{value}</span>
         <Lock className="h-3.5 w-3.5 shrink-0 text-parchment-500" />
@@ -59,6 +62,7 @@ export function ResourcesStep({ state, onChange, ctx, sheet, campaignId, issues 
   const conKnown = ctx.attributes.some((a) => a.key === 'con');
   const spellsLabel = ENTRY_KIND_LABELS.spell.plural;
   const maxLevel = Math.max(1, Math.min(20, rules.heroCreation.maxLevel || 20));
+  const moveCells = heroMoveCells({ speed: state.speed, moveCells: state.moveCells });
 
   const addSpell = (spell: HeroSpell) => {
     if (spell.entryId && state.spells.some((s) => s.entryId === spell.entryId)) return;
@@ -87,8 +91,46 @@ export function ResourcesStep({ state, onChange, ctx, sheet, campaignId, issues 
           ) : (
             <NumberInput label={`${rules.currency.name || 'Oro'} inicial`} min={0} suffix={currency || undefined} value={state.gold} onChange={(gold) => onChange({ gold })} />
           ))}
-        <TextInput label="Velocidad" value={state.speed} placeholder="9 m" onValueChange={(speed) => onChange({ speed })} />
+        {ctx.fromCampaign ? (
+          <Locked label="Velocidad" value={state.speed} icon={<Footprints />} title={DM_ADJUSTS} />
+        ) : (
+          <TextInput label="Velocidad" value={state.speed} placeholder="9 m" onValueChange={(speed) => onChange({ speed })} />
+        )}
       </section>
+
+      {ctx.fromCampaign ? (
+        <section className="rounded-xl border border-gold-700/40 bg-gold-500/[0.04] p-3">
+          <SectionTitle icon={<Swords />}>Turno de combate</SectionTitle>
+          <div className="mt-3 flex flex-col gap-3">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Locked
+                label="Movimiento por turno"
+                value={moveCells === 1 ? '1 casilla' : `${moveCells} casillas`}
+                icon={<Footprints />}
+                title={DM_ADJUSTS}
+              />
+              <Locked
+                label="Acciones de combate por turno"
+                value={state.actionsPerTurn === 1 ? '1 acción' : `${state.actionsPerTurn} acciones`}
+                icon={<Zap />}
+                title={DM_ADJUSTS}
+              />
+            </div>
+            <Note>
+              En combate, en su turno tu héroe podrá moverse hasta esas casillas y gastar sus acciones (atacar, lanzar un hechizo o usar un
+              objeto). Recoger objetos, abrir puertas o intercambiar no gastan nada. El DM ajusta la velocidad, el movimiento y las acciones
+              durante la partida.
+            </Note>
+          </div>
+        </section>
+      ) : (
+        <TurnEconomyFields
+          speed={state.speed}
+          moveCells={state.moveCells}
+          actionsPerTurn={state.actionsPerTurn}
+          onChange={(patch) => onChange(patch)}
+        />
+      )}
 
       <section className="rounded-xl border border-blood-700/40 bg-blood-500/[0.05] p-4">
         <SectionTitle icon={<Heart />}>Puntos de vida</SectionTitle>

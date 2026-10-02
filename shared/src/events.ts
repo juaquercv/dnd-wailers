@@ -1,6 +1,7 @@
 import type { WeatherType, LightingPreset, SpellAnimation } from './constants';
 import type { UserStatusDTO } from './types/api';
 import type { HeroData, InventoryItem } from './types/library';
+import type { ZoneVision } from './types/campaign';
 import type { Roller, RollMode, RollResult, RollVisibility } from './types/rollers';
 import type {
   FxEvent,
@@ -163,7 +164,11 @@ export interface C2SPayloads {
   'fx:trigger': { fx: FxEvent };
   'fx:weather': { zoneId: string; weather: WeatherType | null };
   'fx:lighting': { zoneId: string; lighting: LightingPreset | null };
-  /** Hero (owner or DM) casts a spell: animation + log only, no automatic effect. */
+  /**
+   * Hero (owner or DM) casts a spell: animation + log only, no automatic effect on targets.
+   * During combat with the turn economy, a player's cast on their own turn spends 1 combat action
+   * (rejected when none is left); `free: true` (DM only) never spends.
+   */
   'spell:cast': {
     heroId?: string;
     tokenId?: string;
@@ -173,7 +178,28 @@ export interface C2SPayloads {
     levelId: string;
     x: number;
     y: number;
+    free?: boolean;
   };
+
+  // --- turn economy (movement + combat actions per turn) -------------------
+  /** DM: start/stop combat. Starting resets every hero's usage and announces the current turn. */
+  'combat:set': { active: boolean };
+  /** Player: end their own turn (only when the current turn entry is theirs). Same effect as turn:next. */
+  'turn:endMine': Record<string, never>;
+  /** DM: adjust a hero's usage this turn. `reset` zeroes moved/actions; deltas change bonusMove/bonusActions or moved/actions. */
+  'usage:adjust': { heroId: string; reset?: boolean; movedDelta?: number; actionsDelta?: number; bonusMoveDelta?: number; bonusActionsDelta?: number };
+  /** Owner or DM: spend one combat action with a label (e.g. "Ataque con espada"). Log only. */
+  'action:use': { heroId: string; label: string };
+  /** Owner or DM: use an inventory item (costs 1 combat action in combat; `consume` removes 1 unit). Log only, no automatic effect. */
+  'item:use': { heroId: string; itemId: string; consume?: boolean };
+  /** Player: pick up an item token next to their hero (free action) — the item goes to their inventory. */
+  'token:pickup': { tokenId: string };
+  /** Player: open/close a door next to their hero (free action). */
+  'door:use': { zoneId: string; wallId: string };
+  /** DM: move several tokens at once (right-click "Mover selección aquí"). Same zone/level as each token. */
+  'token:moveMany': { moves: { tokenId: string; x: number; y: number }[] };
+  /** DM: live override of a zone's vision (null = back to the zone default). */
+  'zone:vision': { zoneId: string; vision: ZoneVision | null };
 }
 
 export interface C2SResults {
